@@ -22,7 +22,7 @@ pub async fn start() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
     console_log::init_with_level(log::Level::Info).expect("Failed to init logger");
 
-    log::info!("The Battlefield - Phase 2 starting up");
+    log::info!("The Battlefield - Canvas 2D starting up");
 
     let window = web_sys::window().ok_or("no window")?;
     let document = window.document().ok_or("no document")?;
@@ -34,17 +34,14 @@ pub async fn start() -> Result<(), JsValue> {
     canvas.set_width(960);
     canvas.set_height(640);
 
-    let gpu = renderer::Gpu::new(&canvas).await?;
+    let canvas2d = renderer::Canvas2d::new(&canvas)?;
 
     let mut game_state = game::Game::new(960.0, 640.0);
     game_state.setup_demo_battle();
 
-    let batch_renderer = renderer::BatchRenderer::new(&gpu)?;
-
-    // Load textures for the demo
     let texture_manager = renderer::TextureManager::new();
 
-    game_loop::run(gpu, game_state, batch_renderer, texture_manager, &canvas)?;
+    game_loop::run(canvas2d, game_state, texture_manager, &canvas)?;
 
     Ok(())
 }

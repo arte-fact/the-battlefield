@@ -103,6 +103,14 @@ pub fn tilemap_uv(col: u32, row: u32) -> ([f32; 2], [f32; 2]) {
     ([u_min, v_min], [u_max, v_max])
 }
 
+/// Compute source pixel rectangle (sx, sy, sw, sh) for a tile at (col, row) in the tilemap.
+/// Tilemap is 576x384 pixels (9 cols x 6 rows of 64x64 tiles).
+pub fn tilemap_src_rect(col: u32, row: u32) -> (f64, f64, f64, f64) {
+    let sx = (col as f64) * (TILE_SIZE as f64);
+    let sy = (row as f64) * (TILE_SIZE as f64);
+    (sx, sy, TILE_SIZE as f64, TILE_SIZE as f64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

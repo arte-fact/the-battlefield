@@ -10,7 +10,6 @@ wasm-opt = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wgpu = "24"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
@@ -19,13 +18,11 @@ web-sys = { version = "0.3", features = [
     "Element",
     "HtmlCanvasElement",
     "HtmlElement",
+    "HtmlImageElement",
     "CssStyleDeclaration",
+    "CanvasRenderingContext2d",
     "console",
     "Performance",
-    "Navigator",
-    "Gpu",
-    "Response",
-    "Headers",
     "KeyboardEvent",
     "MouseEvent",
     "WheelEvent",
@@ -36,8 +33,6 @@ js-sys = "0.3"
 log = "0.4"
 console_log = "1"
 console_error_panic_hook = "0.1"
-image = { version = "0.25", default-features = false, features = ["png"] }
-bytemuck = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
