@@ -1,4 +1,12 @@
+pub mod camera;
+pub mod combat;
+pub mod game;
+pub mod grid;
+pub mod input;
+pub mod particle;
 pub mod sprite;
+pub mod turn;
+pub mod unit;
 
 #[cfg(target_arch = "wasm32")]
 mod game_loop;
@@ -14,7 +22,7 @@ pub async fn start() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
     console_log::init_with_level(log::Level::Info).expect("Failed to init logger");
 
-    log::info!("The Battlefield - starting up");
+    log::info!("The Battlefield - Phase 2 starting up");
 
     let window = web_sys::window().ok_or("no window")?;
     let document = window.document().ok_or("no document")?;
@@ -27,17 +35,16 @@ pub async fn start() -> Result<(), JsValue> {
     canvas.set_height(640);
 
     let gpu = renderer::Gpu::new(&canvas).await?;
-    let sprite_sheet = sprite::SpriteSheet::from_url(
-        "assets/Tiny Swords (Free Pack)/Units/Blue Units/Warrior/Warrior_Idle.png",
-        192,
-        192,
-        8,
-    )
-    .await?;
 
-    let sprite_renderer = renderer::SpriteRenderer::new(&gpu, &sprite_sheet)?;
+    let mut game_state = game::Game::new(960.0, 640.0);
+    game_state.setup_demo_battle();
 
-    game_loop::run(gpu, sprite_renderer, sprite_sheet)?;
+    let batch_renderer = renderer::BatchRenderer::new(&gpu)?;
+
+    // Load textures for the demo
+    let texture_manager = renderer::TextureManager::new();
+
+    game_loop::run(gpu, game_state, batch_renderer, texture_manager, &canvas)?;
 
     Ok(())
 }
