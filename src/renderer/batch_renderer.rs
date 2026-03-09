@@ -278,8 +278,9 @@ impl BatchRenderer {
     pub fn render(
         &self,
         gpu: &Gpu,
+        bg_sprite_batches: &[SpriteBatch],
         color_instances: &[ColorInstance],
-        sprite_batches: &[SpriteBatch],
+        fg_sprite_batches: &[SpriteBatch],
         texture_manager: &super::TextureManager,
     ) -> Result<(), JsValue> {
         let output = gpu
@@ -317,7 +318,10 @@ impl BatchRenderer {
                 occlusion_query_set: None,
             });
 
-            // 1. Draw colored instances (tiles, highlights, HP bars)
+            // 1. Background sprites (tilemap tiles)
+            self.draw_sprite_batches(gpu, &mut render_pass, bg_sprite_batches, texture_manager);
+
+            // 2. Colored instances (highlights, HP bars)
             if !color_instances.is_empty() {
                 let count = color_instances.len().min(MAX_INSTANCES);
                 gpu.queue.write_buffer(
@@ -335,37 +339,46 @@ impl BatchRenderer {
                 render_pass.draw_indexed(0..6, 0, 0..count as u32);
             }
 
-            // 2. Draw sprite batches (units, particles, projectiles)
-            for batch in sprite_batches {
-                if batch.instances.is_empty() {
-                    continue;
-                }
-                let bind_group = match texture_manager.get_bind_group(batch.texture_id) {
-                    Some(bg) => bg,
-                    None => continue,
-                };
-
-                let count = batch.instances.len().min(MAX_INSTANCES);
-                gpu.queue.write_buffer(
-                    &self.sprite_instance_buffer,
-                    0,
-                    bytemuck::cast_slice(&batch.instances[..count]),
-                );
-
-                render_pass.set_pipeline(&self.sprite_pipeline);
-                render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                render_pass.set_bind_group(1, bind_group, &[]);
-                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                render_pass.set_vertex_buffer(1, self.sprite_instance_buffer.slice(..));
-                render_pass
-                    .set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                render_pass.draw_indexed(0..6, 0, 0..count as u32);
-            }
+            // 3. Foreground sprites (units, particles, projectiles)
+            self.draw_sprite_batches(gpu, &mut render_pass, fg_sprite_batches, texture_manager);
         }
 
         gpu.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
         Ok(())
+    }
+
+    fn draw_sprite_batches<'a>(
+        &'a self,
+        gpu: &Gpu,
+        render_pass: &mut wgpu::RenderPass<'a>,
+        batches: &[SpriteBatch],
+        texture_manager: &'a super::TextureManager,
+    ) {
+        for batch in batches {
+            if batch.instances.is_empty() {
+                continue;
+            }
+            let bind_group = match texture_manager.get_bind_group(batch.texture_id) {
+                Some(bg) => bg,
+                None => continue,
+            };
+
+            let count = batch.instances.len().min(MAX_INSTANCES);
+            gpu.queue.write_buffer(
+                &self.sprite_instance_buffer,
+                0,
+                bytemuck::cast_slice(&batch.instances[..count]),
+            );
+
+            render_pass.set_pipeline(&self.sprite_pipeline);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.sprite_instance_buffer.slice(..));
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..6, 0, 0..count as u32);
+        }
     }
 }

@@ -131,6 +131,9 @@ pub enum UnitAnim {
     Attack,
 }
 
+/// Duration of the death fade-out animation in seconds.
+pub const DEATH_FADE_DURATION: f32 = 0.3;
+
 pub type UnitId = u32;
 
 pub struct Unit {
@@ -150,6 +153,8 @@ pub struct Unit {
     pub movement_left: u32,
     /// Whether this unit has attacked this turn.
     pub has_attacked: bool,
+    /// Remaining seconds of death fade-out (0.0 = not dying or fully faded).
+    pub death_fade: f32,
 }
 
 impl Unit {
@@ -177,6 +182,7 @@ impl Unit {
             alive: true,
             movement_left: stats.mov,
             has_attacked: false,
+            death_fade: 0.0,
         }
     }
 
@@ -185,6 +191,7 @@ impl Unit {
         if self.hp <= 0 {
             self.hp = 0;
             self.alive = false;
+            self.death_fade = DEATH_FADE_DURATION;
         }
     }
 
@@ -278,5 +285,14 @@ mod tests {
     fn lancer_frame_size() {
         assert_eq!(UnitKind::Lancer.frame_size(), 320);
         assert_eq!(UnitKind::Warrior.frame_size(), 192);
+    }
+
+    #[test]
+    fn death_fade_starts_on_kill() {
+        let mut unit = Unit::new(1, UnitKind::Warrior, Faction::Blue, 0, 0, false);
+        assert!((unit.death_fade).abs() < f32::EPSILON);
+        unit.take_damage(100);
+        assert!(!unit.alive);
+        assert!((unit.death_fade - DEATH_FADE_DURATION).abs() < f32::EPSILON);
     }
 }

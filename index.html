@@ -20,10 +20,59 @@
             flex-direction: column;
             align-items: center;
             gap: 16px;
+            position: relative;
+        }
+        #canvas-wrapper {
+            position: relative;
         }
         canvas {
             border: 2px solid #444;
             image-rendering: pixelated;
+            display: block;
+        }
+        #hud {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        #turn-display {
+            font-size: 0.8rem;
+            color: #ffd700;
+            text-shadow: 1px 1px 2px #000;
+        }
+        #phase-display {
+            font-size: 1.1rem;
+            font-weight: bold;
+            text-shadow: 1px 1px 3px #000;
+        }
+        #hp-container {
+            margin-top: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        #hp-label {
+            font-size: 0.7rem;
+            color: #ccc;
+            text-shadow: 1px 1px 2px #000;
+        }
+        #hp-bar-bg {
+            width: 120px;
+            height: 10px;
+            background: #333;
+            border: 1px solid #555;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        #hp-bar-fill {
+            height: 100%;
+            width: 100%;
+            background: #4caf50;
+            transition: width 0.2s ease;
         }
         #loading {
             font-size: 1.2rem;
@@ -33,7 +82,17 @@
 </head>
 <body>
     <div id="game-container">
-        <canvas id="game-canvas" width="960" height="640"></canvas>
+        <div id="canvas-wrapper">
+            <canvas id="game-canvas" width="960" height="640"></canvas>
+            <div id="hud">
+                <div id="turn-display">Turn 1</div>
+                <div id="phase-display" style="color: #4fc3f7;">Your Turn</div>
+                <div id="hp-container">
+                    <span id="hp-label">HP</span>
+                    <div id="hp-bar-bg"><div id="hp-bar-fill"></div></div>
+                </div>
+            </div>
+        </div>
         <div id="loading">Loading...</div>
     </div>
     <script type="module">
