@@ -24,6 +24,18 @@ impl TileKind {
             _ => 0,
         }
     }
+
+    /// Returns (col, row) in the 9x6 tilemap for this tile kind.
+    /// Returns None for Water (uses a separate texture).
+    pub fn tilemap_coords(self) -> Option<(u32, u32)> {
+        match self {
+            TileKind::Grass => Some((1, 1)),
+            TileKind::Hill => Some((6, 0)),
+            TileKind::Forest => Some((2, 1)),
+            TileKind::Rock => Some((7, 4)),
+            TileKind::Water => None,
+        }
+    }
 }
 
 pub const GRID_SIZE: u32 = 64;
@@ -78,6 +90,19 @@ pub fn world_to_grid(wx: f32, wy: f32) -> (i32, i32) {
     (gx, gy)
 }
 
+/// Tilemap dimensions: 9 columns x 6 rows of 64x64 tiles (576x384).
+const TILEMAP_COLS: f32 = 9.0;
+const TILEMAP_ROWS: f32 = 6.0;
+
+/// Compute UV coordinates for a tile at (col, row) in the tilemap.
+pub fn tilemap_uv(col: u32, row: u32) -> ([f32; 2], [f32; 2]) {
+    let u_min = col as f32 / TILEMAP_COLS;
+    let v_min = row as f32 / TILEMAP_ROWS;
+    let u_max = (col + 1) as f32 / TILEMAP_COLS;
+    let v_max = (row + 1) as f32 / TILEMAP_ROWS;
+    ([u_min, v_min], [u_max, v_max])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +152,29 @@ mod tests {
         let (wx, wy) = grid_to_world(0, 0);
         assert!((wx - 32.0).abs() < f32::EPSILON);
         assert!((wy - 32.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn tilemap_coords_mapping() {
+        assert!(TileKind::Grass.tilemap_coords().is_some());
+        assert!(TileKind::Hill.tilemap_coords().is_some());
+        assert!(TileKind::Forest.tilemap_coords().is_some());
+        assert!(TileKind::Rock.tilemap_coords().is_some());
+        assert!(TileKind::Water.tilemap_coords().is_none());
+    }
+
+    #[test]
+    fn tilemap_uv_bounds() {
+        let (uv_min, uv_max) = tilemap_uv(0, 0);
+        assert!((uv_min[0]).abs() < f32::EPSILON);
+        assert!((uv_min[1]).abs() < f32::EPSILON);
+        assert!(uv_max[0] > 0.0 && uv_max[0] < 1.0);
+        assert!(uv_max[1] > 0.0 && uv_max[1] < 1.0);
+
+        let (uv_min, uv_max) = tilemap_uv(8, 5);
+        assert!((uv_max[0] - 1.0).abs() < f32::EPSILON);
+        assert!((uv_max[1] - 1.0).abs() < f32::EPSILON);
+        assert!(uv_min[0] > 0.0);
+        assert!(uv_min[1] > 0.0);
     }
 }

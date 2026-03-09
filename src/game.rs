@@ -469,11 +469,13 @@ impl Game {
         });
     }
 
-    /// Update animations, particles, projectiles.
+    /// Update animations, particles, projectiles, and death fades.
     pub fn update(&mut self, dt: f64) {
-        // Update unit animations
         for unit in &mut self.units {
             if unit.alive {
+                unit.animation.update(dt);
+            } else if unit.death_fade > 0.0 {
+                unit.death_fade = (unit.death_fade - dt as f32).max(0.0);
                 unit.animation.update(dt);
             }
         }
