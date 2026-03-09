@@ -20,7 +20,7 @@ pub struct BatchRenderer {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     // Camera uniform
-    camera_bind_group_layout: wgpu::BindGroupLayout,
+    _camera_bind_group_layout: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     // Texture bind group layout (shared with TextureManager)
@@ -260,7 +260,7 @@ impl BatchRenderer {
             color_pipeline,
             vertex_buffer,
             index_buffer,
-            camera_bind_group_layout,
+            _camera_bind_group_layout: camera_bind_group_layout,
             camera_buffer,
             camera_bind_group,
             texture_bind_group_layout,

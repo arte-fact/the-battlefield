@@ -325,6 +325,30 @@ fn setup_input_listeners(
     Ok(())
 }
 
+/// Load a texture through `LoopState`, working around `RefMut` split-borrow
+/// limitations by reborrowing as `&mut LoopState`.
+async fn load_texture(
+    state: &Rc<RefCell<LoopState>>,
+    url: &str,
+    frame_w: u32,
+    frame_h: u32,
+    frame_count: u32,
+) -> Result<TextureId, JsValue> {
+    let mut guard = state.borrow_mut();
+    let s = &mut *guard; // reborrow to allow split field access
+    s.texture_manager
+        .load(
+            &s.gpu,
+            &s.batch_renderer.texture_bind_group_layout,
+            &s.batch_renderer.sampler,
+            url,
+            frame_w,
+            frame_h,
+            frame_count,
+        )
+        .await
+}
+
 async fn load_textures(
     state: &Rc<RefCell<LoopState>>,
     loaded: &Rc<RefCell<LoadedTextures>>,
@@ -360,20 +384,7 @@ async fn load_textures(
                     filename
                 );
 
-                let tex_id = {
-                    let mut s = state.borrow_mut();
-                    s.texture_manager
-                        .load(
-                            &s.gpu,
-                            &s.batch_renderer.texture_bind_group_layout,
-                            &s.batch_renderer.sampler,
-                            &url,
-                            frame_size,
-                            frame_size,
-                            frame_count,
-                        )
-                        .await?
-                };
+                let tex_id = load_texture(state, &url, frame_size, frame_size, frame_count).await?;
 
                 loaded.borrow_mut().unit_textures.insert(
                     UnitTextureKey {
@@ -395,20 +406,7 @@ async fn load_textures(
     ];
     for &(filename, frame_size, frame_count) in &particles {
         let url = format!("{}/Particle FX/{}", ASSET_BASE, filename);
-        let tex_id = {
-            let mut s = state.borrow_mut();
-            s.texture_manager
-                .load(
-                    &s.gpu,
-                    &s.batch_renderer.texture_bind_group_layout,
-                    &s.batch_renderer.sampler,
-                    &url,
-                    frame_size,
-                    frame_size,
-                    frame_count,
-                )
-                .await?
-        };
+        let tex_id = load_texture(state, &url, frame_size, frame_size, frame_count).await?;
         loaded
             .borrow_mut()
             .particle_textures
@@ -418,60 +416,21 @@ async fn load_textures(
     // Load arrow projectile
     {
         let url = format!("{}/Units/Blue Units/Archer/Arrow.png", ASSET_BASE);
-        let tex_id = {
-            let mut s = state.borrow_mut();
-            s.texture_manager
-                .load(
-                    &s.gpu,
-                    &s.batch_renderer.texture_bind_group_layout,
-                    &s.batch_renderer.sampler,
-                    &url,
-                    64,
-                    64,
-                    1,
-                )
-                .await?
-        };
+        let tex_id = load_texture(state, &url, 64, 64, 1).await?;
         loaded.borrow_mut().arrow_texture = Some(tex_id);
     }
 
     // Load tilemap texture (576x384, loaded as single frame)
     {
         let url = format!("{}/Terrain/Tileset/Tilemap_color1.png", ASSET_BASE);
-        let tex_id = {
-            let mut s = state.borrow_mut();
-            s.texture_manager
-                .load(
-                    &s.gpu,
-                    &s.batch_renderer.texture_bind_group_layout,
-                    &s.batch_renderer.sampler,
-                    &url,
-                    576,
-                    384,
-                    1,
-                )
-                .await?
-        };
+        let tex_id = load_texture(state, &url, 576, 384, 1).await?;
         loaded.borrow_mut().tilemap_texture = Some(tex_id);
     }
 
     // Load water background texture (64x64, single tile)
     {
         let url = format!("{}/Terrain/Tileset/Water Background color.png", ASSET_BASE);
-        let tex_id = {
-            let mut s = state.borrow_mut();
-            s.texture_manager
-                .load(
-                    &s.gpu,
-                    &s.batch_renderer.texture_bind_group_layout,
-                    &s.batch_renderer.sampler,
-                    &url,
-                    64,
-                    64,
-                    1,
-                )
-                .await?
-        };
+        let tex_id = load_texture(state, &url, 64, 64, 1).await?;
         loaded.borrow_mut().water_texture = Some(tex_id);
     }
 
