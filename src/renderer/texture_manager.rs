@@ -1,18 +1,19 @@
-use super::gpu::Gpu;
-use crate::sprite::SpriteSheet;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 /// Unique key for loaded textures.
 pub type TextureId = u32;
 
-struct LoadedTexture {
-    pub bind_group: wgpu::BindGroup,
-    pub sprite_sheet: SpriteSheet,
+struct LoadedImage {
+    pub element: web_sys::HtmlImageElement,
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub frame_count: u32,
 }
 
 pub struct TextureManager {
-    textures: HashMap<TextureId, LoadedTexture>,
+    images: HashMap<TextureId, LoadedImage>,
     next_id: TextureId,
     url_to_id: HashMap<String, TextureId>,
 }
@@ -20,7 +21,7 @@ pub struct TextureManager {
 impl TextureManager {
     pub fn new() -> Self {
         Self {
-            textures: HashMap::new(),
+            images: HashMap::new(),
             next_id: 1,
             url_to_id: HashMap::new(),
         }
@@ -29,9 +30,6 @@ impl TextureManager {
     /// Load a sprite sheet from URL and register it. Returns the texture ID.
     pub async fn load(
         &mut self,
-        gpu: &Gpu,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
         url: &str,
         frame_width: u32,
         frame_height: u32,
@@ -42,34 +40,23 @@ impl TextureManager {
             return Ok(id);
         }
 
-        let sprite_sheet =
-            SpriteSheet::from_url(url, frame_width, frame_height, frame_count).await?;
+        let element = load_image(url).await?;
 
-        let texture = create_texture(gpu, &sprite_sheet);
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("texture_bind_group"),
-            layout: texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        });
+        log::info!(
+            "Loaded sprite sheet: {url} ({}x{}, {frame_count} frames of {frame_width}x{frame_height})",
+            element.natural_width(),
+            element.natural_height()
+        );
 
         let id = self.next_id;
         self.next_id += 1;
-        self.textures.insert(
+        self.images.insert(
             id,
-            LoadedTexture {
-                bind_group,
-                sprite_sheet,
+            LoadedImage {
+                element,
+                frame_width,
+                frame_height,
+                frame_count,
             },
         );
         self.url_to_id.insert(url.to_string(), id);
@@ -77,48 +64,40 @@ impl TextureManager {
         Ok(id)
     }
 
-    pub fn get_bind_group(&self, id: TextureId) -> Option<&wgpu::BindGroup> {
-        self.textures.get(&id).map(|t| &t.bind_group)
-    }
-
-    pub fn get_sprite_sheet(&self, id: TextureId) -> Option<&SpriteSheet> {
-        self.textures.get(&id).map(|t| &t.sprite_sheet)
+    /// Get the HtmlImageElement and frame metadata for a texture.
+    pub fn get_image(&self, id: TextureId) -> Option<(&web_sys::HtmlImageElement, u32, u32, u32)> {
+        self.images.get(&id).map(|img| {
+            (
+                &img.element,
+                img.frame_width,
+                img.frame_height,
+                img.frame_count,
+            )
+        })
     }
 }
 
-fn create_texture(gpu: &Gpu, sprite_sheet: &SpriteSheet) -> wgpu::Texture {
-    let size = wgpu::Extent3d {
-        width: sprite_sheet.image_width,
-        height: sprite_sheet.image_height,
-        depth_or_array_layers: 1,
-    };
+/// Load an image by creating an HtmlImageElement and waiting for onload.
+async fn load_image(url: &str) -> Result<web_sys::HtmlImageElement, JsValue> {
+    let img = web_sys::HtmlImageElement::new()?;
 
-    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("sprite_texture"),
-        size,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
+    let promise = js_sys::Promise::new(&mut |resolve, reject| {
+        let resolve_clone = resolve.clone();
+        let onload = Closure::once(Box::new(move || {
+            let _ = resolve_clone.call0(&JsValue::NULL);
+        }) as Box<dyn FnOnce()>);
+        img.set_onload(Some(onload.as_ref().unchecked_ref()));
+        onload.forget();
+
+        let onerror = Closure::once(Box::new(move || {
+            let _ = reject.call1(&JsValue::NULL, &JsValue::from_str("Image load failed"));
+        }) as Box<dyn FnOnce()>);
+        img.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+        onerror.forget();
     });
 
-    gpu.queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &sprite_sheet.image_data,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(4 * sprite_sheet.image_width),
-            rows_per_image: Some(sprite_sheet.image_height),
-        },
-        size,
-    );
+    img.set_src(url);
+    wasm_bindgen_futures::JsFuture::from(promise).await?;
 
-    texture
+    Ok(img)
 }

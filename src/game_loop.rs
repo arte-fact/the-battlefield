@@ -1,9 +1,8 @@
 use crate::game::{Game, PlayerAction};
 use crate::grid::{self, TileKind, TILE_SIZE};
 use crate::input::Input;
-use crate::renderer::{
-    BatchRenderer, ColorInstance, Gpu, SpriteBatch, SpriteInstance, TextureId, TextureManager,
-};
+use crate::renderer::{draw_sprite, Canvas2d, TextureId, TextureManager};
+use crate::sprite::SpriteSheet;
 use crate::turn::TurnPhase;
 use crate::unit::{Facing, Faction, UnitAnim, UnitKind, DEATH_FADE_DURATION};
 use std::cell::RefCell;
@@ -105,9 +104,8 @@ impl HudElements {
 }
 
 pub fn run(
-    gpu: Gpu,
+    canvas2d: Canvas2d,
     game: Game,
-    batch_renderer: BatchRenderer,
     texture_manager: TextureManager,
     canvas: &web_sys::HtmlCanvasElement,
 ) -> Result<(), JsValue> {
@@ -125,9 +123,8 @@ pub fn run(
     setup_input_listeners(canvas, &input)?;
 
     let state = Rc::new(RefCell::new(LoopState {
-        gpu,
+        canvas2d,
         game,
-        batch_renderer,
         texture_manager,
         last_time: None,
     }));
@@ -325,8 +322,7 @@ fn setup_input_listeners(
     Ok(())
 }
 
-/// Load a texture through `LoopState`, working around `RefMut` split-borrow
-/// limitations by reborrowing as `&mut LoopState`.
+/// Load a texture through `LoopState`.
 async fn load_texture(
     state: &Rc<RefCell<LoopState>>,
     url: &str,
@@ -335,17 +331,9 @@ async fn load_texture(
     frame_count: u32,
 ) -> Result<TextureId, JsValue> {
     let mut guard = state.borrow_mut();
-    let s = &mut *guard; // reborrow to allow split field access
+    let s = &mut *guard;
     s.texture_manager
-        .load(
-            &s.gpu,
-            &s.batch_renderer.texture_bind_group_layout,
-            &s.batch_renderer.sampler,
-            url,
-            frame_w,
-            frame_h,
-            frame_count,
-        )
+        .load(url, frame_w, frame_h, frame_count)
         .await
 }
 
@@ -438,12 +426,24 @@ async fn load_textures(
 }
 
 fn render_frame(state: &mut LoopState, loaded: &LoadedTextures) -> Result<(), JsValue> {
+    let ctx = &state.canvas2d.ctx;
+    let canvas_w = state.canvas2d.width;
+    let canvas_h = state.canvas2d.height;
     let game = &state.game;
-    let gpu = &state.gpu;
+    let tm = &state.texture_manager;
 
-    // Update camera uniform
-    let view_proj = game.camera.view_proj_matrix();
-    state.batch_renderer.update_camera(gpu, &view_proj);
+    let ts = TILE_SIZE as f64;
+
+    // 1. Clear canvas with dark background
+    ctx.set_fill_style_str("#1a1a26");
+    ctx.fill_rect(0.0, 0.0, canvas_w, canvas_h);
+
+    // 2. Apply camera transform
+    let zoom = game.camera.zoom as f64;
+    ctx.save();
+    ctx.translate(canvas_w / 2.0, canvas_h / 2.0)?;
+    ctx.scale(zoom, zoom)?;
+    ctx.translate(-(game.camera.x as f64), -(game.camera.y as f64))?;
 
     // Visible tile range
     let (vl, vt, vr, vb) = game.camera.visible_rect();
@@ -452,65 +452,120 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures) -> Result<(), Js
     let max_gx = ((vr / TILE_SIZE).ceil() as i32).min(game.grid.width as i32) as u32;
     let max_gy = ((vb / TILE_SIZE).ceil() as i32).min(game.grid.height as i32) as u32;
 
-    // === Background sprite batches (tilemap tiles) ===
-    let mut bg_sprite_batches: Vec<SpriteBatch> = Vec::new();
-    build_tile_sprites(
-        game,
-        loaded,
-        min_gx,
-        min_gy,
-        max_gx,
-        max_gy,
-        &mut bg_sprite_batches,
-    );
+    // 3. Draw background tiles
+    draw_tiles(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy)?;
 
-    // === Color instances (highlights, HP bars) ===
-    let mut color_instances: Vec<ColorInstance> = Vec::new();
+    // 4. Draw color overlays
+    draw_color_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy, ts)?;
 
-    // Forest overlay tint (darker green over the grass tile)
+    // 5. Draw foreground sprites (units, particles, projectiles)
+    draw_foreground(ctx, game, loaded, tm)?;
+
+    // Restore camera transform
+    ctx.restore();
+
+    Ok(())
+}
+
+fn draw_tiles(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    loaded: &LoadedTextures,
+    tm: &TextureManager,
+    min_gx: u32,
+    min_gy: u32,
+    max_gx: u32,
+    max_gy: u32,
+) -> Result<(), JsValue> {
+    let ts = TILE_SIZE as f64;
+
+    // Tilemap tiles (grass, hill, forest, rock)
+    if let Some(tilemap_tex_id) = loaded.tilemap_texture {
+        if let Some((img, _, _, _)) = tm.get_image(tilemap_tex_id) {
+            for gy in min_gy..max_gy {
+                for gx in min_gx..max_gx {
+                    let tile = game.grid.get(gx, gy);
+                    if let Some((col, row)) = tile.tilemap_coords() {
+                        let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
+                        let dx = (gx as f64) * ts;
+                        let dy = (gy as f64) * ts;
+                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            img, sx, sy, sw, sh, dx, dy, ts, ts,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+
+    // Water tiles (separate texture)
+    if let Some(water_tex_id) = loaded.water_texture {
+        if let Some((img, _, _, _)) = tm.get_image(water_tex_id) {
+            for gy in min_gy..max_gy {
+                for gx in min_gx..max_gx {
+                    if game.grid.get(gx, gy) == TileKind::Water {
+                        let dx = (gx as f64) * ts;
+                        let dy = (gy as f64) * ts;
+                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn draw_color_overlays(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    min_gx: u32,
+    min_gy: u32,
+    max_gx: u32,
+    max_gy: u32,
+    ts: f64,
+) -> Result<(), JsValue> {
+    // Forest overlay tint
     for gy in min_gy..max_gy {
         for gx in min_gx..max_gx {
             if game.grid.get(gx, gy) == TileKind::Forest {
-                let (wx, wy) = grid::grid_to_world(gx, gy);
-                color_instances.push(ColorInstance {
-                    world_pos: [wx, wy],
-                    size: [TILE_SIZE, TILE_SIZE],
-                    color: [0.0, 0.15, 0.0, 0.4],
-                });
+                let dx = (gx as f64) * ts;
+                let dy = (gy as f64) * ts;
+                ctx.set_fill_style_str("rgba(0,38,0,0.4)");
+                ctx.fill_rect(dx, dy, ts, ts);
             }
         }
     }
 
     // Move target highlights
     for &(mx, my) in &game.move_targets {
-        let (wx, wy) = grid::grid_to_world(mx, my);
-        color_instances.push(ColorInstance {
-            world_pos: [wx, wy],
-            size: [TILE_SIZE - 2.0, TILE_SIZE - 2.0],
-            color: [0.2, 0.6, 1.0, 0.3],
-        });
+        let dx = (mx as f64) * ts + 1.0;
+        let dy = (my as f64) * ts + 1.0;
+        let size = ts - 2.0;
+        ctx.set_fill_style_str("rgba(51,153,255,0.3)");
+        ctx.fill_rect(dx, dy, size, size);
     }
 
     // Attack target highlights
     for &target_id in &game.attack_targets {
         if let Some(unit) = game.find_unit(target_id) {
-            let (wx, wy) = grid::grid_to_world(unit.grid_x, unit.grid_y);
-            color_instances.push(ColorInstance {
-                world_pos: [wx, wy],
-                size: [TILE_SIZE - 2.0, TILE_SIZE - 2.0],
-                color: [1.0, 0.2, 0.2, 0.4],
-            });
+            let dx = (unit.grid_x as f64) * ts + 1.0;
+            let dy = (unit.grid_y as f64) * ts + 1.0;
+            let size = ts - 2.0;
+            ctx.set_fill_style_str("rgba(255,51,51,0.4)");
+            ctx.fill_rect(dx, dy, size, size);
         }
     }
 
     // Highlight player unit's tile
     if let Some(player) = game.player_unit() {
-        let (wx, wy) = grid::grid_to_world(player.grid_x, player.grid_y);
-        color_instances.push(ColorInstance {
-            world_pos: [wx, wy],
-            size: [TILE_SIZE - 2.0, TILE_SIZE - 2.0],
-            color: [1.0, 1.0, 0.2, 0.3],
-        });
+        let dx = (player.grid_x as f64) * ts + 1.0;
+        let dy = (player.grid_y as f64) * ts + 1.0;
+        let size = ts - 2.0;
+        ctx.set_fill_style_str("rgba(255,255,51,0.3)");
+        ctx.fill_rect(dx, dy, size, size);
     }
 
     // HP bars for alive units
@@ -519,43 +574,48 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures) -> Result<(), Js
             continue;
         }
         let (wx, wy) = grid::grid_to_world(unit.grid_x, unit.grid_y);
-        let bar_width = 48.0;
-        let bar_height = 6.0;
-        let bar_y = wy - TILE_SIZE * 0.45;
+        let bar_width = 48.0_f64;
+        let bar_height = 6.0_f64;
+        let bar_y = (wy as f64) - (TILE_SIZE as f64) * 0.45;
+        let bar_x = (wx as f64) - bar_width / 2.0;
 
         // Background
-        color_instances.push(ColorInstance {
-            world_pos: [wx, bar_y],
-            size: [bar_width, bar_height],
-            color: [0.2, 0.2, 0.2, 0.8],
-        });
+        ctx.set_global_alpha(0.8);
+        ctx.set_fill_style_str("rgb(51,51,51)");
+        ctx.fill_rect(bar_x, bar_y - bar_height / 2.0, bar_width, bar_height);
 
         // Fill
-        let hp_ratio = unit.hp as f32 / unit.stats.max_hp as f32;
+        let hp_ratio = unit.hp as f64 / unit.stats.max_hp as f64;
         let fill_width = bar_width * hp_ratio;
-        let fill_offset = (bar_width - fill_width) * -0.5;
         let fill_color = if hp_ratio > 0.5 {
-            [0.2, 0.8, 0.2, 0.9]
+            "rgb(51,204,51)"
         } else if hp_ratio > 0.25 {
-            [0.9, 0.7, 0.1, 0.9]
+            "rgb(230,179,26)"
         } else {
-            [0.9, 0.2, 0.1, 0.9]
+            "rgb(230,51,26)"
         };
-        color_instances.push(ColorInstance {
-            world_pos: [wx + fill_offset, bar_y],
-            size: [fill_width, bar_height - 2.0],
-            color: fill_color,
-        });
+        ctx.set_global_alpha(0.9);
+        ctx.set_fill_style_str(fill_color);
+        ctx.fill_rect(
+            bar_x,
+            bar_y - (bar_height - 2.0) / 2.0,
+            fill_width,
+            bar_height - 2.0,
+        );
+
+        ctx.set_global_alpha(1.0);
     }
 
-    // === Foreground sprite batches (units, particles, projectiles) ===
-    let mut fg_sprite_batches: Vec<SpriteBatch> = Vec::new();
+    Ok(())
+}
 
-    // Group instances by texture
-    let mut texture_instances: HashMap<TextureId, Vec<SpriteInstance>> = HashMap::new();
-
+fn draw_foreground(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    loaded: &LoadedTextures,
+    tm: &TextureManager,
+) -> Result<(), JsValue> {
     // Unit sprites (sorted by Y for proper layering)
-    // Include alive units AND dying units (death_fade > 0)
     let mut unit_indices: Vec<usize> = game
         .units
         .iter()
@@ -581,7 +641,6 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures) -> Result<(), Js
         let tex_id = match loaded.unit_textures.get(&key) {
             Some(&id) => id,
             None => {
-                // Fallback to idle
                 let fallback_key = UnitTextureKey {
                     faction: unit.faction,
                     kind: unit.kind,
@@ -594,37 +653,40 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures) -> Result<(), Js
             }
         };
 
-        let sheet = match state.texture_manager.get_sprite_sheet(tex_id) {
-            Some(s) => s,
-            None => continue,
-        };
+        if let Some((img, frame_w, frame_h, _)) = tm.get_image(tex_id) {
+            let sheet = SpriteSheet {
+                frame_width: frame_w,
+                frame_height: frame_h,
+                frame_count: unit.animation.frame_count,
+            };
+            let (sx, sy, sw, sh) = sheet.frame_src_rect(unit.animation.current_frame);
+            let (wx, wy) = grid::grid_to_world(unit.grid_x, unit.grid_y);
+            let sprite_size = unit.kind.frame_size() as f64;
 
-        let uv = sheet.frame_uv(unit.animation.current_frame);
-        let (wx, wy) = grid::grid_to_world(unit.grid_x, unit.grid_y);
-        let sprite_size = unit.kind.frame_size() as f32;
+            let opacity = if unit.alive {
+                1.0
+            } else {
+                (unit.death_fade / DEATH_FADE_DURATION).clamp(0.0, 1.0) as f64
+            };
 
-        // Compute opacity: alive = 1.0, dying = fade based on remaining time
-        let opacity = if unit.alive {
-            1.0
-        } else {
-            (unit.death_fade / DEATH_FADE_DURATION).clamp(0.0, 1.0)
-        };
+            let dx = (wx as f64) - sprite_size / 2.0;
+            let dy = (wy as f64) - sprite_size / 2.0;
 
-        texture_instances
-            .entry(tex_id)
-            .or_default()
-            .push(SpriteInstance {
-                world_pos: [wx, wy],
-                size: [sprite_size, sprite_size],
-                uv_min: [uv[0], uv[1]],
-                uv_max: [uv[2], uv[3]],
-                flip_x: if unit.facing == Facing::Left {
-                    1.0
-                } else {
-                    0.0
-                },
+            draw_sprite(
+                ctx,
+                img,
+                sx,
+                sy,
+                sw,
+                sh,
+                dx,
+                dy,
+                sprite_size,
+                sprite_size,
+                unit.facing == Facing::Left,
                 opacity,
-            });
+            )?;
+        }
     }
 
     // Particle sprites
@@ -635,132 +697,45 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures) -> Result<(), Js
             None => continue,
         };
 
-        let sheet = match state.texture_manager.get_sprite_sheet(tex_id) {
-            Some(s) => s,
-            None => continue,
-        };
+        if let Some((img, frame_w, frame_h, _)) = tm.get_image(tex_id) {
+            let sheet = SpriteSheet {
+                frame_width: frame_w,
+                frame_height: frame_h,
+                frame_count: particle.animation.frame_count,
+            };
+            let (sx, sy, sw, sh) = sheet.frame_src_rect(particle.animation.current_frame);
+            let size = particle.kind.frame_size() as f64;
+            let dx = (particle.world_x as f64) - size / 2.0;
+            let dy = (particle.world_y as f64) - size / 2.0;
 
-        let uv = sheet.frame_uv(particle.animation.current_frame);
-        let size = particle.kind.frame_size() as f32;
-
-        texture_instances
-            .entry(tex_id)
-            .or_default()
-            .push(SpriteInstance {
-                world_pos: [particle.world_x, particle.world_y],
-                size: [size, size],
-                uv_min: [uv[0], uv[1]],
-                uv_max: [uv[2], uv[3]],
-                flip_x: 0.0,
-                opacity: 1.0,
-            });
+            draw_sprite(ctx, img, sx, sy, sw, sh, dx, dy, size, size, false, 1.0)?;
+        }
     }
 
     // Arrow projectiles
     if let Some(&arrow_tex_id) = loaded.arrow_texture.as_ref() {
-        for proj in &game.projectiles {
-            texture_instances
-                .entry(arrow_tex_id)
-                .or_default()
-                .push(SpriteInstance {
-                    world_pos: [proj.current_x, proj.current_y],
-                    size: [64.0, 64.0],
-                    uv_min: [0.0, 0.0],
-                    uv_max: [1.0, 1.0],
-                    flip_x: if proj.angle.abs() > std::f32::consts::FRAC_PI_2 {
-                        1.0
-                    } else {
-                        0.0
-                    },
-                    opacity: 1.0,
-                });
-        }
-    }
+        if let Some((img, _, _, _)) = tm.get_image(arrow_tex_id) {
+            for proj in &game.projectiles {
+                let flip = proj.angle.abs() > std::f32::consts::FRAC_PI_2;
+                let draw_angle = if flip {
+                    (proj.angle as f64) + std::f64::consts::PI
+                } else {
+                    proj.angle as f64
+                };
 
-    // Convert to batches
-    for (tex_id, instances) in texture_instances {
-        fg_sprite_batches.push(SpriteBatch {
-            texture_id: tex_id,
-            instances,
-        });
-    }
-
-    state.batch_renderer.render(
-        gpu,
-        &bg_sprite_batches,
-        &color_instances,
-        &fg_sprite_batches,
-        &state.texture_manager,
-    )
-}
-
-/// Build sprite instances for the visible tilemap region.
-fn build_tile_sprites(
-    game: &Game,
-    loaded: &LoadedTextures,
-    min_gx: u32,
-    min_gy: u32,
-    max_gx: u32,
-    max_gy: u32,
-    batches: &mut Vec<SpriteBatch>,
-) {
-    // Tilemap tiles (grass, hill, forest, rock)
-    if let Some(tilemap_tex_id) = loaded.tilemap_texture {
-        let mut tile_instances: Vec<SpriteInstance> = Vec::new();
-
-        for gy in min_gy..max_gy {
-            for gx in min_gx..max_gx {
-                let tile = game.grid.get(gx, gy);
-                if let Some((col, row)) = tile.tilemap_coords() {
-                    let (uv_min, uv_max) = grid::tilemap_uv(col, row);
-                    let (wx, wy) = grid::grid_to_world(gx, gy);
-                    tile_instances.push(SpriteInstance {
-                        world_pos: [wx, wy],
-                        size: [TILE_SIZE, TILE_SIZE],
-                        uv_min,
-                        uv_max,
-                        flip_x: 0.0,
-                        opacity: 1.0,
-                    });
-                }
+                ctx.save();
+                ctx.translate(proj.current_x as f64, proj.current_y as f64)?;
+                ctx.rotate(draw_angle)?;
+                // Draw arrow centered at origin after rotation
+                ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                    img, 0.0, 0.0, 64.0, 64.0, -32.0, -32.0, 64.0, 64.0,
+                )?;
+                ctx.restore();
             }
         }
-
-        if !tile_instances.is_empty() {
-            batches.push(SpriteBatch {
-                texture_id: tilemap_tex_id,
-                instances: tile_instances,
-            });
-        }
     }
 
-    // Water tiles (separate texture)
-    if let Some(water_tex_id) = loaded.water_texture {
-        let mut water_instances: Vec<SpriteInstance> = Vec::new();
-
-        for gy in min_gy..max_gy {
-            for gx in min_gx..max_gx {
-                if game.grid.get(gx, gy) == TileKind::Water {
-                    let (wx, wy) = grid::grid_to_world(gx, gy);
-                    water_instances.push(SpriteInstance {
-                        world_pos: [wx, wy],
-                        size: [TILE_SIZE, TILE_SIZE],
-                        uv_min: [0.0, 0.0],
-                        uv_max: [1.0, 1.0],
-                        flip_x: 0.0,
-                        opacity: 1.0,
-                    });
-                }
-            }
-        }
-
-        if !water_instances.is_empty() {
-            batches.push(SpriteBatch {
-                texture_id: water_tex_id,
-                instances: water_instances,
-            });
-        }
-    }
+    Ok(())
 }
 
 fn request_animation_frame(f: &Closure<dyn FnMut(f64)>) {
@@ -771,9 +746,8 @@ fn request_animation_frame(f: &Closure<dyn FnMut(f64)>) {
 }
 
 struct LoopState {
-    gpu: Gpu,
+    canvas2d: Canvas2d,
     game: Game,
-    batch_renderer: BatchRenderer,
     texture_manager: TextureManager,
     last_time: Option<f64>,
 }

@@ -1,69 +1,26 @@
 pub struct SpriteSheet {
-    pub image_data: Vec<u8>,
-    pub image_width: u32,
-    pub image_height: u32,
     pub frame_width: u32,
     pub frame_height: u32,
     pub frame_count: u32,
 }
 
 impl SpriteSheet {
-    pub fn frame_uv(&self, frame_index: u32) -> [f32; 4] {
-        let u_start = (frame_index * self.frame_width) as f32 / self.image_width as f32;
-        let u_end = ((frame_index + 1) * self.frame_width) as f32 / self.image_width as f32;
+    /// Returns the source rectangle (sx, sy, sw, sh) in pixel coordinates for a given frame.
+    pub fn frame_src_rect(&self, frame_index: u32) -> (f64, f64, f64, f64) {
+        let sx = (frame_index * self.frame_width) as f64;
+        let sy = 0.0;
+        let sw = self.frame_width as f64;
+        let sh = self.frame_height as f64;
+        (sx, sy, sw, sh)
+    }
+
+    /// Returns normalized UV coordinates [u_start, v_start, u_end, v_end] for a frame.
+    /// Kept for compatibility with any code that uses UV coords.
+    pub fn frame_uv(&self, frame_index: u32, image_width: u32) -> [f32; 4] {
+        let u_start = (frame_index * self.frame_width) as f32 / image_width as f32;
+        let u_end = ((frame_index + 1) * self.frame_width) as f32 / image_width as f32;
         [u_start, 0.0, u_end, 1.0]
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl SpriteSheet {
-    pub async fn from_url(
-        url: &str,
-        frame_width: u32,
-        frame_height: u32,
-        frame_count: u32,
-    ) -> Result<Self, wasm_bindgen::JsValue> {
-        use wasm_bindgen::JsValue;
-
-        let image_data = fetch_image_bytes(url).await?;
-        let img = image::load_from_memory_with_format(&image_data, image::ImageFormat::Png)
-            .map_err(|e| JsValue::from_str(&format!("Failed to decode PNG: {e}")))?;
-        let rgba = img.to_rgba8();
-        let image_width = rgba.width();
-        let image_height = rgba.height();
-
-        log::info!(
-            "Loaded sprite sheet: {url} ({}x{}, {frame_count} frames of {frame_width}x{frame_height})",
-            image_width, image_height
-        );
-
-        Ok(Self {
-            image_data: rgba.into_raw(),
-            image_width,
-            image_height,
-            frame_width,
-            frame_height,
-            frame_count,
-        })
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn fetch_image_bytes(url: &str) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
-    use wasm_bindgen::JsCast;
-
-    let window = web_sys::window().ok_or("no window")?;
-    let resp_value = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url)).await?;
-    let resp: web_sys::Response = resp_value.dyn_into()?;
-    if !resp.ok() {
-        return Err(wasm_bindgen::JsValue::from_str(&format!(
-            "Failed to fetch {url}: {}",
-            resp.status()
-        )));
-    }
-    let array_buffer = wasm_bindgen_futures::JsFuture::from(resp.array_buffer()?).await?;
-    let uint8_array = js_sys::Uint8Array::new(&array_buffer);
-    Ok(uint8_array.to_vec())
 }
 
 pub struct AnimationState {
@@ -97,33 +54,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_uv_first_frame() {
+    fn frame_src_rect_first_frame() {
         let sheet = SpriteSheet {
-            image_data: vec![],
-            image_width: 1536,
-            image_height: 192,
             frame_width: 192,
             frame_height: 192,
             frame_count: 8,
         };
-        let uv = sheet.frame_uv(0);
-        assert!((uv[0] - 0.0).abs() < f32::EPSILON);
-        assert!((uv[2] - 0.125).abs() < f32::EPSILON);
+        let (sx, sy, sw, sh) = sheet.frame_src_rect(0);
+        assert!((sx - 0.0).abs() < f64::EPSILON);
+        assert!((sy - 0.0).abs() < f64::EPSILON);
+        assert!((sw - 192.0).abs() < f64::EPSILON);
+        assert!((sh - 192.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn frame_uv_last_frame() {
+    fn frame_src_rect_last_frame() {
         let sheet = SpriteSheet {
-            image_data: vec![],
-            image_width: 1536,
-            image_height: 192,
             frame_width: 192,
             frame_height: 192,
             frame_count: 8,
         };
-        let uv = sheet.frame_uv(7);
-        assert!((uv[0] - 0.875).abs() < f32::EPSILON);
-        assert!((uv[2] - 1.0).abs() < f32::EPSILON);
+        let (sx, sy, sw, sh) = sheet.frame_src_rect(7);
+        assert!((sx - 1344.0).abs() < f64::EPSILON);
+        assert!((sy - 0.0).abs() < f64::EPSILON);
+        assert!((sw - 192.0).abs() < f64::EPSILON);
+        assert!((sh - 192.0).abs() < f64::EPSILON);
     }
 
     #[test]
