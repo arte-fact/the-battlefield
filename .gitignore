@@ -25,3 +25,10 @@ target
 .DS_Store
 __MACOSX/
 ._*
+
+
+# Added by cargo
+/target
+
+# wasm-pack output
+/pkg

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Battlefield</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: monospace;
+            color: #e0e0e0;
+        }
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+        canvas {
+            border: 2px solid #444;
+            image-rendering: pixelated;
+        }
+        #loading {
+            font-size: 1.2rem;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas" width="960" height="640"></canvas>
+        <div id="loading">Loading...</div>
+    </div>
+    <script type="module">
+        import init from './pkg/the_battlefield.js';
+
+        async function run() {
+            try {
+                await init();
+                document.getElementById('loading').style.display = 'none';
+            } catch (e) {
+                document.getElementById('loading').textContent = 'Error: ' + e;
+                console.error(e);
+            }
+        }
+        run();
+    </script>
+</body>
+</html>
