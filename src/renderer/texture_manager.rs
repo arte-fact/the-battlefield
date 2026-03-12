@@ -27,27 +27,20 @@ impl TextureManager {
         }
     }
 
-    /// Load a sprite sheet from URL and register it. Returns the texture ID.
-    pub async fn load(
+    /// Check if a URL is already cached; return its TextureId if so.
+    pub fn get_cached(&self, url: &str) -> Option<TextureId> {
+        self.url_to_id.get(url).copied()
+    }
+
+    /// Register a pre-loaded image element. Returns the texture ID.
+    pub fn register(
         &mut self,
         url: &str,
+        element: web_sys::HtmlImageElement,
         frame_width: u32,
         frame_height: u32,
         frame_count: u32,
-    ) -> Result<TextureId, JsValue> {
-        // Return cached if already loaded
-        if let Some(&id) = self.url_to_id.get(url) {
-            return Ok(id);
-        }
-
-        let element = load_image(url).await?;
-
-        log::info!(
-            "Loaded sprite sheet: {url} ({}x{}, {frame_count} frames of {frame_width}x{frame_height})",
-            element.natural_width(),
-            element.natural_height()
-        );
-
+    ) -> TextureId {
         let id = self.next_id;
         self.next_id += 1;
         self.images.insert(
@@ -60,8 +53,7 @@ impl TextureManager {
             },
         );
         self.url_to_id.insert(url.to_string(), id);
-
-        Ok(id)
+        id
     }
 
     /// Get the HtmlImageElement and frame metadata for a texture.
@@ -78,7 +70,7 @@ impl TextureManager {
 }
 
 /// Load an image by creating an HtmlImageElement and waiting for onload.
-async fn load_image(url: &str) -> Result<web_sys::HtmlImageElement, JsValue> {
+pub async fn load_image(url: &str) -> Result<web_sys::HtmlImageElement, JsValue> {
     let img = web_sys::HtmlImageElement::new()?;
 
     let promise = js_sys::Promise::new(&mut |resolve, reject| {

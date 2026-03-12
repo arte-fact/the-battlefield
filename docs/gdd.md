@@ -4,7 +4,7 @@
 
 **Title:** The Battlefield
 **Genre:** Roguelike, turn-based tactics
-**Platform:** Web (PWA, playable offline)
+**Platform:** Web (PWA, mobile-first, playable offline)
 **Perspective:** Top-down, square grid
 **Art:** Tiny Swords asset pack (Pixel Frog) -- chibi pixel art, 64x64 tile grid
 
@@ -39,10 +39,10 @@ No two runs are the same. Armies are procedurally generated with different compo
 
 ### Turn Structure
 
-Each turn follows this sequence:
+Each turn allows **one action** (move OR attack), then auto-ends:
 
 1. **Orders phase** -- The player's squad commander issues or updates orders (advance to position X, hold this line, fall back). Orders are displayed clearly.
-2. **Player action phase** -- The player chooses their action: move, attack, use ability, wait, or other context-specific actions.
+2. **Player action phase** -- The player performs one action: move (swipe/click a direction) or attack (swipe toward/tap enemy). The turn auto-ends after a completed move or attack. If an enemy enters attack range during movement, the walk is interrupted and the player may attack before the turn ends.
 3. **AI action phase** -- All other units on both sides act simultaneously based on their orders and local AI behavior.
 4. **Resolution phase** -- Combat is resolved, morale is updated, units that break begin fleeing, dead units are removed.
 
@@ -396,6 +396,51 @@ Built using the asset pack UI components:
 - Move destination
 - Invalid action
 
+### Responsive Layout
+
+- **Mobile:** Canvas fills the viewport; UI elements scale to screen size
+- **Desktop:** Fixed canvas size with optional fullscreen toggle
+- Action buttons must meet minimum touch target size (44x44px per Apple HIG)
+- HUD repositioned for mobile: bottom-of-screen action bar instead of top-left overlay
+- End Turn button always visible on screen (replaces space bar as primary interaction)
+
+## Input & Controls
+
+Touch is the **primary input method**; mouse and keyboard are supported as secondary/fallback for desktop users.
+
+### Touch Controls (Primary)
+
+| Input | Action | Details |
+|-------|--------|---------|
+| Swipe anywhere | Move or attack | 8-directional; attacks enemy in range if one exists in swipe direction, otherwise moves (see below) |
+| Tap End Turn button | End turn | On-screen button, always visible |
+| Pinch (two fingers) | Zoom camera | Replaces mouse wheel zoom |
+| Two-finger drag | Pan camera | Replaces WASD/arrow key panning |
+
+### Swipe-Anywhere Movement & Attack (One Action Per Turn)
+
+Each turn allows one action: move OR attack. Swiping anywhere on the screen moves or attacks in the swiped direction. Attack takes priority over movement to avoid accidentally walking past enemies. The turn auto-ends after a completed action.
+
+1. `touchstart` records the starting point (single-touch only; two-finger gestures are reserved for camera)
+2. `touchend` computes the delta vector
+3. If the swipe distance exceeds a minimum threshold (~30px), the direction is determined from 8 possibilities: **N, NE, E, SE, S, SW, W, NW** (using 45-degree sectors based on swipe angle)
+4. **Attack check:** If an attackable enemy exists in the swipe direction (within the same 45-degree sector), the nearest such enemy is attacked. The turn auto-ends.
+5. **Movement fallback:** If no enemy is in the swiped direction, the player walks **tile-by-tile in a straight line** until movement points are exhausted or an obstacle is hit.
+   - **Enemy interruption:** If an enemy enters attack range during the walk, movement stops immediately and the player may attack before the turn ends. This prevents accidentally walking past threats.
+   - **Completed walk:** If the walk finishes without interruption, the turn auto-ends.
+6. If no valid action exists in the swiped direction, nothing happens.
+
+This means swiping toward an enemy attacks them, and swiping toward open ground walks as far as possible in that direction. The player never needs to precisely target tiles or units — just indicate a direction.
+
+### Keyboard & Mouse Controls (Secondary)
+
+| Input | Action |
+|-------|--------|
+| Click tile | Move in direction of tile / attack enemy on tile |
+| Mouse wheel | Zoom camera |
+| WASD / Arrow keys | Pan camera |
+| Space | End turn |
+
 ### Visual Style
 
 Top-down chibi pixel art from the Tiny Swords pack. The style is colorful, readable, and charming rather than gritty. Unit identification is clear at a glance thanks to distinct silhouettes per type and strong faction color coding.
@@ -442,9 +487,11 @@ Top-down chibi pixel art from the Tiny Swords pack. The style is colorful, reada
 
 - **Language:** Rust
 - **Compilation:** WebAssembly (wasm-pack)
-- **Rendering:** WebGPU (wgpu crate)
+- **Rendering:** HTML Canvas 2D (wasm-bindgen)
 - **Offline:** PWA with service worker
 - **Deployment:** GitHub Pages via GitHub Actions
+- **Touch input:** web-sys TouchEvent, TouchList APIs
+- **Mobile scaling:** `<meta name="viewport">` tag for proper mobile rendering
 - **Assets:** Tiny Swords (Free Pack) by Pixel Frog
 
 ### Sprite Sheet System
@@ -464,7 +511,7 @@ The architecture will emerge from the code as needed, following YAGNI. Initial s
 
 - **Game state** -- Core data structures representing the battlefield, units, and battle state
 - **Systems** -- Logic operating on game state (movement, combat, AI, morale)
-- **Rendering** -- WebGPU pipeline translating game state to visuals, sprite sheet animation
+- **Rendering** -- HTML Canvas 2D translating game state to visuals, sprite sheet animation
 - **Input** -- Player input handling and action mapping
 - **Audio** -- Sound playback tied to game events
 

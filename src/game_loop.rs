@@ -1,7 +1,7 @@
-use crate::game::{Game, PlayerAction};
+use crate::game::{Game, PlayerAction, SwipePreview};
 use crate::grid::{self, TileKind, TILE_SIZE};
-use crate::input::Input;
-use crate::renderer::{draw_sprite, Canvas2d, TextureId, TextureManager};
+use crate::input::{Input, SwipeDir};
+use crate::renderer::{draw_sprite, load_image, Canvas2d, TextureId, TextureManager};
 use crate::sprite::SpriteSheet;
 use crate::turn::TurnPhase;
 use crate::unit::{Facing, Faction, UnitAnim, UnitKind, DEATH_FADE_DURATION};
@@ -148,73 +148,123 @@ pub fn run(
     let f: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
     let g = f.clone();
 
-    let state_clone = state.clone();
-    let input_clone = input.clone();
-    let loaded_clone = loaded_textures.clone();
-    let loading_clone = textures_loading.clone();
-    let hud_clone = hud.clone();
-
     *g.borrow_mut() = Some(Closure::wrap(Box::new(move |timestamp: f64| {
-        let mut s = state_clone.borrow_mut();
-        let dt = match s.last_time {
-            Some(last) => (timestamp - last) / 1000.0,
-            None => 0.0,
-        };
-        s.last_time = Some(timestamp);
-
-        let dt = dt.min(0.1); // cap at 100ms to avoid spiral
-
-        // Process input
+        // Process everything in a single scope to avoid borrowing conflicts
         {
-            let mut inp = input_clone.borrow_mut();
+            let mut state_guard = state.borrow_mut();
+            let last_time = state_guard.last_time;
+            state_guard.last_time = Some(timestamp);
 
-            // Camera controls
-            let (pan_x, pan_y) = inp.camera_pan();
-            if pan_x != 0.0 || pan_y != 0.0 {
-                s.game.camera.pan(pan_x, pan_y, dt as f32);
-            }
+            let dt = match last_time {
+                Some(last) => (timestamp - last) / 1000.0,
+                None => 0.0,
+            };
+            let dt = dt.min(0.1); // cap at 100ms to avoid spiral
 
-            let scroll = inp.take_scroll();
-            if scroll != 0.0 {
-                s.game.camera.zoom_by(scroll);
-            }
+            let game = &mut state_guard.game;
 
-            // Handle mouse clicks
-            if let Some((sx, sy)) = inp.take_click() {
-                handle_click(&mut s.game, sx, sy);
-            }
+            // Process input
+            {
+                let mut inp = input.borrow_mut();
 
-            // Space to end turn
-            if inp.is_key_down(" ") {
-                inp.key_up(" ");
-                if s.game.turn.phase == TurnPhase::PlayerTurn {
-                    s.game.handle_player_action(PlayerAction::EndTurn);
+                // Camera controls
+                let (pan_x, pan_y) = inp.camera_pan();
+                if pan_x != 0.0 || pan_y != 0.0 {
+                    game.camera.pan(pan_x, pan_y, dt as f32);
                 }
+
+                let scroll = inp.take_scroll();
+                if scroll != 0.0 {
+                    game.camera.zoom_by(scroll);
+                }
+
+                // Handle mouse clicks
+                if let Some((sx, sy)) = inp.take_click() {
+                    handle_click(game, sx, sy);
+                }
+
+                // Space to end turn
+                if inp.is_key_down(" ") {
+                    inp.key_up(" ");
+                    if game.turn.phase == TurnPhase::PlayerTurn {
+                        game.handle_player_action(PlayerAction::EndTurn);
+                    }
+                }
+
+                // End Turn button (on-screen)
+                if inp.take_end_turn() && game.turn.phase == TurnPhase::PlayerTurn {
+                    game.handle_player_action(PlayerAction::EndTurn);
+                }
+
+                // Touch: pinch-to-zoom
+                let pinch = inp.take_pinch_zoom();
+                if pinch.abs() > f32::EPSILON {
+                    game.camera.zoom_by(pinch);
+                }
+
+                // Touch: two-finger pan
+                let (pan_tx, pan_ty) = inp.take_touch_pan();
+                if pan_tx.abs() > f32::EPSILON || pan_ty.abs() > f32::EPSILON {
+                    game.camera.x -= pan_tx / game.camera.zoom;
+                    game.camera.y -= pan_ty / game.camera.zoom;
+                }
+
+                // Touch: swipe for movement and attack
+                if let Some(dir) = inp.take_swipe() {
+                    if game.turn.phase == TurnPhase::PlayerTurn {
+                        // Attack takes priority over movement
+                        if let Some(target_id) =
+                            game.find_attack_target_in_direction(dir)
+                        {
+                            game.handle_player_action(PlayerAction::Attack {
+                                target_id,
+                            });
+                        } else {
+                            game.handle_player_action(PlayerAction::MoveDirection { dir });
+                        }
+                    }
+                }
+
+                // Compute live swipe preview
+                let preview = if let Some(swipe) = inp.swipe_state() {
+                    let dx = swipe.current_x - swipe.start_x;
+                    let dy = swipe.current_y - swipe.start_y;
+                    SwipeDir::from_delta(dx, dy, 30.0)
+                        .filter(|_| game.turn.phase == TurnPhase::PlayerTurn)
+                        .map(|dir| game.compute_swipe_preview(dir))
+                } else {
+                    None
+                };
+                game.swipe_preview = preview;
+            }
+
+            // Run AI and resolution if needed
+            if game.turn.phase == TurnPhase::AiTurn {
+                game.run_ai_turn();
+            }
+            if game.turn.phase == TurnPhase::Resolution {
+                game.resolve_turn();
+            }
+
+            // Update game state
+            game.update(dt);
+            game.events.clear();
+
+            // Update HUD (hud is Rc<Option<HudElements>>, not a RefCell)
+            if let Some(ref hud) = *hud.as_ref() {
+                hud.update(game);
             }
         }
 
-        // Run AI and resolution if needed
-        if s.game.turn.phase == TurnPhase::AiTurn {
-            s.game.run_ai_turn();
-        }
-        if s.game.turn.phase == TurnPhase::Resolution {
-            s.game.resolve_turn();
-        }
-
-        // Update game state
-        s.game.update(dt);
-        s.game.events.clear();
-
-        // Update HUD
-        if let Some(ref hud) = *hud_clone {
-            hud.update(&s.game);
-        }
-
-        // Render
-        if !*loading_clone.borrow() {
-            let loaded = loaded_clone.borrow();
-            if let Err(e) = render_frame(&mut s, &loaded) {
-                log::error!("Render error: {:?}", e);
+        // Render (separate scope to avoid borrowing conflicts)
+        {
+            // textures_loading is Rc<RefCell<bool>>, so we need to deref the Ref<bool>
+            if !*textures_loading.borrow() {
+                let loaded = loaded_textures.borrow();
+                let mut state_guard = state.borrow_mut();
+                if let Err(e) = render_frame(&mut state_guard, &loaded) {
+                    log::error!("Render error: {:?}", e);
+                }
             }
         }
 
@@ -226,6 +276,8 @@ pub fn run(
 }
 
 fn handle_click(game: &mut Game, screen_x: f32, screen_y: f32) {
+    use crate::input::SwipeDir;
+
     if game.turn.phase != TurnPhase::PlayerTurn {
         return;
     }
@@ -257,12 +309,13 @@ fn handle_click(game: &mut Game, screen_x: f32, screen_y: f32) {
         }
     }
 
-    // Check if clicking on a valid move target
-    if game.move_targets.contains(&(gx, gy)) {
-        game.handle_player_action(PlayerAction::Move {
-            target_x: gx,
-            target_y: gy,
-        });
+    // Derive direction from player to clicked tile, then use MoveDirection
+    if let Some(player) = game.player_unit() {
+        let dx = gx as i32 - player.grid_x as i32;
+        let dy = gy as i32 - player.grid_y as i32;
+        if let Some(dir) = SwipeDir::from_grid_delta(dx, dy) {
+            game.handle_player_action(PlayerAction::MoveDirection { dir });
+        }
     }
 }
 
@@ -315,6 +368,84 @@ fn setup_input_listeners(
         closure.forget();
     }
 
+    // Touch events
+    {
+        let input_clone = input.clone();
+        let canvas_clone = canvas.clone();
+        let closure = Closure::wrap(Box::new(move |e: web_sys::TouchEvent| {
+            e.prevent_default();
+            let touches = e.touches();
+            let count = touches.length();
+            if count >= 1 {
+                let t = e.changed_touches().get(0).unwrap();
+                let (cx, cy) = canvas_touch_coords(&canvas_clone, &t);
+                input_clone.borrow_mut().on_touch_start(t.identifier(), cx, cy, count);
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("touchstart", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+    {
+        let input_clone = input.clone();
+        let canvas_clone = canvas.clone();
+        let closure = Closure::wrap(Box::new(move |e: web_sys::TouchEvent| {
+            e.prevent_default();
+            let touches = e.touches();
+            if touches.length() == 1 {
+                let t = touches.get(0).unwrap();
+                let (cx, cy) = canvas_touch_coords(&canvas_clone, &t);
+                input_clone.borrow_mut().on_touch_move_single(cx, cy);
+            } else if touches.length() >= 2 {
+                let t0 = touches.get(0).unwrap();
+                let t1 = touches.get(1).unwrap();
+                let (x0, y0) = canvas_touch_coords(&canvas_clone, &t0);
+                let (x1, y1) = canvas_touch_coords(&canvas_clone, &t1);
+                input_clone.borrow_mut().on_touch_move_two_finger(x0, y0, x1, y1);
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("touchmove", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+    {
+        let input_clone = input.clone();
+        let canvas_clone = canvas.clone();
+        let closure = Closure::wrap(Box::new(move |e: web_sys::TouchEvent| {
+            e.prevent_default();
+            let ct = e.changed_touches();
+            if ct.length() >= 1 {
+                let t = ct.get(0).unwrap();
+                let (cx, cy) = canvas_touch_coords(&canvas_clone, &t);
+                let remaining = e.touches().length();
+                input_clone.borrow_mut().on_touch_end(t.identifier(), cx, cy, remaining);
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("touchend", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    // End Turn button
+    {
+        let window = web_sys::window().ok_or("no window")?;
+        let document = window.document().ok_or("no document")?;
+        if let Some(btn) = document.get_element_by_id("end-turn-btn") {
+            let input_clone = input.clone();
+            let closure = Closure::wrap(Box::new(move |_e: web_sys::MouseEvent| {
+                input_clone.borrow_mut().end_turn_requested = true;
+            }) as Box<dyn FnMut(_)>);
+            btn.add_event_listener_with_callback("click", closure.as_ref().unchecked_ref())?;
+            closure.forget();
+
+            // Also handle touch on the button to avoid 300ms delay
+            let input_clone2 = input.clone();
+            let closure2 = Closure::wrap(Box::new(move |e: web_sys::TouchEvent| {
+                e.prevent_default();
+                input_clone2.borrow_mut().end_turn_requested = true;
+            }) as Box<dyn FnMut(_)>);
+            btn.add_event_listener_with_callback("touchend", closure2.as_ref().unchecked_ref())?;
+            closure2.forget();
+        }
+    }
+
     // Focus the canvas for keyboard events
     canvas.set_tab_index(0);
     canvas.focus()?;
@@ -322,7 +453,17 @@ fn setup_input_listeners(
     Ok(())
 }
 
-/// Load a texture through `LoopState`.
+/// Convert a Touch's client coordinates to canvas-relative coordinates.
+fn canvas_touch_coords(canvas: &web_sys::HtmlCanvasElement, touch: &web_sys::Touch) -> (f32, f32) {
+    let rect = canvas.get_bounding_client_rect();
+    let scale_x = canvas.width() as f64 / rect.width();
+    let scale_y = canvas.height() as f64 / rect.height();
+    let cx = (touch.client_x() as f64 - rect.left()) * scale_x;
+    let cy = (touch.client_y() as f64 - rect.top()) * scale_y;
+    (cx as f32, cy as f32)
+}
+
+/// Load a texture through `LoopState`, splitting borrows around the await.
 async fn load_texture(
     state: &Rc<RefCell<LoopState>>,
     url: &str,
@@ -330,11 +471,32 @@ async fn load_texture(
     frame_h: u32,
     frame_count: u32,
 ) -> Result<TextureId, JsValue> {
-    let mut guard = state.borrow_mut();
-    let s = &mut *guard;
-    s.texture_manager
-        .load(url, frame_w, frame_h, frame_count)
-        .await
+    // Check cache first (short borrow, then release)
+    {
+        let guard = state.borrow();
+        if let Some(id) = guard.texture_manager.get_cached(url) {
+            return Ok(id);
+        }
+    }
+
+    // Load image without holding any borrow on state
+    let element = load_image(url).await?;
+
+    log::info!(
+        "Loaded sprite sheet: {url} ({}x{}, {frame_count} frames of {frame_w}x{frame_h})",
+        element.natural_width(),
+        element.natural_height()
+    );
+
+    // Register the loaded image (short borrow, then release)
+    let id = {
+        let mut guard = state.borrow_mut();
+        guard
+            .texture_manager
+            .register(url, element, frame_w, frame_h, frame_count)
+    };
+
+    Ok(id)
 }
 
 async fn load_textures(
@@ -539,23 +701,27 @@ fn draw_color_overlays(
         }
     }
 
-    // Move target highlights
-    for &(mx, my) in &game.move_targets {
-        let dx = (mx as f64) * ts + 1.0;
-        let dy = (my as f64) * ts + 1.0;
-        let size = ts - 2.0;
-        ctx.set_fill_style_str("rgba(51,153,255,0.3)");
-        ctx.fill_rect(dx, dy, size, size);
-    }
-
-    // Attack target highlights
-    for &target_id in &game.attack_targets {
-        if let Some(unit) = game.find_unit(target_id) {
-            let dx = (unit.grid_x as f64) * ts + 1.0;
-            let dy = (unit.grid_y as f64) * ts + 1.0;
+    if let Some(ref preview) = game.swipe_preview {
+        // Swipe preview mode: draw preview path instead of move/attack targets
+        draw_swipe_preview(ctx, preview, ts);
+    } else {
+        // Standard mode: draw move and attack target highlights
+        for &(mx, my) in &game.move_targets {
+            let dx = (mx as f64) * ts + 1.0;
+            let dy = (my as f64) * ts + 1.0;
             let size = ts - 2.0;
-            ctx.set_fill_style_str("rgba(255,51,51,0.4)");
+            ctx.set_fill_style_str("rgba(51,153,255,0.3)");
             ctx.fill_rect(dx, dy, size, size);
+        }
+
+        for &target_id in &game.attack_targets {
+            if let Some(unit) = game.find_unit(target_id) {
+                let dx = (unit.grid_x as f64) * ts + 1.0;
+                let dy = (unit.grid_y as f64) * ts + 1.0;
+                let size = ts - 2.0;
+                ctx.set_fill_style_str("rgba(255,51,51,0.4)");
+                ctx.fill_rect(dx, dy, size, size);
+            }
         }
     }
 
@@ -607,6 +773,36 @@ fn draw_color_overlays(
     }
 
     Ok(())
+}
+
+fn draw_swipe_preview(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    preview: &SwipePreview,
+    ts: f64,
+) {
+    let path_len = preview.path.len();
+    for (i, &(px, py)) in preview.path.iter().enumerate() {
+        let dx = (px as f64) * ts + 1.0;
+        let dy = (py as f64) * ts + 1.0;
+        let size = ts - 2.0;
+
+        // Destination tile is brighter, intermediate tiles are dimmer
+        if i == path_len - 1 && preview.attack_target.is_none() {
+            ctx.set_fill_style_str("rgba(51,153,255,0.5)");
+        } else {
+            ctx.set_fill_style_str("rgba(51,153,255,0.2)");
+        }
+        ctx.fill_rect(dx, dy, size, size);
+    }
+
+    // Draw attack target highlight
+    if let Some((ax, ay)) = preview.attack_target {
+        let dx = (ax as f64) * ts + 1.0;
+        let dy = (ay as f64) * ts + 1.0;
+        let size = ts - 2.0;
+        ctx.set_fill_style_str("rgba(255,51,51,0.5)");
+        ctx.fill_rect(dx, dy, size, size);
+    }
 }
 
 fn draw_foreground(

@@ -31,12 +31,21 @@ pub async fn start() -> Result<(), JsValue> {
         .ok_or("no canvas element")?
         .dyn_into::<web_sys::HtmlCanvasElement>()?;
 
-    canvas.set_width(960);
-    canvas.set_height(640);
+    // DPR-aware canvas sizing: scale backing store for sharp rendering on high-DPI screens
+    let dpr = window.device_pixel_ratio() as f32;
+    let css_w = canvas.client_width() as f32;
+    let css_h = canvas.client_height() as f32;
+    let (canvas_w, canvas_h) = if css_w > 0.0 && css_h > 0.0 {
+        ((css_w * dpr) as u32, (css_h * dpr) as u32)
+    } else {
+        ((960.0 * dpr) as u32, (640.0 * dpr) as u32)
+    };
+    canvas.set_width(canvas_w);
+    canvas.set_height(canvas_h);
 
     let canvas2d = renderer::Canvas2d::new(&canvas)?;
 
-    let mut game_state = game::Game::new(960.0, 640.0);
+    let mut game_state = game::Game::new(canvas_w as f32, canvas_h as f32);
     game_state.setup_demo_battle();
 
     let texture_manager = renderer::TextureManager::new();

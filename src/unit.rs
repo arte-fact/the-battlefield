@@ -153,6 +153,8 @@ pub struct Unit {
     pub movement_left: u32,
     /// Whether this unit has attacked this turn.
     pub has_attacked: bool,
+    /// Whether this unit has moved this turn.
+    pub has_moved: bool,
     /// Remaining seconds of death fade-out (0.0 = not dying or fully faded).
     pub death_fade: f32,
 }
@@ -182,6 +184,7 @@ impl Unit {
             alive: true,
             movement_left: stats.mov,
             has_attacked: false,
+            has_moved: false,
             death_fade: 0.0,
         }
     }
@@ -210,6 +213,7 @@ impl Unit {
     pub fn reset_turn(&mut self) {
         self.movement_left = self.stats.mov;
         self.has_attacked = false;
+        self.has_moved = false;
         self.set_anim(UnitAnim::Idle);
     }
 

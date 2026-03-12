@@ -2,42 +2,38 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>The Battlefield</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
+        html, body {
             background: #1a1a2e;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
             font-family: monospace;
             color: #e0e0e0;
-        }
-        #game-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 16px;
-            position: relative;
-        }
-        #canvas-wrapper {
-            position: relative;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
         }
         canvas {
-            border: 2px solid #444;
-            image-rendering: pixelated;
             display: block;
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;
+            touch-action: none;
         }
         #hud {
-            position: absolute;
+            position: fixed;
             top: 8px;
             left: 8px;
             pointer-events: none;
             display: flex;
             flex-direction: column;
             gap: 4px;
+            z-index: 10;
         }
         #turn-display {
             font-size: 0.8rem;
@@ -74,27 +70,68 @@
             background: #4caf50;
             transition: width 0.2s ease;
         }
+        #end-turn-btn {
+            position: fixed;
+            bottom: 16px;
+            right: 16px;
+            min-width: 80px;
+            min-height: 48px;
+            padding: 10px 20px;
+            font-family: monospace;
+            font-size: 1rem;
+            font-weight: bold;
+            color: #fff;
+            background: #1565c0;
+            border: 2px solid #42a5f5;
+            border-radius: 8px;
+            cursor: pointer;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+            z-index: 10;
+        }
+        #end-turn-btn:active {
+            background: #0d47a1;
+            transform: scale(0.95);
+        }
         #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
             font-size: 1.2rem;
             color: #aaa;
+            z-index: 20;
+        }
+        #error-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.85);
+            color: #ff6b6b;
+            font-family: monospace;
+            font-size: 0.9rem;
+            padding: 20px;
+            overflow: auto;
+            z-index: 100;
+            white-space: pre-wrap;
+            word-break: break-word;
         }
     </style>
 </head>
 <body>
-    <div id="game-container">
-        <div id="canvas-wrapper">
-            <canvas id="game-canvas" width="960" height="640"></canvas>
-            <div id="hud">
-                <div id="turn-display">Turn 1</div>
-                <div id="phase-display" style="color: #4fc3f7;">Your Turn</div>
-                <div id="hp-container">
-                    <span id="hp-label">HP</span>
-                    <div id="hp-bar-bg"><div id="hp-bar-fill"></div></div>
-                </div>
-            </div>
+    <canvas id="game-canvas" width="960" height="640"></canvas>
+    <div id="hud">
+        <div id="turn-display">Turn 1</div>
+        <div id="phase-display" style="color: #4fc3f7;">Your Turn</div>
+        <div id="hp-container">
+            <span id="hp-label">HP</span>
+            <div id="hp-bar-bg"><div id="hp-bar-fill"></div></div>
         </div>
-        <div id="loading">Loading...</div>
     </div>
+    <button id="end-turn-btn">End Turn</button>
+    <div id="loading">Loading...</div>
+    <div id="error-overlay"></div>
     <script type="module">
         import init from './pkg/the_battlefield.js';
 
@@ -103,7 +140,10 @@
                 await init();
                 document.getElementById('loading').style.display = 'none';
             } catch (e) {
-                document.getElementById('loading').textContent = 'Error: ' + e;
+                document.getElementById('loading').style.display = 'none';
+                const overlay = document.getElementById('error-overlay');
+                overlay.style.display = 'block';
+                overlay.textContent = 'Error: ' + e + '\n\n' + (e.stack || '');
                 console.error(e);
             }
         }

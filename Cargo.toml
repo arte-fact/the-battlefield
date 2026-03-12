@@ -28,6 +28,10 @@ web-sys = { version = "0.3", features = [
     "WheelEvent",
     "EventTarget",
     "FocusEvent",
+    "TouchEvent",
+    "TouchList",
+    "Touch",
+    "DomRect",
 ] }
 js-sys = "0.3"
 log = "0.4"

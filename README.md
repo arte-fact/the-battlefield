@@ -2,7 +2,7 @@
 
 A roguelike, turn-based tactics game set on a medieval battlefield. You are one soldier in a massive battle between two armies. Survive. Fight. Turn the tide.
 
-Built for the web with Rust, WebAssembly, and WebGPU. Playable offline as a PWA.
+Built for the web with Rust, WebAssembly, and HTML Canvas 2D. Mobile-first, playable offline as a PWA.
 
 ## About
 
@@ -16,7 +16,8 @@ Every battle is different: terrain, faction pairings, army composition, and comm
 |-------|-----------|
 | Language | Rust |
 | Compilation target | WebAssembly |
-| Rendering | WebGPU |
+| Rendering | HTML Canvas 2D |
+| Input | Touch-first (swipe, tap, pinch) + keyboard/mouse fallback |
 | Offline support | PWA with service worker |
 | Deployment | GitHub Pages via GitHub Actions |
 | Art | [Tiny Swords](https://pixelfrog-assets.itch.io/tiny-swords) by Pixel Frog (itch.io) |
@@ -27,7 +28,7 @@ Every battle is different: terrain, faction pairings, army composition, and comm
 
 - [Rust](https://rustup.rs/) (latest stable)
 - [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
-- A WebGPU-compatible browser (Chrome 113+, Firefox 121+, Edge 113+)
+- Any modern browser (Chrome, Firefox, Safari, Edge)
 
 ### Build and Run
 
@@ -70,7 +71,7 @@ cargo fmt --check
 ### Phase 1: Foundation
 
 - [ ] Rust project setup with `Cargo.toml` and WASM target
-- [ ] WebGPU rendering pipeline (initialize device, basic draw)
+- [ ] HTML Canvas 2D rendering pipeline (initialize canvas, basic draw)
 - [ ] Canvas setup and game loop (fixed timestep)
 - [ ] GitHub Actions CI/CD pipeline (build, test, clippy, fmt)
 - [ ] GitHub Pages deployment
@@ -88,6 +89,11 @@ cargo fmt --check
 - [ ] Ranged combat (Archer shoot animation + arrow projectile)
 - [ ] Health system with HP bars (BigBar/SmallBar UI assets)
 - [ ] Unit death (explosion FX + fade out)
+- [ ] Touch input: swipe-anywhere movement & attack (8-directional with pathfinding auto-move)
+- [ ] Touch input: tap End Turn button
+- [ ] Touch input: pinch-to-zoom, two-finger-pan
+- [ ] Responsive canvas (fill viewport on mobile)
+- [ ] On-screen End Turn button
 
 ### Phase 3: Battlefield and Armies
 
@@ -124,6 +130,9 @@ cargo fmt --check
 - [ ] Animated decorations (swaying trees, bushes, water rocks)
 - [ ] Sound effects (combat, movement, orders, ambient)
 - [ ] Music
+- [ ] Mobile-optimized HUD layout (bottom action bar)
+- [ ] Haptic feedback on attack/damage (Vibration API)
+- [ ] Touch target sizing validation (44px minimum)
 
 ### Phase 6: Content and Balance
 
