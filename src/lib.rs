@@ -5,6 +5,7 @@ pub mod grid;
 pub mod input;
 pub mod particle;
 pub mod sprite;
+pub mod terrain_gen;
 pub mod turn;
 pub mod unit;
 

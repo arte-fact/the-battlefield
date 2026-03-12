@@ -3,6 +3,7 @@ use crate::combat;
 use crate::grid::{self, Grid, GRID_SIZE, TILE_SIZE};
 use crate::input::SwipeDir;
 use crate::particle::{Particle, ParticleKind, Projectile};
+use crate::terrain_gen;
 use crate::turn::{TurnPhase, TurnState};
 use crate::unit::{Facing, Faction, Unit, UnitAnim, UnitId, UnitKind};
 
@@ -792,42 +793,37 @@ impl Game {
             .copied()
     }
 
-    /// Set up a simple demo battle for testing.
+    /// Set up a demo battle with procedural terrain.
     pub fn setup_demo_battle(&mut self) {
-        // Blue army (player side)
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, 10, 30, true);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, 10, 32, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, 10, 28, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, 8, 30, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, 8, 32, false);
+        self.setup_demo_battle_with_seed(42);
+    }
+
+    /// Set up a demo battle with a specific seed for terrain generation.
+    pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
+        self.grid = terrain_gen::generate_battlefield(seed);
+
+        let (blue_x, blue_y) = terrain_gen::blue_spawn_area();
+        let (red_x, red_y) = terrain_gen::red_spawn_area();
+
+        // Blue army (player side) — spread around spawn point
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y, true);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y + 2, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y.saturating_sub(2), false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y + 2, false);
 
         // Red army (enemy side)
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, 20, 30, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, 20, 32, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, 20, 28, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, 22, 30, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, 22, 32, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y + 2, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y.saturating_sub(2), false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y + 2, false);
 
-        // Some terrain variety
-        for x in 14..17 {
-            self.grid.set(x, 29, crate::grid::TileKind::Hill);
-            self.grid.set(x, 30, crate::grid::TileKind::Hill);
-            self.grid.set(x, 31, crate::grid::TileKind::Hill);
-        }
-        for x in 5..8 {
-            self.grid.set(x, 25, crate::grid::TileKind::Water);
-            self.grid.set(x, 26, crate::grid::TileKind::Water);
-        }
-        for x in 24..27 {
-            self.grid.set(x, 33, crate::grid::TileKind::Forest);
-            self.grid.set(x, 34, crate::grid::TileKind::Forest);
-        }
-
-        // Center camera on the battlefield action
-        let (cx, cy) = grid::grid_to_world(15, 30);
+        // Center camera on the player with a view of surrounding terrain
+        let (cx, cy) = grid::grid_to_world(blue_x + 5, blue_y);
         self.camera.x = cx;
         self.camera.y = cy;
-        self.camera.zoom = 1.0;
+        self.camera.zoom = 0.8;
 
         self.compute_player_targets();
     }
