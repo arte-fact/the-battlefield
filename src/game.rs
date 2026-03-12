@@ -508,7 +508,7 @@ impl Game {
             _ => return,
         };
 
-        let is_ranged = self.units[player_idx].kind == UnitKind::Archer
+        let is_ranged = self.units[player_idx].stats.range > 1
             && self.units[player_idx]
                 .distance_to(self.units[target_idx].grid_x, self.units[target_idx].grid_y)
                 > 1;
@@ -591,7 +591,6 @@ impl Game {
             let ax = self.units[ai_idx].grid_x;
             let ay = self.units[ai_idx].grid_y;
             let range = self.units[ai_idx].stats.range;
-            let kind = self.units[ai_idx].kind;
 
             // Find nearest enemy
             let nearest_enemy = self
@@ -619,7 +618,7 @@ impl Game {
 
             // Attack if in range
             if dist <= range && !self.units[ai_idx].has_attacked {
-                let is_ranged = kind == UnitKind::Archer && dist > 1;
+                let is_ranged = range > 1 && dist > 1;
 
                 let (attacker, defender) = if ai_idx < enemy_idx {
                     let (left, right) = self.units.split_at_mut(enemy_idx);
@@ -805,19 +804,27 @@ impl Game {
         let (blue_x, blue_y) = terrain_gen::blue_spawn_area();
         let (red_x, red_y) = terrain_gen::red_spawn_area();
 
-        // Blue army (player side) — spread around spawn point
+        // Blue army (player side) — all 5 unit types
         self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y, true);
         self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y + 2, false);
         self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y.saturating_sub(2), false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y + 2, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y + 1, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Lancer, Faction::Blue, blue_x + 1, blue_y + 4, false);
+        self.spawn_unit(UnitKind::Pawn, Faction::Blue, blue_x + 1, blue_y.saturating_sub(4), false);
+        self.spawn_unit(UnitKind::Pawn, Faction::Blue, blue_x + 1, blue_y.saturating_sub(3), false);
+        self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_x.saturating_sub(1), blue_y + 3, false);
 
-        // Red army (enemy side)
+        // Red army (enemy side) — all 5 unit types
         self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y, false);
         self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y + 2, false);
         self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y.saturating_sub(2), false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y + 2, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y + 1, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Lancer, Faction::Red, red_x.saturating_sub(1), red_y + 4, false);
+        self.spawn_unit(UnitKind::Pawn, Faction::Red, red_x.saturating_sub(1), red_y.saturating_sub(4), false);
+        self.spawn_unit(UnitKind::Pawn, Faction::Red, red_x.saturating_sub(1), red_y.saturating_sub(3), false);
+        self.spawn_unit(UnitKind::Monk, Faction::Red, red_x + 1, red_y + 3, false);
 
         // Center camera on the player with a view of surrounding terrain
         let (cx, cy) = grid::grid_to_world(blue_x + 5, blue_y);

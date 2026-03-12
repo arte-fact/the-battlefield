@@ -1,5 +1,5 @@
 use crate::grid::Grid;
-use crate::unit::{Facing, Unit, UnitAnim, UnitKind};
+use crate::unit::{Facing, Unit, UnitAnim};
 
 /// Result of a combat action.
 #[derive(Debug, PartialEq, Eq)]
@@ -29,13 +29,13 @@ pub fn can_melee(attacker: &Unit, defender: &Unit) -> bool {
         && attacker.distance_to(defender.grid_x, defender.grid_y) <= 1
 }
 
-/// Check if attacker can shoot the defender (within range).
+/// Check if attacker can shoot the defender (within range, for units with range > 1).
 pub fn can_ranged_attack(attacker: &Unit, defender: &Unit) -> bool {
     attacker.alive
         && defender.alive
         && !attacker.has_attacked
         && attacker.faction != defender.faction
-        && attacker.kind == UnitKind::Archer
+        && attacker.stats.range > 1
         && attacker.distance_to(defender.grid_x, defender.grid_y) <= attacker.stats.range
 }
 
@@ -84,7 +84,7 @@ pub fn execute_ranged(attacker: &mut Unit, defender: &mut Unit, grid: &Grid) -> 
 mod tests {
     use super::*;
     use crate::grid::{Grid, GRID_SIZE};
-    use crate::unit::Faction;
+    use crate::unit::{Faction, UnitKind};
 
     fn make_warrior(id: u32, faction: Faction, x: u32, y: u32) -> Unit {
         Unit::new(id, UnitKind::Warrior, faction, x, y, false)

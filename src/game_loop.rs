@@ -505,7 +505,13 @@ async fn load_textures(
 ) -> Result<(), JsValue> {
     // Load unit sprites for the demo factions (Blue and Red)
     let factions = [Faction::Blue, Faction::Red];
-    let unit_kinds = [(UnitKind::Warrior, "Warrior"), (UnitKind::Archer, "Archer")];
+    let unit_kinds = [
+        (UnitKind::Warrior, "Warrior"),
+        (UnitKind::Archer, "Archer"),
+        (UnitKind::Lancer, "Lancer"),
+        (UnitKind::Pawn, "Pawn"),
+        (UnitKind::Monk, "Monk"),
+    ];
     let anims = [
         (UnitAnim::Idle, "Idle"),
         (UnitAnim::Run, "Run"),
@@ -522,6 +528,15 @@ async fn load_textures(
                     (UnitKind::Archer, UnitAnim::Idle) => ("Archer_Idle.png", 6),
                     (UnitKind::Archer, UnitAnim::Run) => ("Archer_Run.png", 4),
                     (UnitKind::Archer, UnitAnim::Attack) => ("Archer_Shoot.png", 8),
+                    (UnitKind::Lancer, UnitAnim::Idle) => ("Lancer_Idle.png", 12),
+                    (UnitKind::Lancer, UnitAnim::Run) => ("Lancer_Run.png", 6),
+                    (UnitKind::Lancer, UnitAnim::Attack) => ("Lancer_Right_Attack.png", 3),
+                    (UnitKind::Pawn, UnitAnim::Idle) => ("Pawn_Idle.png", 8),
+                    (UnitKind::Pawn, UnitAnim::Run) => ("Pawn_Run.png", 6),
+                    (UnitKind::Pawn, UnitAnim::Attack) => ("Pawn_Interact Axe.png", 6),
+                    (UnitKind::Monk, UnitAnim::Idle) => ("Idle.png", 6),
+                    (UnitKind::Monk, UnitAnim::Run) => ("Run.png", 4),
+                    (UnitKind::Monk, UnitAnim::Attack) => ("Heal.png", 11),
                     _ => continue,
                 };
 
