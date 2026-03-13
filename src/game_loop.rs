@@ -168,10 +168,10 @@ pub fn run(
             state_guard.elapsed += dt;
 
             let animating = state_guard.animator.is_playing();
-            let game = &mut state_guard.game;
 
             // Process input
             {
+                let game = &mut state_guard.game;
                 let mut inp = input.borrow_mut();
 
                 // Camera controls (always active, even during animation)
@@ -242,6 +242,7 @@ pub fn run(
 
             // Compute live swipe preview path (delta applied from player position)
             if !animating {
+                let game = &state_guard.game;
                 let inp = input.borrow();
                 let mut pp = preview_path.borrow_mut();
                 pp.clear();
@@ -267,38 +268,41 @@ pub fn run(
             }
 
             // Compile turn events into animation phases
-            if !game.turn_events.is_empty() {
-                let events = game.turn_events.drain(..).collect::<Vec<_>>();
-                let is_auto = game.is_auto_moving();
-                state_guard.animator.init_visual_alive(
-                    game.units.iter().filter(|u| u.alive).map(|u| u.id),
-                );
+            if !state_guard.game.turn_events.is_empty() {
+                let events = state_guard.game.turn_events.drain(..).collect::<Vec<_>>();
+                let is_auto = state_guard.game.is_auto_moving();
+                let alive_ids: Vec<_> = state_guard.game.units.iter()
+                    .filter(|u| u.alive).map(|u| u.id).collect();
+                state_guard.animator.init_visual_alive(alive_ids.into_iter());
                 state_guard.animator.enqueue(events, is_auto);
             }
 
             // Process auto-move path (time-based: 0.15s per step, paused during animation)
-            if game.is_auto_moving() && !state_guard.animator.is_playing() {
-                game.auto_move_timer += dt as f32;
-                if game.auto_move_timer >= 0.15 {
-                    game.auto_move_timer = 0.0;
-                    game.auto_move_step();
+            if state_guard.game.is_auto_moving() && !state_guard.animator.is_playing() {
+                state_guard.game.auto_move_timer += dt as f32;
+                if state_guard.game.auto_move_timer >= 0.15 {
+                    state_guard.game.auto_move_timer = 0.0;
+                    state_guard.game.auto_move_step();
                 }
             }
 
             // Advance animation and collect spawned effects
-            if state_guard.animator.is_playing() {
-                let anim_output = state_guard.animator.update(dt as f32, &mut game.units);
-                for (kind, x, y) in anim_output.particles {
-                    game.particles.push(Particle::new(kind, x, y));
-                }
-                for (sx, sy, tx, ty) in anim_output.projectiles {
-                    game.projectiles.push(Projectile::new(sx, sy, tx, ty));
+            {
+                let LoopState { ref mut animator, ref mut game, .. } = *state_guard;
+                if animator.is_playing() {
+                    let anim_output = animator.update(dt as f32, &mut game.units);
+                    for (kind, x, y) in anim_output.particles {
+                        game.particles.push(Particle::new(kind, x, y));
+                    }
+                    for (sx, sy, tx, ty) in anim_output.projectiles {
+                        game.projectiles.push(Projectile::new(sx, sy, tx, ty));
+                    }
                 }
             }
 
             // When not animating, snap visual positions to grid positions
             if !state_guard.animator.is_playing() {
-                for unit in &mut game.units {
+                for unit in &mut state_guard.game.units {
                     let (wx, wy) = grid::grid_to_world(unit.grid_x, unit.grid_y);
                     unit.visual_x = wx;
                     unit.visual_y = wy;
@@ -306,11 +310,11 @@ pub fn run(
             }
 
             // Update game state (animations, particles, camera follow)
-            game.update(dt);
+            state_guard.game.update(dt);
 
             // Update HUD
             if let Some(ref hud) = *hud.as_ref() {
-                hud.update(game);
+                hud.update(&state_guard.game);
             }
         }
 

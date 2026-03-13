@@ -96,6 +96,12 @@ pub struct TurnAnimator {
     visual_alive: HashSet<UnitId>,
 }
 
+impl Default for TurnAnimator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TurnAnimator {
     pub fn new() -> Self {
         Self {

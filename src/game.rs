@@ -385,6 +385,7 @@ impl Game {
 
     /// Recursive shadowcasting for one octant.
     /// Uses the standard 8-octant transform to cover all directions.
+    #[allow(clippy::too_many_arguments)]
     fn cast_light(
         &mut self,
         ox: i32,
@@ -1042,5 +1043,37 @@ mod tests {
         game.player_step(SwipeDir::W);
         // Tile (12,10) should still be revealed but may not be visible
         assert!(game.revealed[idx_near]);
+    }
+
+    #[test]
+    fn spawned_unit_has_correct_visual_position() {
+        use crate::grid;
+        let mut game = Game::new(960.0, 640.0);
+        let id = game.spawn_unit(UnitKind::Warrior, Faction::Blue, 10, 15, true);
+        let unit = game.find_unit(id).unwrap();
+        let (expected_x, expected_y) = grid::grid_to_world(10, 15);
+        assert!((unit.visual_x - expected_x).abs() < f32::EPSILON);
+        assert!((unit.visual_y - expected_y).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn turn_events_accumulate_player_and_ai() {
+        use crate::animation::TurnEvent;
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 15, 5, false);
+        game.player_step(SwipeDir::E);
+        let move_count = game
+            .turn_events
+            .iter()
+            .filter(|e| matches!(e, TurnEvent::Move { .. }))
+            .count();
+        assert!(
+            move_count >= 2,
+            "Expected at least 2 Move events (player + AI), got {move_count}"
+        );
+        let events: Vec<_> = game.turn_events.drain(..).collect();
+        assert!(game.turn_events.is_empty());
+        assert!(events.len() >= 2);
     }
 }
