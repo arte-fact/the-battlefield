@@ -709,10 +709,10 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, preview_path: &[
     draw_grid_lines(ctx, min_gx, min_gy, max_gx, max_gy)?;
 
     // 5. Draw overlays (player highlight, HP bars, path preview)
-    draw_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy, ts, preview_path)?;
+    draw_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy, ts, preview_path, &state.animator)?;
 
     // 6. Draw foreground sprites (units, particles, projectiles)
-    draw_foreground(ctx, game, loaded, tm)?;
+    draw_foreground(ctx, game, loaded, tm, &state.animator)?;
 
     // 7. Draw trees on forest tiles (on top of units for depth)
     draw_trees(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy, state.elapsed)?;
@@ -912,6 +912,7 @@ fn draw_overlays(
     max_gy: u32,
     ts: f64,
     preview_path: &[(u32, u32)],
+    animator: &TurnAnimator,
 ) -> Result<(), JsValue> {
     // Highlight player tile
     if let Some(player) = game.player_unit() {
@@ -955,9 +956,14 @@ fn draw_overlays(
         }
     }
 
-    // HP bars for alive units
+    // HP bars for alive units (use visual_alive during animation)
     for unit in &game.units {
-        if !unit.alive {
+        let show = if animator.is_playing() {
+            animator.is_visually_alive(unit.id)
+        } else {
+            unit.alive
+        };
+        if !show {
             continue;
         }
         let (wx, wy) = (unit.visual_x, unit.visual_y);
@@ -999,13 +1005,20 @@ fn draw_foreground(
     game: &Game,
     loaded: &LoadedTextures,
     tm: &TextureManager,
+    animator: &TurnAnimator,
 ) -> Result<(), JsValue> {
     // Unit sprites (sorted by Y for proper layering)
     let mut unit_indices: Vec<usize> = game
         .units
         .iter()
         .enumerate()
-        .filter(|(_, u)| u.alive || u.death_fade > 0.0)
+        .filter(|(_, u)| {
+            if animator.is_playing() {
+                animator.is_visually_alive(u.id) || u.death_fade > 0.0
+            } else {
+                u.alive || u.death_fade > 0.0
+            }
+        })
         .map(|(i, _)| i)
         .collect();
     unit_indices.sort_by(|&a, &b| {
