@@ -4,7 +4,7 @@ use crate::combat;
 use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::input::SwipeDir;
 use crate::mapgen;
-use crate::particle::{Particle, ParticleKind, Projectile};
+use crate::particle::{Particle, Projectile};
 use crate::unit::{Facing, Faction, Unit, UnitId, UnitKind};
 
 /// Player vision radius in tiles.
@@ -157,9 +157,6 @@ impl Game {
                 from: (px, py),
                 to: (nx, ny),
             });
-            let (wx, wy) = grid::grid_to_world(px, py);
-            self.particles
-                .push(Particle::new(ParticleKind::Dust, wx, wy));
         }
 
         // Auto-turn: AI acts, using pre-turn snapshot for ranged targeting
@@ -513,15 +510,8 @@ impl Game {
             let target_moved = self.units[defender_idx].grid_x != snap_x
                 || self.units[defender_idx].grid_y != snap_y;
 
-            let (sx, sy) = grid::grid_to_world(self.units[attacker_idx].grid_x, self.units[attacker_idx].grid_y);
-            // Arrow always flies to the snapshot position (where the target was)
-            let (tx, ty) = grid::grid_to_world(snap_x, snap_y);
-            self.projectiles.push(Projectile::new(sx, sy, tx, ty));
-
             if target_moved {
-                // Miss: arrow hits empty ground, dust puff at impact
-                self.particles
-                    .push(Particle::new(ParticleKind::Dust, tx, ty));
+                // Miss: arrow hits empty ground
                 self.turn_events.push(TurnEvent::RangedAttack {
                     attacker_id,
                     defender_id,
@@ -548,10 +538,6 @@ impl Game {
                     target_pos: (snap_x, snap_y),
                     missed: false,
                 });
-                if result.target_killed {
-                    self.particles
-                        .push(Particle::new(ParticleKind::ExplosionLarge, tx, ty));
-                }
             }
         } else {
             let (attacker, defender) = if attacker_idx < defender_idx {
@@ -568,13 +554,6 @@ impl Game {
                 damage: result.damage,
                 killed: result.target_killed,
             });
-            let (wx, wy) = grid::grid_to_world(defender.grid_x, defender.grid_y);
-            self.particles
-                .push(Particle::new(ParticleKind::ExplosionSmall, wx, wy));
-            if !defender.alive {
-                self.particles
-                    .push(Particle::new(ParticleKind::ExplosionLarge, wx, wy));
-            }
         }
     }
 
@@ -678,9 +657,6 @@ impl Game {
                         from: (ax, ay),
                         to: (best.0, best.1),
                     });
-                    let (wx, wy) = grid::grid_to_world(ax, ay);
-                    self.particles
-                        .push(Particle::new(ParticleKind::Dust, wx, wy));
                 }
             }
         }
