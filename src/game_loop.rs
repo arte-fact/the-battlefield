@@ -960,7 +960,7 @@ fn draw_overlays(
         if !unit.alive {
             continue;
         }
-        let (wx, wy) = grid::grid_to_world(unit.grid_x, unit.grid_y);
+        let (wx, wy) = (unit.visual_x, unit.visual_y);
         let bar_width = 48.0_f64;
         let bar_height = 6.0_f64;
         let bar_y = (wy as f64) - (TILE_SIZE as f64) * 0.45;
@@ -1010,9 +1010,15 @@ fn draw_foreground(
         .collect();
     unit_indices.sort_by(|&a, &b| {
         game.units[a]
-            .grid_y
-            .cmp(&game.units[b].grid_y)
-            .then(game.units[a].grid_x.cmp(&game.units[b].grid_x))
+            .visual_y
+            .partial_cmp(&game.units[b].visual_y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                game.units[a]
+                    .visual_x
+                    .partial_cmp(&game.units[b].visual_x)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
     });
 
     for &idx in &unit_indices {
@@ -1045,7 +1051,7 @@ fn draw_foreground(
                 frame_count: unit.animation.frame_count,
             };
             let (sx, sy, sw, sh) = sheet.frame_src_rect(unit.animation.current_frame);
-            let (wx, wy) = grid::grid_to_world(unit.grid_x, unit.grid_y);
+            let (wx, wy) = (unit.visual_x, unit.visual_y);
             let sprite_size = unit.kind.frame_size() as f64;
 
             let opacity = if unit.alive {
