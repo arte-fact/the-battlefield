@@ -1,7 +1,9 @@
+use crate::animation::TurnAnimator;
 use crate::autotile;
 use crate::game::Game;
 use crate::grid::{self, TileKind, TILE_SIZE};
 use crate::input::Input;
+use crate::particle::{Particle, Projectile};
 use crate::renderer::{draw_sprite, load_image, Canvas2d, TextureId, TextureManager};
 use crate::sprite::SpriteSheet;
 use crate::unit::{Facing, Faction, UnitAnim, UnitKind, DEATH_FADE_DURATION};
@@ -128,6 +130,7 @@ pub fn run(
         elapsed: 0.0,
         fog_canvas,
         fog_ctx,
+        animator: TurnAnimator::new(),
     }));
 
     let preview_path: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
@@ -164,13 +167,14 @@ pub fn run(
             let dt = dt.min(0.1);
             state_guard.elapsed += dt;
 
+            let animating = state_guard.animator.is_playing();
             let game = &mut state_guard.game;
 
             // Process input
             {
                 let mut inp = input.borrow_mut();
 
-                // Camera pan (WASD only)
+                // Camera controls (always active, even during animation)
                 let (pan_x, pan_y) = inp.camera_pan();
                 if pan_x != 0.0 || pan_y != 0.0 {
                     game.camera.pan(pan_x, pan_y, dt as f32);
@@ -195,47 +199,49 @@ pub fn run(
                     game.camera.y -= pan_ty / game.camera.zoom;
                 }
 
-                // Any manual input cancels auto-move
-                let has_manual_input = inp.keys_down.iter().any(|k| k.starts_with("Arrow"))
-                    || inp.swipe.is_some()
-                    || inp.mouse_clicked;
+                // Movement/action input (blocked during animation)
+                if !animating {
+                    // Any manual input cancels auto-move
+                    let has_manual_input = inp.keys_down.iter().any(|k| k.starts_with("Arrow"))
+                        || inp.swipe.is_some()
+                        || inp.mouse_clicked;
 
-                if has_manual_input {
-                    game.cancel_auto_path();
-                }
+                    if has_manual_input {
+                        game.cancel_auto_path();
+                    }
 
-                // Arrow keys -> movement (1 tile per press)
-                if let Some(dir) = inp.take_arrow_step() {
-                    game.player_step(dir);
-                }
+                    // Arrow keys -> movement (1 tile per press)
+                    if let Some(dir) = inp.take_arrow_step() {
+                        game.player_step(dir);
+                    }
 
-                // Touch short swipe -> movement (1 tile per swipe)
-                if let Some(dir) = inp.take_swipe() {
-                    game.player_step(dir);
-                }
+                    // Touch short swipe -> movement (1 tile per swipe)
+                    if let Some(dir) = inp.take_swipe() {
+                        game.player_step(dir);
+                    }
 
-                // Touch long swipe -> apply delta from player position for pathfinding
-                if let Some((sdx, sdy)) = inp.take_long_swipe() {
-                    if let Some(player) = game.player_unit() {
-                        let (pwx, pwy) = grid::grid_to_world(player.grid_x, player.grid_y);
-                        // Convert screen-space delta to world-space delta
-                        let wdx = sdx / game.camera.zoom;
-                        let wdy = sdy / game.camera.zoom;
-                        let (gx, gy) = grid::world_to_grid(pwx + wdx, pwy + wdy);
-                        if game.grid.in_bounds(gx, gy) {
-                            game.set_auto_path(gx as u32, gy as u32);
+                    // Touch long swipe -> apply delta from player position for pathfinding
+                    if let Some((sdx, sdy)) = inp.take_long_swipe() {
+                        if let Some(player) = game.player_unit() {
+                            let (pwx, pwy) = grid::grid_to_world(player.grid_x, player.grid_y);
+                            let wdx = sdx / game.camera.zoom;
+                            let wdy = sdy / game.camera.zoom;
+                            let (gx, gy) = grid::world_to_grid(pwx + wdx, pwy + wdy);
+                            if game.grid.in_bounds(gx, gy) {
+                                game.set_auto_path(gx as u32, gy as u32);
+                            }
                         }
                     }
-                }
 
-                // Mouse click -> derive direction from player, step 1 tile
-                if let Some((sx, sy)) = inp.take_click() {
-                    handle_click(game, sx, sy);
+                    // Mouse click -> derive direction from player, step 1 tile
+                    if let Some((sx, sy)) = inp.take_click() {
+                        handle_click(game, sx, sy);
+                    }
                 }
             }
 
             // Compute live swipe preview path (delta applied from player position)
-            {
+            if !animating {
                 let inp = input.borrow();
                 let mut pp = preview_path.borrow_mut();
                 pp.clear();
@@ -260,12 +266,42 @@ pub fn run(
                 }
             }
 
-            // Process auto-move path (time-based: 0.15s per step)
-            if game.is_auto_moving() {
+            // Compile turn events into animation phases
+            if !game.turn_events.is_empty() {
+                let events = game.turn_events.drain(..).collect::<Vec<_>>();
+                let is_auto = game.is_auto_moving();
+                state_guard.animator.init_visual_alive(
+                    game.units.iter().filter(|u| u.alive).map(|u| u.id),
+                );
+                state_guard.animator.enqueue(events, is_auto);
+            }
+
+            // Process auto-move path (time-based: 0.15s per step, paused during animation)
+            if game.is_auto_moving() && !state_guard.animator.is_playing() {
                 game.auto_move_timer += dt as f32;
                 if game.auto_move_timer >= 0.15 {
                     game.auto_move_timer = 0.0;
                     game.auto_move_step();
+                }
+            }
+
+            // Advance animation and collect spawned effects
+            if state_guard.animator.is_playing() {
+                let anim_output = state_guard.animator.update(dt as f32, &mut game.units);
+                for (kind, x, y) in anim_output.particles {
+                    game.particles.push(Particle::new(kind, x, y));
+                }
+                for (sx, sy, tx, ty) in anim_output.projectiles {
+                    game.projectiles.push(Projectile::new(sx, sy, tx, ty));
+                }
+            }
+
+            // When not animating, snap visual positions to grid positions
+            if !state_guard.animator.is_playing() {
+                for unit in &mut game.units {
+                    let (wx, wy) = grid::grid_to_world(unit.grid_x, unit.grid_y);
+                    unit.visual_x = wx;
+                    unit.visual_y = wy;
                 }
             }
 
@@ -1228,4 +1264,5 @@ struct LoopState {
     elapsed: f64,
     fog_canvas: web_sys::HtmlCanvasElement,
     fog_ctx: web_sys::CanvasRenderingContext2d,
+    animator: TurnAnimator,
 }
