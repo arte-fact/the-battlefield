@@ -277,12 +277,32 @@ pub fn run(
                 state_guard.animator.enqueue(events, is_auto);
             }
 
-            // Process auto-move path (time-based: 0.15s per step, paused during animation)
+            // Process auto-move path: execute ALL remaining steps at once, then
+            // animate the entire sequence as one continuous walk.
             if state_guard.game.is_auto_moving() && !state_guard.animator.is_playing() {
                 state_guard.game.auto_move_timer += dt as f32;
                 if state_guard.game.auto_move_timer >= 0.15 {
                     state_guard.game.auto_move_timer = 0.0;
-                    state_guard.game.auto_move_step();
+                    let mut step_batches: Vec<Vec<crate::animation::TurnEvent>> = Vec::new();
+                    loop {
+                        state_guard.game.turn_events.clear();
+                        let stepped = state_guard.game.auto_move_step();
+                        if !stepped {
+                            break;
+                        }
+                        let events: Vec<_> = state_guard.game.turn_events.drain(..).collect();
+                        let has_combat = events.iter().any(|e| !matches!(e, crate::animation::TurnEvent::Move { .. }));
+                        step_batches.push(events);
+                        if has_combat || !state_guard.game.is_auto_moving() {
+                            break;
+                        }
+                    }
+                    if !step_batches.is_empty() {
+                        let alive_ids: Vec<_> = state_guard.game.units.iter()
+                            .filter(|u| u.alive).map(|u| u.id).collect();
+                        state_guard.animator.init_visual_alive(alive_ids.into_iter());
+                        state_guard.animator.enqueue_auto_path(step_batches);
+                    }
                 }
             }
 
