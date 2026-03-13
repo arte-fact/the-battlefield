@@ -683,12 +683,12 @@ impl Game {
         }
         self.projectiles.retain(|p| !p.finished);
 
-        // Camera smoothly follows player
+        // Camera smoothly follows player's visual position
         if let Some(player) = self.player_unit() {
-            let (tx, ty) = grid::grid_to_world(player.grid_x, player.grid_y);
+            let (pvx, pvy) = (player.visual_x, player.visual_y);
             let lerp = (dt as f32 * 5.0).min(1.0);
-            self.camera.x += (tx - self.camera.x) * lerp;
-            self.camera.y += (ty - self.camera.y) * lerp;
+            self.camera.x += (pvx - self.camera.x) * lerp;
+            self.camera.y += (pvy - self.camera.y) * lerp;
         }
     }
 
