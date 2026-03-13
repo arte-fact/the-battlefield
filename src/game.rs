@@ -520,7 +520,16 @@ impl Game {
 
             if target_moved {
                 // Miss: arrow hits empty ground, dust puff at impact
-                self.particles.push(Particle::new(ParticleKind::Dust, tx, ty));
+                self.particles
+                    .push(Particle::new(ParticleKind::Dust, tx, ty));
+                self.turn_events.push(TurnEvent::RangedAttack {
+                    attacker_id,
+                    defender_id,
+                    damage: 0,
+                    killed: false,
+                    target_pos: (snap_x, snap_y),
+                    missed: true,
+                });
             } else {
                 // Hit: deal damage normally
                 let (attacker, defender) = if attacker_idx < defender_idx {
@@ -531,6 +540,14 @@ impl Game {
                     (&mut right[0], &mut left[defender_idx])
                 };
                 let result = combat::execute_ranged(attacker, defender, &self.grid);
+                self.turn_events.push(TurnEvent::RangedAttack {
+                    attacker_id,
+                    defender_id,
+                    damage: result.damage,
+                    killed: result.target_killed,
+                    target_pos: (snap_x, snap_y),
+                    missed: false,
+                });
                 if result.target_killed {
                     self.particles
                         .push(Particle::new(ParticleKind::ExplosionLarge, tx, ty));
@@ -544,7 +561,13 @@ impl Game {
                 let (left, right) = self.units.split_at_mut(attacker_idx);
                 (&mut right[0], &mut left[defender_idx])
             };
-            let _result = combat::execute_melee(attacker, defender, &self.grid);
+            let result = combat::execute_melee(attacker, defender, &self.grid);
+            self.turn_events.push(TurnEvent::MeleeAttack {
+                attacker_id,
+                defender_id,
+                damage: result.damage,
+                killed: result.target_killed,
+            });
             let (wx, wy) = grid::grid_to_world(defender.grid_x, defender.grid_y);
             self.particles
                 .push(Particle::new(ParticleKind::ExplosionSmall, wx, wy));
@@ -975,6 +998,24 @@ mod tests {
         assert!(
             has_player_move,
             "Expected Move event for player, got: {:?}",
+            game.turn_events
+        );
+    }
+
+    #[test]
+    fn player_step_records_melee_attack_event() {
+        use crate::animation::TurnEvent;
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 5, false);
+        game.player_step(SwipeDir::E);
+        let has_melee = game
+            .turn_events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::MeleeAttack { attacker_id: 1, .. }));
+        assert!(
+            has_melee,
+            "Expected MeleeAttack event, got: {:?}",
             game.turn_events
         );
     }
