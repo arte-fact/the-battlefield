@@ -1,3 +1,4 @@
+use crate::animation;
 use crate::animation::TurnAnimator;
 use crate::autotile;
 use crate::game::Game;
@@ -167,14 +168,12 @@ pub fn run(
             let dt = dt.min(0.1);
             state_guard.elapsed += dt;
 
-            let animating = state_guard.animator.is_playing();
-
-            // Process input
+            // Process input (never blocked — all units animate simultaneously)
             {
                 let game = &mut state_guard.game;
                 let mut inp = input.borrow_mut();
 
-                // Camera controls (always active, even during animation)
+                // Camera controls
                 let (pan_x, pan_y) = inp.camera_pan();
                 if pan_x != 0.0 || pan_y != 0.0 {
                     game.camera.pan(pan_x, pan_y, dt as f32);
@@ -199,49 +198,46 @@ pub fn run(
                     game.camera.y -= pan_ty / game.camera.zoom;
                 }
 
-                // Movement/action input (blocked during animation)
-                if !animating {
-                    // Any manual input cancels auto-move
-                    let has_manual_input = inp.keys_down.iter().any(|k| k.starts_with("Arrow"))
-                        || inp.swipe.is_some()
-                        || inp.mouse_clicked;
+                // Any manual input cancels auto-move
+                let has_manual_input = inp.keys_down.iter().any(|k| k.starts_with("Arrow"))
+                    || inp.swipe.is_some()
+                    || inp.mouse_clicked;
 
-                    if has_manual_input {
-                        game.cancel_auto_path();
-                    }
+                if has_manual_input {
+                    game.cancel_auto_path();
+                }
 
-                    // Arrow keys -> movement (1 tile per press)
-                    if let Some(dir) = inp.take_arrow_step() {
-                        game.player_step(dir);
-                    }
+                // Arrow keys -> movement (1 tile per press)
+                if let Some(dir) = inp.take_arrow_step() {
+                    game.player_step(dir);
+                }
 
-                    // Touch short swipe -> movement (1 tile per swipe)
-                    if let Some(dir) = inp.take_swipe() {
-                        game.player_step(dir);
-                    }
+                // Touch short swipe -> movement (1 tile per swipe)
+                if let Some(dir) = inp.take_swipe() {
+                    game.player_step(dir);
+                }
 
-                    // Touch long swipe -> apply delta from player position for pathfinding
-                    if let Some((sdx, sdy)) = inp.take_long_swipe() {
-                        if let Some(player) = game.player_unit() {
-                            let (pwx, pwy) = grid::grid_to_world(player.grid_x, player.grid_y);
-                            let wdx = sdx / game.camera.zoom;
-                            let wdy = sdy / game.camera.zoom;
-                            let (gx, gy) = grid::world_to_grid(pwx + wdx, pwy + wdy);
-                            if game.grid.in_bounds(gx, gy) {
-                                game.set_auto_path(gx as u32, gy as u32);
-                            }
+                // Touch long swipe -> apply delta from player position for pathfinding
+                if let Some((sdx, sdy)) = inp.take_long_swipe() {
+                    if let Some(player) = game.player_unit() {
+                        let (pwx, pwy) = grid::grid_to_world(player.grid_x, player.grid_y);
+                        let wdx = sdx / game.camera.zoom;
+                        let wdy = sdy / game.camera.zoom;
+                        let (gx, gy) = grid::world_to_grid(pwx + wdx, pwy + wdy);
+                        if game.grid.in_bounds(gx, gy) {
+                            game.set_auto_path(gx as u32, gy as u32);
                         }
                     }
+                }
 
-                    // Mouse click -> derive direction from player, step 1 tile
-                    if let Some((sx, sy)) = inp.take_click() {
-                        handle_click(game, sx, sy);
-                    }
+                // Mouse click -> derive direction from player, step 1 tile
+                if let Some((sx, sy)) = inp.take_click() {
+                    handle_click(game, sx, sy);
                 }
             }
 
             // Compute live swipe preview path (delta applied from player position)
-            if !animating {
+            {
                 let game = &state_guard.game;
                 let inp = input.borrow();
                 let mut pp = preview_path.borrow_mut();
@@ -267,46 +263,29 @@ pub fn run(
                 }
             }
 
-            // Compile turn events into animation phases
+            // Process turn events: spawn dust for moves, enqueue attack animations
             if !state_guard.game.turn_events.is_empty() {
                 let events = state_guard.game.turn_events.drain(..).collect::<Vec<_>>();
-                let is_auto = state_guard.game.is_auto_moving();
                 let alive_ids: Vec<_> = state_guard.game.units.iter()
                     .filter(|u| u.alive).map(|u| u.id).collect();
                 state_guard.animator.init_visual_alive(alive_ids.into_iter());
-                state_guard.animator.enqueue(events, is_auto);
-            }
-
-            // Process auto-move path: execute ALL remaining steps at once, then
-            // animate the entire sequence as one continuous walk.
-            if state_guard.game.is_auto_moving() && !state_guard.animator.is_playing() {
-                state_guard.game.auto_move_timer += dt as f32;
-                if state_guard.game.auto_move_timer >= 0.15 {
-                    state_guard.game.auto_move_timer = 0.0;
-                    let mut step_batches: Vec<Vec<crate::animation::TurnEvent>> = Vec::new();
-                    loop {
-                        state_guard.game.turn_events.clear();
-                        let stepped = state_guard.game.auto_move_step();
-                        if !stepped {
-                            break;
-                        }
-                        let events: Vec<_> = state_guard.game.turn_events.drain(..).collect();
-                        let has_combat = events.iter().any(|e| !matches!(e, crate::animation::TurnEvent::Move { .. }));
-                        step_batches.push(events);
-                        if has_combat || !state_guard.game.is_auto_moving() {
-                            break;
-                        }
-                    }
-                    if !step_batches.is_empty() {
-                        let alive_ids: Vec<_> = state_guard.game.units.iter()
-                            .filter(|u| u.alive).map(|u| u.id).collect();
-                        state_guard.animator.init_visual_alive(alive_ids.into_iter());
-                        state_guard.animator.enqueue_auto_path(step_batches);
-                    }
+                let anim_output = state_guard.animator.enqueue(events);
+                // Immediately spawn dust particles from move events
+                for (kind, x, y) in anim_output.particles {
+                    state_guard.game.particles.push(Particle::new(kind, x, y));
                 }
             }
 
-            // Advance animation and collect spawned effects
+            // Process auto-move path (time-based: 0.15s per step)
+            if state_guard.game.is_auto_moving() {
+                state_guard.game.auto_move_timer += dt as f32;
+                if state_guard.game.auto_move_timer >= 0.15 {
+                    state_guard.game.auto_move_timer = 0.0;
+                    state_guard.game.auto_move_step();
+                }
+            }
+
+            // Advance attack animations and collect spawned effects
             {
                 let LoopState { ref mut animator, ref mut game, .. } = *state_guard;
                 if animator.is_playing() {
@@ -320,14 +299,8 @@ pub fn run(
                 }
             }
 
-            // When not animating, snap visual positions to grid positions
-            if !state_guard.animator.is_playing() {
-                for unit in &mut state_guard.game.units {
-                    let (wx, wy) = grid::grid_to_world(unit.grid_x, unit.grid_y);
-                    unit.visual_x = wx;
-                    unit.visual_y = wy;
-                }
-            }
+            // Smoothly lerp all unit visual positions toward their grid positions
+            animation::lerp_visual_positions(&mut state_guard.game.units, dt as f32);
 
             // Update game state (animations, particles, camera follow)
             state_guard.game.update(dt);

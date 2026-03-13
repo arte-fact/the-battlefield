@@ -5,11 +5,11 @@ use crate::particle::ParticleKind;
 use crate::unit::{Unit, UnitAnim, UnitId};
 
 // Timing constants
-const MOVE_DURATION_SINGLE: f32 = 0.25;
-const MOVE_DURATION_AUTO: f32 = 0.15;
-const AI_STAGGER_DELAY: f32 = 0.05;
 const MELEE_ATTACK_DURATION: f32 = 0.35;
 const RANGED_ATTACK_DURATION: f32 = 0.5;
+
+/// Speed of visual lerp toward grid position (exponential decay factor per second).
+pub const VISUAL_LERP_SPEED: f32 = 12.0;
 
 /// Events recorded during game logic execution for animation playback.
 #[derive(Clone, Debug)]
@@ -40,20 +40,34 @@ pub fn ease_out_quad(t: f32) -> f32 {
     1.0 - (1.0 - t) * (1.0 - t)
 }
 
-pub struct MoveAnim {
-    pub unit_id: UnitId,
-    pub from: (f32, f32),
-    pub to: (f32, f32),
-    pub delay: f32,
-    pub duration: f32,
-    pub started: bool,
+/// Lerp all unit visual positions toward their grid positions.
+/// Call every frame. Units slide smoothly to where they are on the grid.
+pub fn lerp_visual_positions(units: &mut [Unit], dt: f32) {
+    let t = (dt * VISUAL_LERP_SPEED).min(1.0);
+    for unit in units.iter_mut() {
+        let (wx, wy) = grid::grid_to_world(unit.grid_x, unit.grid_y);
+        let dx = wx - unit.visual_x;
+        let dy = wy - unit.visual_y;
+        // If very close, snap to avoid perpetual tiny drift
+        if dx.abs() < 0.5 && dy.abs() < 0.5 {
+            unit.visual_x = wx;
+            unit.visual_y = wy;
+            // If was running, switch back to idle
+            if unit.current_anim == UnitAnim::Run {
+                unit.set_anim(UnitAnim::Idle);
+            }
+        } else {
+            unit.visual_x += dx * t;
+            unit.visual_y += dy * t;
+            // Set run animation while moving
+            if unit.alive && unit.current_anim == UnitAnim::Idle {
+                unit.set_anim(UnitAnim::Run);
+            }
+        }
+    }
 }
 
 pub enum AnimPhase {
-    ParallelMoves {
-        moves: Vec<MoveAnim>,
-        total_duration: f32,
-    },
     MeleeAttack {
         attacker_id: UnitId,
         defender_id: UnitId,
@@ -111,223 +125,60 @@ impl TurnAnimator {
         }
     }
 
-    pub fn enqueue(&mut self, events: Vec<TurnEvent>, is_auto_move: bool) {
-        let move_duration = if is_auto_move {
-            MOVE_DURATION_AUTO
-        } else {
-            MOVE_DURATION_SINGLE
-        };
-
-        let mut moves: Vec<MoveAnim> = Vec::new();
-        let mut melee_attacks: Vec<TurnEvent> = Vec::new();
-        let mut ranged_attacks: Vec<TurnEvent> = Vec::new();
+    /// Process turn events: spawn dust particles for moves, enqueue attack phases.
+    pub fn enqueue(&mut self, events: Vec<TurnEvent>) -> AnimOutput {
+        let mut output = AnimOutput::new();
 
         for event in events {
             match event {
-                TurnEvent::Move { unit_id, from, to } => {
-                    let delay = if moves.is_empty() {
-                        0.0
-                    } else {
-                        moves.len() as f32 * AI_STAGGER_DELAY
-                    };
+                TurnEvent::Move { unit_id: _, from, to: _ } => {
+                    // Movement is handled by per-frame lerp. Just spawn dust.
                     let (fx, fy) = grid::grid_to_world(from.0, from.1);
-                    let (tx, ty) = grid::grid_to_world(to.0, to.1);
-                    moves.push(MoveAnim {
-                        unit_id,
-                        from: (fx, fy),
-                        to: (tx, ty),
-                        delay,
-                        duration: move_duration,
-                        started: false,
-                    });
+                    output.particles.push((ParticleKind::Dust, fx, fy));
                 }
-                TurnEvent::MeleeAttack { .. } => melee_attacks.push(event),
-                TurnEvent::RangedAttack { .. } => ranged_attacks.push(event),
-            }
-        }
-
-        if !moves.is_empty() {
-            let total_duration = moves
-                .iter()
-                .map(|m| m.delay + m.duration)
-                .fold(0.0_f32, f32::max);
-            self.phases.push_back(AnimPhase::ParallelMoves {
-                moves,
-                total_duration,
-            });
-        }
-
-        for event in melee_attacks {
-            if let TurnEvent::MeleeAttack {
-                attacker_id,
-                defender_id,
-                damage,
-                killed,
-            } = event
-            {
-                self.phases.push_back(AnimPhase::MeleeAttack {
+                TurnEvent::MeleeAttack {
                     attacker_id,
                     defender_id,
                     damage,
                     killed,
-                    duration: MELEE_ATTACK_DURATION,
-                    particle_spawned: false,
-                });
-            }
-        }
-
-        for event in ranged_attacks {
-            if let TurnEvent::RangedAttack {
-                attacker_id,
-                defender_id,
-                damage,
-                killed,
-                target_pos,
-                missed,
-            } = event
-            {
-                let (tx, ty) = grid::grid_to_world(target_pos.0, target_pos.1);
-                self.phases.push_back(AnimPhase::RangedAttack {
+                } => {
+                    self.phases.push_back(AnimPhase::MeleeAttack {
+                        attacker_id,
+                        defender_id,
+                        damage,
+                        killed,
+                        duration: MELEE_ATTACK_DURATION,
+                        particle_spawned: false,
+                    });
+                }
+                TurnEvent::RangedAttack {
                     attacker_id,
                     defender_id,
-                    target_pos: (tx, ty),
+                    damage,
+                    killed,
+                    target_pos,
                     missed,
-                    damage,
-                    killed,
-                    duration: RANGED_ATTACK_DURATION,
-                    projectile_spawned: false,
-                });
-            }
-        }
-
-        if !self.phases.is_empty() {
-            self.phase_elapsed = 0.0;
-        }
-    }
-
-    /// Enqueue a multi-step auto-move path as one continuous animation.
-    /// Each inner Vec is one step's events (player move + AI moves).
-    /// Steps with only moves are merged into one smooth phase; combat steps
-    /// break the sequence into separate phases.
-    pub fn enqueue_auto_path(&mut self, steps: Vec<Vec<TurnEvent>>) {
-        let move_dur = MOVE_DURATION_AUTO;
-        let mut pending_moves: Vec<MoveAnim> = Vec::new();
-        let mut step_offset: f32 = 0.0;
-
-        for step_events in steps {
-            let mut has_combat = false;
-            let mut step_moves: Vec<TurnEvent> = Vec::new();
-            let mut melee_attacks: Vec<TurnEvent> = Vec::new();
-            let mut ranged_attacks: Vec<TurnEvent> = Vec::new();
-
-            for event in step_events {
-                match &event {
-                    TurnEvent::Move { .. } => step_moves.push(event),
-                    TurnEvent::MeleeAttack { .. } => {
-                        has_combat = true;
-                        melee_attacks.push(event);
-                    }
-                    TurnEvent::RangedAttack { .. } => {
-                        has_combat = true;
-                        ranged_attacks.push(event);
-                    }
-                }
-            }
-
-            if has_combat {
-                // Flush pending moves before combat
-                if !pending_moves.is_empty() {
-                    let total_duration = pending_moves
-                        .iter()
-                        .map(|m| m.delay + m.duration)
-                        .fold(0.0_f32, f32::max);
-                    self.phases.push_back(AnimPhase::ParallelMoves {
-                        moves: std::mem::take(&mut pending_moves),
-                        total_duration,
+                } => {
+                    let (tx, ty) = grid::grid_to_world(target_pos.0, target_pos.1);
+                    self.phases.push_back(AnimPhase::RangedAttack {
+                        attacker_id,
+                        defender_id,
+                        target_pos: (tx, ty),
+                        missed,
+                        damage,
+                        killed,
+                        duration: RANGED_ATTACK_DURATION,
+                        projectile_spawned: false,
                     });
-                    step_offset = 0.0;
                 }
-
-                // Add any moves from this combat step as their own phase
-                if !step_moves.is_empty() {
-                    let mut combat_moves: Vec<MoveAnim> = Vec::new();
-                    for (i, event) in step_moves.into_iter().enumerate() {
-                        if let TurnEvent::Move { unit_id, from, to } = event {
-                            let delay = if i == 0 { 0.0 } else { i as f32 * AI_STAGGER_DELAY };
-                            let (fx, fy) = grid::grid_to_world(from.0, from.1);
-                            let (tx, ty) = grid::grid_to_world(to.0, to.1);
-                            combat_moves.push(MoveAnim {
-                                unit_id, from: (fx, fy), to: (tx, ty),
-                                delay, duration: move_dur, started: false,
-                            });
-                        }
-                    }
-                    if !combat_moves.is_empty() {
-                        let total_duration = combat_moves
-                            .iter()
-                            .map(|m| m.delay + m.duration)
-                            .fold(0.0_f32, f32::max);
-                        self.phases.push_back(AnimPhase::ParallelMoves {
-                            moves: combat_moves,
-                            total_duration,
-                        });
-                    }
-                }
-
-                // Enqueue combat phases
-                for event in melee_attacks {
-                    if let TurnEvent::MeleeAttack { attacker_id, defender_id, damage, killed } = event {
-                        self.phases.push_back(AnimPhase::MeleeAttack {
-                            attacker_id, defender_id, damage, killed,
-                            duration: MELEE_ATTACK_DURATION, particle_spawned: false,
-                        });
-                    }
-                }
-                for event in ranged_attacks {
-                    if let TurnEvent::RangedAttack { attacker_id, defender_id, damage, killed, target_pos, missed } = event {
-                        let (tx, ty) = grid::grid_to_world(target_pos.0, target_pos.1);
-                        self.phases.push_back(AnimPhase::RangedAttack {
-                            attacker_id, defender_id, target_pos: (tx, ty), missed,
-                            damage, killed, duration: RANGED_ATTACK_DURATION, projectile_spawned: false,
-                        });
-                    }
-                }
-            } else {
-                // Pure movement step — merge into the running batch
-                for (i, event) in step_moves.into_iter().enumerate() {
-                    if let TurnEvent::Move { unit_id, from, to } = event {
-                        let delay = if i == 0 {
-                            step_offset
-                        } else {
-                            step_offset + i as f32 * AI_STAGGER_DELAY
-                        };
-                        let (fx, fy) = grid::grid_to_world(from.0, from.1);
-                        let (tx, ty) = grid::grid_to_world(to.0, to.1);
-                        pending_moves.push(MoveAnim {
-                            unit_id, from: (fx, fy), to: (tx, ty),
-                            delay, duration: move_dur, started: false,
-                        });
-                    }
-                }
-                step_offset += move_dur;
             }
-        }
-
-        // Flush remaining moves
-        if !pending_moves.is_empty() {
-            let total_duration = pending_moves
-                .iter()
-                .map(|m| m.delay + m.duration)
-                .fold(0.0_f32, f32::max);
-            self.phases.push_back(AnimPhase::ParallelMoves {
-                moves: pending_moves,
-                total_duration,
-            });
         }
 
         if !self.phases.is_empty() {
             self.phase_elapsed = 0.0;
         }
+
+        output
     }
 
     /// Initialize the set of visually alive units before enqueueing events.
@@ -346,40 +197,6 @@ impl TurnAnimator {
         self.phase_elapsed += dt;
 
         let phase_done = match self.phases.front_mut() {
-            Some(AnimPhase::ParallelMoves {
-                moves,
-                total_duration,
-            }) => {
-                for mv in moves.iter_mut() {
-                    let raw_t = if mv.duration > 0.0 {
-                        ((self.phase_elapsed - mv.delay) / mv.duration).clamp(0.0, 1.0)
-                    } else {
-                        1.0
-                    };
-                    let t = ease_out_quad(raw_t);
-
-                    // Spawn dust when move starts
-                    if !mv.started && self.phase_elapsed >= mv.delay {
-                        mv.started = true;
-                        output
-                            .particles
-                            .push((ParticleKind::Dust, mv.from.0, mv.from.1));
-                    }
-
-                    // Lerp visual position
-                    if let Some(unit) = units.iter_mut().find(|u| u.id == mv.unit_id) {
-                        unit.visual_x = mv.from.0 + (mv.to.0 - mv.from.0) * t;
-                        unit.visual_y = mv.from.1 + (mv.to.1 - mv.from.1) * t;
-
-                        if raw_t > 0.0 && raw_t < 1.0 {
-                            unit.set_anim(UnitAnim::Run);
-                        } else if raw_t >= 1.0 {
-                            unit.set_anim(UnitAnim::Idle);
-                        }
-                    }
-                }
-                self.phase_elapsed >= *total_duration
-            }
             Some(AnimPhase::MeleeAttack {
                 attacker_id,
                 defender_id,
@@ -550,70 +367,54 @@ mod tests {
     }
 
     #[test]
-    fn animator_plays_move_events() {
+    fn move_event_spawns_dust() {
         let mut animator = TurnAnimator::new();
-        let mut units = vec![Unit::new(1, UnitKind::Warrior, Faction::Blue, 6, 5, true)];
-        let (fx, fy) = grid::grid_to_world(5, 5);
-        units[0].visual_x = fx;
-        units[0].visual_y = fy;
-
         let events = vec![TurnEvent::Move {
             unit_id: 1,
             from: (5, 5),
             to: (6, 5),
         }];
-        animator.enqueue(events, false);
-        assert!(animator.is_playing());
-
-        let _output = animator.update(0.3, &mut units);
+        let output = animator.enqueue(events);
+        assert!(!output.particles.is_empty());
+        assert!(matches!(output.particles[0].0, ParticleKind::Dust));
+        // No phases queued for movement
         assert!(!animator.is_playing());
-
-        let (ex, ey) = grid::grid_to_world(6, 5);
-        assert!((units[0].visual_x - ex).abs() < 1.0);
-        assert!((units[0].visual_y - ey).abs() < 1.0);
     }
 
     #[test]
-    fn animator_staggered_ai_moves() {
-        let mut animator = TurnAnimator::new();
-        let mut units = vec![
-            Unit::new(1, UnitKind::Warrior, Faction::Blue, 6, 5, true),
-            Unit::new(2, UnitKind::Warrior, Faction::Red, 9, 5, false),
-            Unit::new(3, UnitKind::Warrior, Faction::Red, 8, 8, false),
-        ];
-        let (f1x, f1y) = grid::grid_to_world(5, 5);
-        units[0].visual_x = f1x;
-        units[0].visual_y = f1y;
-        let (f2x, f2y) = grid::grid_to_world(10, 5);
-        units[1].visual_x = f2x;
-        units[1].visual_y = f2y;
-        let (f3x, f3y) = grid::grid_to_world(9, 8);
-        units[2].visual_x = f3x;
-        units[2].visual_y = f3y;
+    fn lerp_visual_positions_snaps_when_close() {
+        let mut units = vec![Unit::new(1, UnitKind::Warrior, Faction::Blue, 5, 5, true)];
+        let (wx, wy) = grid::grid_to_world(5, 5);
+        units[0].visual_x = wx + 0.1;
+        units[0].visual_y = wy + 0.1;
 
-        let events = vec![
-            TurnEvent::Move {
-                unit_id: 1,
-                from: (5, 5),
-                to: (6, 5),
-            },
-            TurnEvent::Move {
-                unit_id: 2,
-                from: (10, 5),
-                to: (9, 5),
-            },
-            TurnEvent::Move {
-                unit_id: 3,
-                from: (9, 8),
-                to: (8, 8),
-            },
-        ];
-        animator.enqueue(events, false);
-        assert!(animator.is_playing());
+        lerp_visual_positions(&mut units, 0.016);
+        assert!((units[0].visual_x - wx).abs() < f32::EPSILON);
+        assert!((units[0].visual_y - wy).abs() < f32::EPSILON);
+    }
 
-        // total_duration = max(0.0+0.25, 0.05+0.25, 0.10+0.25) = 0.35
-        let _output = animator.update(0.4, &mut units);
-        assert!(!animator.is_playing());
+    #[test]
+    fn lerp_visual_positions_moves_toward_target() {
+        let mut units = vec![Unit::new(1, UnitKind::Warrior, Faction::Blue, 6, 5, true)];
+        // Start visual at grid (5,5), but unit is at grid (6,5)
+        let (fx, fy) = grid::grid_to_world(5, 5);
+        units[0].visual_x = fx;
+        units[0].visual_y = fy;
+
+        let (tx, _ty) = grid::grid_to_world(6, 5);
+
+        // After one frame, should be closer to target
+        lerp_visual_positions(&mut units, 0.016);
+        assert!(units[0].visual_x > fx);
+        assert!(units[0].visual_x < tx);
+        assert_eq!(units[0].current_anim, UnitAnim::Run);
+
+        // After many frames, should reach target
+        for _ in 0..100 {
+            lerp_visual_positions(&mut units, 0.016);
+        }
+        assert!((units[0].visual_x - tx).abs() < f32::EPSILON);
+        assert_eq!(units[0].current_anim, UnitAnim::Idle);
     }
 
     #[test]
@@ -630,7 +431,7 @@ mod tests {
             damage: 3,
             killed: false,
         }];
-        animator.enqueue(events, false);
+        animator.enqueue(events);
         assert!(animator.is_playing());
 
         let output = animator.update(0.4, &mut units);
@@ -656,7 +457,7 @@ mod tests {
             damage: 10,
             killed: true,
         }];
-        animator.enqueue(events, false);
+        animator.enqueue(events);
 
         assert!(animator.is_visually_alive(2));
 
