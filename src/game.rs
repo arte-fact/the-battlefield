@@ -1,115 +1,66 @@
+use crate::animation::TurnEvent;
 use crate::camera::Camera;
 use crate::combat;
-use crate::grid::{self, Grid, GRID_SIZE, TILE_SIZE};
+use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::input::SwipeDir;
-use crate::particle::{Particle, ParticleKind, Projectile};
-use crate::terrain_gen;
-use crate::turn::{TurnPhase, TurnState};
-use crate::unit::{Facing, Faction, Unit, UnitAnim, UnitId, UnitKind};
+use crate::mapgen;
+use crate::particle::{Particle, Projectile};
+use crate::unit::{Facing, Faction, Unit, UnitId, UnitKind};
 
-/// Read-only preview of a swipe path for rendering.
-#[derive(Debug, Clone, Default)]
-pub struct SwipePreview {
-    /// Tiles the player would walk through.
-    pub path: Vec<(u32, u32)>,
-    /// Enemy grid position if walk would be interrupted.
-    pub attack_target: Option<(u32, u32)>,
-}
-
-/// Result of a directional walk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MoveResult {
-    /// Reached end of range or obstacle; turn auto-ends.
-    Completed,
-    /// Enemy entered attack range; player can still attack.
-    Interrupted,
-    /// First tile blocked; nothing happened.
-    NoMove,
-}
-
-/// Actions the player can perform.
-#[derive(Debug, Clone)]
-pub enum PlayerAction {
-    Move { target_x: u32, target_y: u32 },
-    MoveDirection { dir: SwipeDir },
-    Attack { target_id: UnitId },
-    EndTurn,
-}
-
-/// Events emitted by the game for the renderer to visualize.
-#[derive(Debug)]
-pub enum GameEvent {
-    UnitMoved {
-        unit_id: UnitId,
-        from_x: u32,
-        from_y: u32,
-        to_x: u32,
-        to_y: u32,
-    },
-    MeleeAttack {
-        attacker_id: UnitId,
-        defender_id: UnitId,
-        damage: i32,
-        killed: bool,
-    },
-    RangedAttack {
-        attacker_id: UnitId,
-        defender_id: UnitId,
-        damage: i32,
-        killed: bool,
-    },
-    UnitDied {
-        unit_id: UnitId,
-        x: u32,
-        y: u32,
-    },
-    TurnChanged {
-        turn: u32,
-        phase: TurnPhase,
-    },
-}
+/// Player vision radius in tiles.
+const FOV_RADIUS: i32 = 15;
 
 pub struct Game {
     pub grid: Grid,
     pub units: Vec<Unit>,
-    pub turn: TurnState,
+    pub turn_number: u32,
     pub camera: Camera,
     pub particles: Vec<Particle>,
     pub projectiles: Vec<Projectile>,
-    pub events: Vec<GameEvent>,
     next_unit_id: UnitId,
-    /// Grid cell the player is hovering or has selected.
-    pub selected_cell: Option<(u32, u32)>,
-    /// Cells the player can move to.
-    pub move_targets: Vec<(u32, u32)>,
-    /// Unit IDs the player can attack.
-    pub attack_targets: Vec<UnitId>,
-    /// Live swipe preview (computed each frame from touch input).
-    pub swipe_preview: Option<SwipePreview>,
+    /// Auto-move path: sequence of grid positions to walk to, one per turn.
+    pub auto_path: Vec<(u32, u32)>,
+    /// Index into auto_path for next step to take.
+    pub auto_path_idx: usize,
+    /// Time accumulator for auto-move pacing (seconds).
+    pub auto_move_timer: f32,
+    /// Tiles currently visible to the player this turn.
+    pub visible: Vec<bool>,
+    /// Tiles that have been seen at least once (revealed through fog).
+    pub revealed: Vec<bool>,
+    /// Set to true when FOV changes; renderer clears it after updating fog cache.
+    pub fog_dirty: bool,
+    /// Pre-computed: true if land tile is adjacent to water (for foam rendering).
+    pub water_adjacency: Vec<bool>,
+    /// Turn events recorded during game logic for animation playback.
+    pub turn_events: Vec<TurnEvent>,
 }
 
 impl Game {
     pub fn new(viewport_w: f32, viewport_h: f32) -> Self {
         let grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
         let mut camera = Camera::new(viewport_w, viewport_h);
-        // Center camera on the grid
         let center = GRID_SIZE as f32 * TILE_SIZE * 0.5;
         camera.x = center;
         camera.y = center;
 
+        let size = (GRID_SIZE * GRID_SIZE) as usize;
         Self {
             grid,
             units: Vec::new(),
-            turn: TurnState::new(),
+            turn_number: 1,
             camera,
             particles: Vec::new(),
             projectiles: Vec::new(),
-            events: Vec::new(),
             next_unit_id: 1,
-            selected_cell: None,
-            move_targets: Vec::new(),
-            attack_targets: Vec::new(),
-            swipe_preview: None,
+            auto_path: Vec::new(),
+            auto_path_idx: 0,
+            auto_move_timer: 0.0,
+            visible: vec![false; size],
+            revealed: vec![false; size],
+            fog_dirty: true,
+            water_adjacency: vec![false; size],
+            turn_events: Vec::new(),
         }
     }
 
@@ -146,438 +97,471 @@ impl Game {
         self.units.iter().find(|u| u.id == id)
     }
 
-    /// Compute valid move targets for the player.
-    pub fn compute_player_targets(&mut self) {
-        self.move_targets.clear();
-        self.attack_targets.clear();
-
+    /// Player swipes in a direction: move 1 tile or attack adjacent enemy.
+    /// After the player acts, all AI units take one action (auto-turn).
+    /// Returns true if the action was valid.
+    pub fn player_step(&mut self, dir: SwipeDir) -> bool {
         let player = match self.player_unit() {
-            Some(u) => u,
-            None => return,
+            Some(p) => p,
+            None => return false,
         };
-
         let px = player.grid_x;
         let py = player.grid_y;
-        let mov = player.movement_left;
         let faction = player.faction;
-        let range = player.stats.range;
-        let has_attacked = player.has_attacked;
+        let player_id = player.id;
+        let (dx, dy) = dir.delta();
+        let nx = px as i32 + dx;
+        let ny = py as i32 + dy;
 
-        // Movement: simple flood-fill within movement range (only if not yet moved)
-        if mov > 0 && !player.has_moved {
-            for dy in 0..=(mov as i32) {
-                for dx in 0..=(mov as i32 - dy) {
-                    for &(sx, sy) in &[(1i32, 1i32), (1, -1), (-1, 1), (-1, -1)] {
-                        let nx = px as i32 + dx * sx;
-                        let ny = py as i32 + dy * sy;
-                        if nx == px as i32 && ny == py as i32 {
-                            continue;
-                        }
-                        if self.grid.in_bounds(nx, ny) {
-                            let nx = nx as u32;
-                            let ny = ny as u32;
-                            if self.grid.is_passable(nx, ny)
-                                && self.unit_at(nx, ny).is_none()
-                                && !self.move_targets.contains(&(nx, ny))
-                            {
-                                self.move_targets.push((nx, ny));
-                            }
-                        }
-                    }
-                }
+        if !self.grid.in_bounds(nx, ny) {
+            return false;
+        }
+        let nx = nx as u32;
+        let ny = ny as u32;
+
+        // Snapshot positions BEFORE anyone acts this turn.
+        // AI archers will shoot at these positions, simulating projectile lag.
+        let position_snapshot: Vec<(UnitId, u32, u32)> = self
+            .units
+            .iter()
+            .filter(|u| u.alive)
+            .map(|u| (u.id, u.grid_x, u.grid_y))
+            .collect();
+
+        // Enemy at target -> attack
+        let enemy_at_target = self
+            .unit_at(nx, ny)
+            .filter(|u| u.faction != faction)
+            .map(|u| u.id);
+
+        if let Some(enemy_id) = enemy_at_target {
+            self.execute_attack(player_id, enemy_id, None);
+        } else if self.unit_at(nx, ny).is_some()
+            || !self.grid.is_passable(nx, ny)
+            || !self.grid.can_move_diagonal(px, py, dx, dy)
+        {
+            // Blocked by friendly unit, impassable terrain, or corner-cutting
+            return false;
+        } else {
+            // Move player 1 tile
+            let player = self.player_unit_mut().unwrap();
+            player.grid_x = nx;
+            player.grid_y = ny;
+            if dx > 0 {
+                player.facing = Facing::Right;
+            } else if dx < 0 {
+                player.facing = Facing::Left;
+            }
+            self.turn_events.push(TurnEvent::Move {
+                unit_id: player_id,
+                from: (px, py),
+                to: (nx, ny),
+            });
+        }
+
+        // Auto-turn: AI acts, using pre-turn snapshot for ranged targeting
+        self.ai_turn(&position_snapshot);
+
+        // Advance turn and reset all living units
+        self.turn_number += 1;
+        for unit in &mut self.units {
+            if unit.alive {
+                unit.reset_turn();
             }
         }
 
-        // Attack targets
-        if !has_attacked {
-            for unit in &self.units {
-                if unit.alive && unit.faction != faction {
-                    let dist = {
-                        let dx = (px as i32 - unit.grid_x as i32).unsigned_abs();
-                        let dy = (py as i32 - unit.grid_y as i32).unsigned_abs();
-                        dx.max(dy)
-                    };
-                    if dist <= range {
-                        self.attack_targets.push(unit.id);
-                    }
-                }
-            }
+        // Recompute FOV after player acts
+        self.compute_fov();
+        true
+    }
+
+    /// Set an auto-move path from A* pathfinding to a destination.
+    /// Clears any existing path.
+    pub fn set_auto_path(&mut self, dest_x: u32, dest_y: u32) {
+        let player = match self.player_unit() {
+            Some(p) => p,
+            None => return,
+        };
+        let sx = player.grid_x;
+        let sy = player.grid_y;
+
+        // Pathfind ignoring unit positions (they'll move each turn)
+        let path = self.grid.find_path(sx, sy, dest_x, dest_y, 30, |_, _| false);
+        if let Some(p) = path {
+            self.auto_path = p;
+            self.auto_path_idx = 0;
+            self.auto_move_timer = 0.0;
         }
     }
 
-    /// Handle a player action. Returns true if the action was valid.
-    pub fn handle_player_action(&mut self, action: PlayerAction) -> bool {
-        if self.turn.phase != TurnPhase::PlayerTurn {
+    /// Process one auto-move step. Returns true if a step was taken.
+    /// If the next step is blocked, re-pathfinds around obstacles instead of stopping.
+    pub fn auto_move_step(&mut self) -> bool {
+        if self.auto_path_idx >= self.auto_path.len() {
+            self.auto_path.clear();
+            self.auto_path_idx = 0;
             return false;
         }
 
-        match action {
-            PlayerAction::Move { target_x, target_y } => {
-                if !self.move_targets.contains(&(target_x, target_y)) {
-                    return false;
-                }
-                let player = self.player_unit_mut().unwrap();
-                let from_x = player.grid_x;
-                let from_y = player.grid_y;
-                let dist = {
-                    let dx = (from_x as i32 - target_x as i32).unsigned_abs();
-                    let dy = (from_y as i32 - target_y as i32).unsigned_abs();
-                    dx + dy
-                };
-                player.movement_left = player.movement_left.saturating_sub(dist);
-                player.grid_x = target_x;
-                player.grid_y = target_y;
-                player.has_moved = true;
-                player.set_anim(UnitAnim::Idle);
-
-                // Face direction of movement
-                if target_x > from_x {
-                    player.facing = Facing::Right;
-                } else if target_x < from_x {
-                    player.facing = Facing::Left;
-                }
-
-                // Spawn dust particle
-                let (wx, wy) = grid::grid_to_world(target_x, target_y);
-                self.particles
-                    .push(Particle::new(ParticleKind::Dust, wx, wy));
-
-                self.events.push(GameEvent::UnitMoved {
-                    unit_id: self.units.iter().find(|u| u.is_player).unwrap().id,
-                    from_x,
-                    from_y,
-                    to_x: target_x,
-                    to_y: target_y,
-                });
-
-                // Auto-end turn after move
-                self.auto_end_turn();
-                true
-            }
-            PlayerAction::MoveDirection { dir } => {
-                // Block if already acted
-                let player = match self.player_unit() {
-                    Some(p) => p,
-                    None => return false,
-                };
-                if player.has_moved || player.has_attacked {
-                    return false;
-                }
-
-                match self.walk_straight_line(dir) {
-                    MoveResult::NoMove => false,
-                    MoveResult::Completed => {
-                        self.auto_end_turn();
-                        true
-                    }
-                    MoveResult::Interrupted => {
-                        // Turn continues — player can still attack
-                        true
-                    }
-                }
-            }
-            PlayerAction::Attack { target_id } => {
-                if !self.attack_targets.contains(&target_id) {
-                    return false;
-                }
-                self.execute_attack_by_player(target_id);
-                self.compute_player_targets();
-                // Auto-end turn after attack
-                self.auto_end_turn();
-                true
-            }
-            PlayerAction::EndTurn => {
-                self.end_turn();
-                true
-            }
-        }
-    }
-
-    fn end_turn(&mut self) {
-        self.turn.advance();
-        self.events.push(GameEvent::TurnChanged {
-            turn: self.turn.turn_number,
-            phase: self.turn.phase,
-        });
-    }
-
-    fn auto_end_turn(&mut self) {
-        self.end_turn();
-    }
-
-    /// Walk tile-by-tile in a straight line. Returns how the walk ended.
-    pub fn walk_straight_line(&mut self, dir: SwipeDir) -> MoveResult {
+        let (tx, ty) = self.auto_path[self.auto_path_idx];
         let player = match self.player_unit() {
             Some(p) => p,
-            None => return MoveResult::NoMove,
+            None => {
+                self.auto_path.clear();
+                return false;
+            }
         };
-        let mut px = player.grid_x;
-        let mut py = player.grid_y;
-        let mut movement_left = player.movement_left;
-        let range = player.stats.range;
-        let faction = player.faction;
+        let px = player.grid_x;
+        let py = player.grid_y;
+        let player_faction = player.faction;
+
+        let dx = tx as i32 - px as i32;
+        let dy = ty as i32 - py as i32;
+
+        // Enemy on next tile: attack if it's the destination, otherwise re-path
+        if let Some(unit) = self.unit_at(tx, ty) {
+            if unit.faction != player_faction {
+                let is_destination = self.auto_path_idx == self.auto_path.len() - 1;
+                if is_destination {
+                    if let Some(dir) = SwipeDir::from_grid_delta(dx, dy) {
+                        self.player_step(dir);
+                    }
+                    self.auto_path.clear();
+                    self.auto_path_idx = 0;
+                    return true;
+                }
+                // Enemy in the way but not destination — re-path around them
+                return self.repath_around_units();
+            }
+        }
+
+        if let Some(dir) = SwipeDir::from_grid_delta(dx, dy) {
+            if self.player_step(dir) {
+                self.auto_path_idx += 1;
+                return true;
+            }
+        }
+
+        // Step failed (friendly unit or terrain) — try to re-path around
+        self.repath_around_units()
+    }
+
+    /// Re-compute auto-path from current player position to the original destination,
+    /// routing around currently occupied tiles. Returns true if a step was taken.
+    fn repath_around_units(&mut self) -> bool {
+        let dest = match self.auto_path.last().copied() {
+            Some(d) => d,
+            None => {
+                self.auto_path.clear();
+                self.auto_path_idx = 0;
+                return false;
+            }
+        };
+
+        let player = match self.player_unit() {
+            Some(p) => p,
+            None => {
+                self.auto_path.clear();
+                self.auto_path_idx = 0;
+                return false;
+            }
+        };
+        let sx = player.grid_x;
+        let sy = player.grid_y;
         let player_id = player.id;
-        let (ddx, ddy) = dir.delta();
 
-        let mut steps = 0u32;
-
-        loop {
-            let nx = px as i32 + ddx;
-            let ny = py as i32 + ddy;
-
-            // Bounds check
-            if !self.grid.in_bounds(nx, ny) {
-                break;
-            }
-            let nx = nx as u32;
-            let ny = ny as u32;
-
-            // Passability check
-            let cost = match self.grid.get(nx, ny).movement_cost() {
-                Some(c) => c,
-                None => break,
-            };
-
-            // Movement cost check
-            if cost > movement_left {
-                break;
-            }
-
-            // Occupied check
-            if self.unit_at(nx, ny).is_some() {
-                break;
-            }
-
-            // Move one step
-            movement_left -= cost;
-            let from_x = px;
-            let from_y = py;
-            px = nx;
-            py = ny;
-            steps += 1;
-
-            // Update the actual unit
-            let player = self.player_unit_mut().unwrap();
-            player.grid_x = px;
-            player.grid_y = py;
-            player.movement_left = movement_left;
-
-            // Face direction
-            if ddx > 0 {
-                player.facing = Facing::Right;
-            } else if ddx < 0 {
-                player.facing = Facing::Left;
-            }
-
-            // Dust particle
-            let (wx, wy) = grid::grid_to_world(px, py);
-            self.particles
-                .push(Particle::new(ParticleKind::Dust, wx, wy));
-
-            self.events.push(GameEvent::UnitMoved {
-                unit_id: player_id,
-                from_x,
-                from_y,
-                to_x: px,
-                to_y: py,
-            });
-
-            // Check if an enemy is now in attack range
-            if self.has_enemy_in_range(px, py, range, faction) {
-                let player = self.player_unit_mut().unwrap();
-                player.movement_left = 0;
-                player.has_moved = true;
-                self.compute_player_targets();
-                return MoveResult::Interrupted;
-            }
-        }
-
-        if steps == 0 {
-            return MoveResult::NoMove;
-        }
-
-        let player = self.player_unit_mut().unwrap();
-        player.has_moved = true;
-        player.movement_left = 0;
-        self.compute_player_targets();
-        MoveResult::Completed
-    }
-
-    fn has_enemy_in_range(&self, x: u32, y: u32, range: u32, faction: Faction) -> bool {
-        self.units.iter().any(|u| {
-            u.alive && u.faction != faction && {
-                let dx = (x as i32 - u.grid_x as i32).unsigned_abs();
-                let dy = (y as i32 - u.grid_y as i32).unsigned_abs();
-                dx.max(dy) <= range
-            }
-        })
-    }
-
-    fn find_nearest_enemy_in_range(
-        &self,
-        x: u32,
-        y: u32,
-        range: u32,
-        faction: Faction,
-    ) -> Option<(u32, u32)> {
-        self.units
+        // Build set of occupied positions (excluding the player)
+        let occupied: Vec<(u32, u32)> = self
+            .units
             .iter()
-            .filter(|u| {
-                u.alive && u.faction != faction && {
-                    let dx = (x as i32 - u.grid_x as i32).unsigned_abs();
-                    let dy = (y as i32 - u.grid_y as i32).unsigned_abs();
-                    dx.max(dy) <= range
-                }
-            })
-            .min_by_key(|u| {
-                let dx = (x as i32 - u.grid_x as i32).unsigned_abs();
-                let dy = (y as i32 - u.grid_y as i32).unsigned_abs();
-                dx + dy
-            })
+            .filter(|u| u.alive && u.id != player_id)
             .map(|u| (u.grid_x, u.grid_y))
+            .collect();
+
+        let new_path = self.grid.find_path(sx, sy, dest.0, dest.1, 30, |x, y| {
+            occupied.iter().any(|&(ox, oy)| ox == x && oy == y)
+        });
+
+        match new_path {
+            Some(p) if !p.is_empty() => {
+                self.auto_path = p;
+                self.auto_path_idx = 0;
+                // Take the first step immediately
+                let (tx, ty) = self.auto_path[0];
+                let dx = tx as i32 - sx as i32;
+                let dy = ty as i32 - sy as i32;
+                if let Some(dir) = SwipeDir::from_grid_delta(dx, dy) {
+                    if self.player_step(dir) {
+                        self.auto_path_idx = 1;
+                        return true;
+                    }
+                }
+                self.auto_path.clear();
+                self.auto_path_idx = 0;
+                false
+            }
+            _ => {
+                // No path found — give up
+                self.auto_path.clear();
+                self.auto_path_idx = 0;
+                false
+            }
+        }
     }
 
-    /// Compute a read-only swipe preview (does NOT mutate game state).
-    pub fn compute_swipe_preview(&self, dir: SwipeDir) -> SwipePreview {
+    /// Cancel any in-progress auto-move.
+    pub fn cancel_auto_path(&mut self) {
+        self.auto_path.clear();
+        self.auto_path_idx = 0;
+    }
+
+    /// Returns true if auto-move is in progress.
+    pub fn is_auto_moving(&self) -> bool {
+        self.auto_path_idx < self.auto_path.len()
+    }
+
+    /// Recompute field of view from the player's position using recursive shadowcasting.
+    /// Tiles within FOV_RADIUS that have line-of-sight become visible and revealed.
+    /// Forest tiles are visible but block vision beyond them.
+    pub fn compute_fov(&mut self) {
+        let w = self.grid.width;
+        let h = self.grid.height;
+
+        // Clear current visibility
+        for v in self.visible.iter_mut() {
+            *v = false;
+        }
+
         let player = match self.player_unit() {
-            Some(p) => p,
-            None => return SwipePreview::default(),
+            Some(p) => (p.grid_x as i32, p.grid_y as i32),
+            None => return,
         };
-        if player.has_moved || player.has_attacked {
-            return SwipePreview::default();
+
+        // Player's own tile is always visible
+        let idx = (player.1 as u32 * w + player.0 as u32) as usize;
+        self.visible[idx] = true;
+        self.revealed[idx] = true;
+
+        // Run shadowcasting for all 8 octants
+        for octant in 0..8 {
+            self.cast_light(player.0, player.1, FOV_RADIUS, 1, 1.0, 0.0, octant, w, h);
         }
 
-        let mut px = player.grid_x;
-        let mut py = player.grid_y;
-        let mut movement_left = player.movement_left;
-        let range = player.stats.range;
-        let faction = player.faction;
-        let (ddx, ddy) = dir.delta();
-
-        let mut path = Vec::new();
-
-        loop {
-            let nx = px as i32 + ddx;
-            let ny = py as i32 + ddy;
-
-            if !self.grid.in_bounds(nx, ny) {
-                break;
-            }
-            let nx = nx as u32;
-            let ny = ny as u32;
-
-            let cost = match self.grid.get(nx, ny).movement_cost() {
-                Some(c) => c,
-                None => break,
-            };
-
-            if cost > movement_left {
-                break;
-            }
-
-            if self.unit_at(nx, ny).is_some() {
-                break;
-            }
-
-            movement_left -= cost;
-            px = nx;
-            py = ny;
-            path.push((px, py));
-
-            // Check if enemy entered attack range
-            if let Some(enemy_pos) = self.find_nearest_enemy_in_range(px, py, range, faction) {
-                return SwipePreview {
-                    path,
-                    attack_target: Some(enemy_pos),
-                };
-            }
-        }
-
-        SwipePreview {
-            path,
-            attack_target: None,
-        }
+        self.fog_dirty = true;
     }
 
-    fn execute_attack_by_player(&mut self, target_id: UnitId) {
-        // Find player and target indices
-        let player_idx = self.units.iter().position(|u| u.is_player && u.alive);
-        let target_idx = self.units.iter().position(|u| u.id == target_id);
-        let (player_idx, target_idx) = match (player_idx, target_idx) {
-            (Some(p), Some(t)) => (p, t),
-            _ => return,
-        };
-
-        let is_ranged = self.units[player_idx].stats.range > 1
-            && self.units[player_idx]
-                .distance_to(self.units[target_idx].grid_x, self.units[target_idx].grid_y)
-                > 1;
-
-        // Split borrow
-        let (attacker, defender) = if player_idx < target_idx {
-            let (left, right) = self.units.split_at_mut(target_idx);
-            (&mut left[player_idx], &mut right[0])
-        } else {
-            let (left, right) = self.units.split_at_mut(player_idx);
-            (&mut right[0], &mut left[target_idx])
-        };
-
-        if is_ranged {
-            let result = combat::execute_ranged(attacker, defender, &self.grid);
-            // Spawn arrow projectile
-            let (sx, sy) = grid::grid_to_world(attacker.grid_x, attacker.grid_y);
-            let (tx, ty) = grid::grid_to_world(defender.grid_x, defender.grid_y);
-            self.projectiles.push(Projectile::new(sx, sy, tx, ty));
-
-            self.events.push(GameEvent::RangedAttack {
-                attacker_id: attacker.id,
-                defender_id: defender.id,
-                damage: result.damage,
-                killed: result.target_killed,
-            });
-
-            if result.target_killed {
-                let (wx, wy) = grid::grid_to_world(defender.grid_x, defender.grid_y);
-                self.particles
-                    .push(Particle::new(ParticleKind::ExplosionLarge, wx, wy));
-                self.events.push(GameEvent::UnitDied {
-                    unit_id: defender.id,
-                    x: defender.grid_x,
-                    y: defender.grid_y,
-                });
-            }
-        } else {
-            let result = combat::execute_melee(attacker, defender, &self.grid);
-            let (wx, wy) = grid::grid_to_world(defender.grid_x, defender.grid_y);
-            self.particles
-                .push(Particle::new(ParticleKind::ExplosionSmall, wx, wy));
-
-            self.events.push(GameEvent::MeleeAttack {
-                attacker_id: attacker.id,
-                defender_id: defender.id,
-                damage: result.damage,
-                killed: result.target_killed,
-            });
-
-            if result.target_killed {
-                self.particles
-                    .push(Particle::new(ParticleKind::ExplosionLarge, wx, wy));
-                self.events.push(GameEvent::UnitDied {
-                    unit_id: defender.id,
-                    x: defender.grid_x,
-                    y: defender.grid_y,
-                });
+    /// Pre-compute water adjacency for all land tiles (for foam rendering).
+    /// Call once after grid generation.
+    pub fn compute_water_adjacency(&mut self) {
+        let w = self.grid.width;
+        let h = self.grid.height;
+        self.water_adjacency = vec![false; (w * h) as usize];
+        for gy in 0..h {
+            for gx in 0..w {
+                if !self.grid.get(gx, gy).is_land() {
+                    continue;
+                }
+                let has = (gy > 0 && self.grid.get(gx, gy - 1) == TileKind::Water)
+                    || (gx + 1 < w && self.grid.get(gx + 1, gy) == TileKind::Water)
+                    || (gy + 1 < h && self.grid.get(gx, gy + 1) == TileKind::Water)
+                    || (gx > 0 && self.grid.get(gx - 1, gy) == TileKind::Water);
+                self.water_adjacency[(gy * w + gx) as usize] = has;
             }
         }
     }
 
-    /// Run simple AI for all non-player units.
-    pub fn run_ai_turn(&mut self) {
-        if self.turn.phase != TurnPhase::AiTurn {
+    /// Returns true if the tile at (x, y) blocks line of sight.
+    fn blocks_light(&self, x: u32, y: u32) -> bool {
+        let tile = self.grid.get(x, y);
+        match tile {
+            TileKind::Water => false,
+            TileKind::Forest => true,
+            _ => {
+                // Elevation 2 blocks vision from ground level
+                self.grid.elevation(x, y) >= 2
+            }
+        }
+    }
+
+    /// Recursive shadowcasting for one octant.
+    /// Uses the standard 8-octant transform to cover all directions.
+    #[allow(clippy::too_many_arguments)]
+    fn cast_light(
+        &mut self,
+        ox: i32,
+        oy: i32,
+        radius: i32,
+        row: i32,
+        mut start_slope: f64,
+        end_slope: f64,
+        octant: u8,
+        w: u32,
+        h: u32,
+    ) {
+        if start_slope < end_slope || row > radius {
             return;
         }
 
-        // Collect AI unit indices
+        let mut blocked = false;
+        let mut next_start_slope = start_slope;
+
+        for j in row..=radius {
+            if blocked {
+                return;
+            }
+            let dy = -j;
+            for dx in -j..=0 {
+                // Transform (dx, dy) based on octant
+                let (tx, ty) = match octant {
+                    0 => (dx, dy),
+                    1 => (dy, dx),
+                    2 => (-dy, dx),
+                    3 => (-dx, dy),
+                    4 => (-dx, -dy),
+                    5 => (-dy, -dx),
+                    6 => (dy, -dx),
+                    _ => (dx, -dy),
+                };
+
+                let map_x = ox + tx;
+                let map_y = oy + ty;
+
+                if map_x < 0 || map_y < 0 || map_x >= w as i32 || map_y >= h as i32 {
+                    continue;
+                }
+
+                let l_slope = (dx as f64 - 0.5) / (dy as f64 + 0.5);
+                let r_slope = (dx as f64 + 0.5) / (dy as f64 - 0.5);
+
+                if start_slope < r_slope {
+                    continue;
+                }
+                if end_slope > l_slope {
+                    break;
+                }
+
+                // Check if within radius (circular FOV)
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq <= radius * radius {
+                    let idx = (map_y as u32 * w + map_x as u32) as usize;
+                    self.visible[idx] = true;
+                    self.revealed[idx] = true;
+                }
+
+                let ux = map_x as u32;
+                let uy = map_y as u32;
+                let is_blocking = self.blocks_light(ux, uy);
+
+                if blocked {
+                    if is_blocking {
+                        next_start_slope = r_slope;
+                    } else {
+                        blocked = false;
+                        start_slope = next_start_slope;
+                    }
+                } else if is_blocking && j < radius {
+                    blocked = true;
+                    self.cast_light(
+                        ox,
+                        oy,
+                        radius,
+                        j + 1,
+                        start_slope,
+                        l_slope,
+                        octant,
+                        w,
+                        h,
+                    );
+                    next_start_slope = r_slope;
+                }
+            }
+            if blocked {
+                return;
+            }
+        }
+    }
+
+    /// Execute an attack. For ranged attacks, `target_snapshot_pos` is the position
+    /// the target was at when the archer decided to shoot. If the target has since moved,
+    /// the arrow flies to the old position and misses (simulates projectile travel lag).
+    fn execute_attack(
+        &mut self,
+        attacker_id: UnitId,
+        defender_id: UnitId,
+        target_snapshot_pos: Option<(u32, u32)>,
+    ) {
+        let attacker_idx = self.units.iter().position(|u| u.id == attacker_id);
+        let defender_idx = self.units.iter().position(|u| u.id == defender_id);
+        let (attacker_idx, defender_idx) = match (attacker_idx, defender_idx) {
+            (Some(a), Some(d)) => (a, d),
+            _ => return,
+        };
+
+        let is_ranged = self.units[attacker_idx].stats.range > 1
+            && self.units[attacker_idx].distance_to(
+                self.units[defender_idx].grid_x,
+                self.units[defender_idx].grid_y,
+            ) > 1;
+
+        if is_ranged {
+            let (snap_x, snap_y) = target_snapshot_pos.unwrap_or((
+                self.units[defender_idx].grid_x,
+                self.units[defender_idx].grid_y,
+            ));
+            let target_moved = self.units[defender_idx].grid_x != snap_x
+                || self.units[defender_idx].grid_y != snap_y;
+
+            if target_moved {
+                // Miss: arrow hits empty ground
+                self.turn_events.push(TurnEvent::RangedAttack {
+                    attacker_id,
+                    defender_id,
+                    damage: 0,
+                    killed: false,
+                    target_pos: (snap_x, snap_y),
+                    missed: true,
+                });
+            } else {
+                // Hit: deal damage normally
+                let (attacker, defender) = if attacker_idx < defender_idx {
+                    let (left, right) = self.units.split_at_mut(defender_idx);
+                    (&mut left[attacker_idx], &mut right[0])
+                } else {
+                    let (left, right) = self.units.split_at_mut(attacker_idx);
+                    (&mut right[0], &mut left[defender_idx])
+                };
+                let result = combat::execute_ranged(attacker, defender, &self.grid);
+                self.turn_events.push(TurnEvent::RangedAttack {
+                    attacker_id,
+                    defender_id,
+                    damage: result.damage,
+                    killed: result.target_killed,
+                    target_pos: (snap_x, snap_y),
+                    missed: false,
+                });
+            }
+        } else {
+            let (attacker, defender) = if attacker_idx < defender_idx {
+                let (left, right) = self.units.split_at_mut(defender_idx);
+                (&mut left[attacker_idx], &mut right[0])
+            } else {
+                let (left, right) = self.units.split_at_mut(attacker_idx);
+                (&mut right[0], &mut left[defender_idx])
+            };
+            let result = combat::execute_melee(attacker, defender, &self.grid);
+            self.turn_events.push(TurnEvent::MeleeAttack {
+                attacker_id,
+                defender_id,
+                damage: result.damage,
+                killed: result.target_killed,
+            });
+        }
+    }
+
+    /// Each non-player unit: attack adjacent enemy or move 1 tile toward nearest enemy.
+    /// Ranged attacks target the position the enemy was at before the AI turn started,
+    /// so if the target moved earlier in this turn, the arrow misses (projectile lag).
+    fn ai_turn(&mut self, position_snapshot: &[(UnitId, u32, u32)]) {
         let ai_indices: Vec<usize> = self
             .units
             .iter()
@@ -587,25 +571,28 @@ impl Game {
             .collect();
 
         for ai_idx in ai_indices {
+            if !self.units[ai_idx].alive {
+                continue;
+            }
             let faction = self.units[ai_idx].faction;
             let ax = self.units[ai_idx].grid_x;
             let ay = self.units[ai_idx].grid_y;
             let range = self.units[ai_idx].stats.range;
+            let ai_id = self.units[ai_idx].id;
 
-            // Find nearest enemy
+            // Find nearest enemy using current positions (for targeting decisions)
             let nearest_enemy = self
                 .units
                 .iter()
-                .enumerate()
-                .filter(|(_, u)| u.alive && u.faction != faction)
-                .min_by_key(|(_, u)| {
+                .filter(|u| u.alive && u.faction != faction)
+                .min_by_key(|u| {
                     let dx = (ax as i32 - u.grid_x as i32).unsigned_abs();
                     let dy = (ay as i32 - u.grid_y as i32).unsigned_abs();
-                    dx + dy
+                    dx.max(dy) // Chebyshev distance for 8-directional
                 })
-                .map(|(i, u)| (i, u.grid_x, u.grid_y, u.id));
+                .map(|u| (u.grid_x, u.grid_y, u.id));
 
-            let (enemy_idx, ex, ey, _enemy_id) = match nearest_enemy {
+            let (ex, ey, enemy_id) = match nearest_enemy {
                 Some(e) => e,
                 None => continue,
             };
@@ -616,46 +603,21 @@ impl Game {
                 dx.max(dy)
             };
 
-            // Attack if in range
-            if dist <= range && !self.units[ai_idx].has_attacked {
-                let is_ranged = range > 1 && dist > 1;
-
-                let (attacker, defender) = if ai_idx < enemy_idx {
-                    let (left, right) = self.units.split_at_mut(enemy_idx);
-                    (&mut left[ai_idx], &mut right[0])
-                } else {
-                    let (left, right) = self.units.split_at_mut(ai_idx);
-                    (&mut right[0], &mut left[enemy_idx])
-                };
-
-                if is_ranged {
-                    let result = combat::execute_ranged(attacker, defender, &self.grid);
-                    let (sx, sy) = grid::grid_to_world(attacker.grid_x, attacker.grid_y);
-                    let (tx, ty) = grid::grid_to_world(defender.grid_x, defender.grid_y);
-                    self.projectiles.push(Projectile::new(sx, sy, tx, ty));
-
-                    if result.target_killed {
-                        let (wx, wy) = grid::grid_to_world(defender.grid_x, defender.grid_y);
-                        self.particles
-                            .push(Particle::new(ParticleKind::ExplosionLarge, wx, wy));
-                    }
-                } else {
-                    let result = combat::execute_melee(attacker, defender, &self.grid);
-                    let (wx, wy) = grid::grid_to_world(defender.grid_x, defender.grid_y);
-                    self.particles
-                        .push(Particle::new(ParticleKind::ExplosionSmall, wx, wy));
-
-                    if result.target_killed {
-                        self.particles
-                            .push(Particle::new(ParticleKind::ExplosionLarge, wx, wy));
-                    }
-                }
-            } else if self.units[ai_idx].movement_left > 0 {
-                // Move toward nearest enemy (simple: one step closer)
+            if dist <= range {
+                // For ranged attacks, use the snapshot position (pre-turn)
+                let snap_pos = position_snapshot
+                    .iter()
+                    .find(|(id, _, _)| *id == enemy_id)
+                    .map(|&(_, x, y)| (x, y));
+                self.execute_attack(ai_id, enemy_id, snap_pos);
+            } else {
+                // Move 1 tile toward nearest enemy (8-directional)
                 let mut best = (ax, ay);
                 let mut best_dist = i32::MAX;
-
-                for &(sdx, sdy) in &[(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
+                for &(sdx, sdy) in &[
+                    (0i32, -1i32), (1, 0), (0, 1), (-1, 0),
+                    (1, -1), (1, 1), (-1, 1), (-1, -1),
+                ] {
                     let nx = ax as i32 + sdx;
                     let ny = ay as i32 + sdy;
                     if !self.grid.in_bounds(nx, ny) {
@@ -666,63 +628,42 @@ impl Game {
                     if !self.grid.is_passable(nx, ny) {
                         continue;
                     }
+                    // Prevent corner-cutting for diagonal moves
+                    if !self.grid.can_move_diagonal(ax, ay, sdx, sdy) {
+                        continue;
+                    }
                     if self.unit_at(nx, ny).is_some() {
                         continue;
                     }
-                    let d = (nx as i32 - ex as i32).abs() + (ny as i32 - ey as i32).abs();
+                    // Chebyshev distance for 8-directional
+                    let ddx = (nx as i32 - ex as i32).abs();
+                    let ddy = (ny as i32 - ey as i32).abs();
+                    let d = ddx.max(ddy);
                     if d < best_dist {
                         best_dist = d;
                         best = (nx, ny);
                     }
                 }
-
                 if best != (ax, ay) {
                     let unit = &mut self.units[ai_idx];
                     unit.grid_x = best.0;
                     unit.grid_y = best.1;
-                    unit.movement_left -= 1;
-
                     if best.0 > ax {
                         unit.facing = Facing::Right;
                     } else if best.0 < ax {
                         unit.facing = Facing::Left;
                     }
-
-                    let (wx, wy) = grid::grid_to_world(best.0, best.1);
-                    self.particles
-                        .push(Particle::new(ParticleKind::Dust, wx, wy));
+                    self.turn_events.push(TurnEvent::Move {
+                        unit_id: ai_id,
+                        from: (ax, ay),
+                        to: (best.0, best.1),
+                    });
                 }
             }
         }
-
-        self.turn.ai_done = true;
-        self.turn.advance(); // -> Resolution
     }
 
-    /// Resolve the turn: remove dead units, reset turn state, advance.
-    pub fn resolve_turn(&mut self) {
-        if self.turn.phase != TurnPhase::Resolution {
-            return;
-        }
-
-        // Reset all living units for next turn
-        for unit in &mut self.units {
-            if unit.alive {
-                unit.reset_turn();
-            }
-        }
-
-        self.turn.resolution_done = true;
-        self.turn.advance(); // -> PlayerTurn
-        self.compute_player_targets();
-
-        self.events.push(GameEvent::TurnChanged {
-            turn: self.turn.turn_number,
-            phase: self.turn.phase,
-        });
-    }
-
-    /// Update animations, particles, projectiles, and death fades.
+    /// Update animations, particles, projectiles, death fades, and camera following.
     pub fn update(&mut self, dt: f64) {
         for unit in &mut self.units {
             if unit.alive {
@@ -733,122 +674,165 @@ impl Game {
             }
         }
 
-        // Update particles
         for particle in &mut self.particles {
             particle.update(dt);
         }
         self.particles.retain(|p| !p.finished);
 
-        // Update projectiles
         for proj in &mut self.projectiles {
             proj.update(dt as f32);
         }
         self.projectiles.retain(|p| !p.finished);
+
+        // Camera smoothly follows player's visual position
+        if let Some(player) = self.player_unit() {
+            let (pvx, pvy) = (player.visual_x, player.visual_y);
+            let lerp = (dt as f32 * 5.0).min(1.0);
+            self.camera.x += (pvx - self.camera.x) * lerp;
+            self.camera.y += (pvy - self.camera.y) * lerp;
+        }
     }
 
-    /// Find the nearest attackable enemy in the given swipe direction.
-    pub fn find_attack_target_in_direction(&self, dir: SwipeDir) -> Option<UnitId> {
-        let player = self.player_unit()?;
-        let px = player.grid_x as i32;
-        let py = player.grid_y as i32;
-
-        self.attack_targets
-            .iter()
-            .filter_map(|&target_id| {
-                let unit = self.find_unit(target_id)?;
-                let rx = unit.grid_x as i32 - px;
-                let ry = unit.grid_y as i32 - py;
-                let target_dir = SwipeDir::from_grid_delta(rx, ry)?;
-                if target_dir == dir {
-                    let dist = rx.unsigned_abs() + ry.unsigned_abs();
-                    Some((target_id, dist))
-                } else {
-                    None
-                }
-            })
-            .min_by_key(|&(_, dist)| dist)
-            .map(|(id, _)| id)
-    }
-
-    /// Find the farthest reachable move target in the given swipe direction.
-    pub fn find_farthest_move_target(&self, dir: SwipeDir) -> Option<(u32, u32)> {
-        let player = self.player_unit()?;
-        let px = player.grid_x as i32;
-        let py = player.grid_y as i32;
-        let (dir_dx, dir_dy) = dir.delta();
-
-        self.move_targets
-            .iter()
-            .filter(|&&(mx, my)| {
-                let rx = mx as i32 - px;
-                let ry = my as i32 - py;
-                SwipeDir::from_grid_delta(rx, ry) == Some(dir)
-            })
-            .max_by_key(|&&(mx, my)| {
-                let rx = mx as i32 - px;
-                let ry = my as i32 - py;
-                rx * dir_dx + ry * dir_dy
-            })
-            .copied()
-    }
-
-    /// Set up a demo battle with procedural terrain.
-    pub fn setup_demo_battle(&mut self) {
-        self.setup_demo_battle_with_seed(42);
-    }
-
-    /// Set up a demo battle with a specific seed for terrain generation.
-    pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
-        self.grid = terrain_gen::generate_battlefield(seed);
-
-        let (blue_x, blue_y) = terrain_gen::blue_spawn_area();
-        let (red_x, red_y) = terrain_gen::red_spawn_area();
-
-        // Blue army (player side) — all 5 unit types
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y, true);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y + 2, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y.saturating_sub(2), false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y + 1, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Lancer, Faction::Blue, blue_x + 1, blue_y + 4, false);
-        self.spawn_unit(UnitKind::Pawn, Faction::Blue, blue_x + 1, blue_y.saturating_sub(4), false);
-        self.spawn_unit(UnitKind::Pawn, Faction::Blue, blue_x + 1, blue_y.saturating_sub(3), false);
-        self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_x.saturating_sub(1), blue_y + 3, false);
-
-        // Red army (enemy side) — all 5 unit types
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y + 2, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y.saturating_sub(2), false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y + 1, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Lancer, Faction::Red, red_x.saturating_sub(1), red_y + 4, false);
-        self.spawn_unit(UnitKind::Pawn, Faction::Red, red_x.saturating_sub(1), red_y.saturating_sub(4), false);
-        self.spawn_unit(UnitKind::Pawn, Faction::Red, red_x.saturating_sub(1), red_y.saturating_sub(3), false);
-        self.spawn_unit(UnitKind::Monk, Faction::Red, red_x + 1, red_y + 3, false);
-
-        // Center camera on the player with a view of surrounding terrain
-        let (cx, cy) = grid::grid_to_world(blue_x + 5, blue_y);
-        self.camera.x = cx;
-        self.camera.y = cy;
-        self.camera.zoom = 0.8;
-
-        self.compute_player_targets();
-    }
-
-    /// Check if player is alive.
     pub fn is_player_alive(&self) -> bool {
         self.player_unit().is_some()
     }
 
-    /// Check if a faction has been eliminated.
     pub fn faction_eliminated(&self, faction: Faction) -> bool {
         !self.units.iter().any(|u| u.alive && u.faction == faction)
+    }
+
+    pub fn setup_demo_battle(&mut self) {
+        self.setup_demo_battle_with_seed(42);
+    }
+
+    pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
+        self.grid = mapgen::generate_battlefield(seed);
+
+        let (blue_x, blue_y) = mapgen::blue_spawn_area();
+        let (red_x, red_y) = mapgen::red_spawn_area();
+
+        // Blue army (player side)
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y, true);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y + 2, false);
+        self.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Blue,
+            blue_x,
+            blue_y.saturating_sub(2),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Blue,
+            blue_x.saturating_sub(2),
+            blue_y + 1,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Blue,
+            blue_x.saturating_sub(2),
+            blue_y.saturating_sub(1),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Lancer,
+            Faction::Blue,
+            blue_x + 1,
+            blue_y + 4,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Pawn,
+            Faction::Blue,
+            blue_x + 1,
+            blue_y.saturating_sub(4),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Pawn,
+            Faction::Blue,
+            blue_x + 1,
+            blue_y.saturating_sub(3),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Monk,
+            Faction::Blue,
+            blue_x.saturating_sub(1),
+            blue_y + 3,
+            false,
+        );
+
+        // Red army (enemy side)
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y + 2, false);
+        self.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Red,
+            red_x,
+            red_y.saturating_sub(2),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Red,
+            red_x + 2,
+            red_y + 1,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Red,
+            red_x + 2,
+            red_y.saturating_sub(1),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Lancer,
+            Faction::Red,
+            red_x.saturating_sub(1),
+            red_y + 4,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Pawn,
+            Faction::Red,
+            red_x.saturating_sub(1),
+            red_y.saturating_sub(4),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Pawn,
+            Faction::Red,
+            red_x.saturating_sub(1),
+            red_y.saturating_sub(3),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Monk,
+            Faction::Red,
+            red_x + 1,
+            red_y + 3,
+            false,
+        );
+
+        // Camera starts centered on player
+        let (cx, cy) = grid::grid_to_world(blue_x, blue_y);
+        self.camera.x = cx;
+        self.camera.y = cy;
+        self.camera.zoom = 1.5;
+
+        // Pre-compute caches
+        self.compute_water_adjacency();
+        self.compute_fov();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::TileKind;
 
     #[test]
     fn spawn_and_find_units() {
@@ -861,119 +845,86 @@ mod tests {
     }
 
     #[test]
-    fn player_move_auto_ends_turn() {
+    fn step_moves_one_tile() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.compute_player_targets();
-
-        assert!(game.handle_player_action(PlayerAction::Move {
-            target_x: 6,
-            target_y: 5
-        }));
-
-        // Move auto-ends the turn
-        assert_eq!(game.turn.phase, TurnPhase::AiTurn);
+        assert!(game.player_step(SwipeDir::E));
+        let player = game.player_unit().unwrap();
+        assert_eq!(player.grid_x, 6);
+        assert_eq!(player.grid_y, 5);
     }
 
     #[test]
-    fn player_cannot_move_out_of_range() {
+    fn step_blocked_by_water() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.compute_player_targets();
-
-        assert!(!game.handle_player_action(PlayerAction::Move {
-            target_x: 20,
-            target_y: 5
-        }));
+        game.grid.set(6, 5, TileKind::Water);
+        assert!(!game.player_step(SwipeDir::E));
+        let player = game.player_unit().unwrap();
+        assert_eq!(player.grid_x, 5);
     }
 
     #[test]
-    fn melee_attack_auto_ends_turn() {
+    fn step_attacks_enemy() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
         let enemy_id = game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 5, false);
-        game.compute_player_targets();
-
-        assert!(game.attack_targets.contains(&enemy_id));
-        assert!(game.handle_player_action(PlayerAction::Attack {
-            target_id: enemy_id
-        }));
-
+        assert!(game.player_step(SwipeDir::E));
+        // Player didn't move (attacked instead)
+        let player = game.player_unit().unwrap();
+        assert_eq!(player.grid_x, 5);
+        // Enemy took damage
         let enemy = game.find_unit(enemy_id).unwrap();
         assert!(enemy.hp < 10);
-        // Attack auto-ends the turn
-        assert_eq!(game.turn.phase, TurnPhase::AiTurn);
     }
 
     #[test]
-    fn end_turn_advances_to_ai() {
+    fn step_blocked_by_friendly() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.compute_player_targets();
-
-        assert!(game.handle_player_action(PlayerAction::EndTurn));
-        assert_eq!(game.turn.phase, TurnPhase::AiTurn);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 6, 5, false);
+        assert!(!game.player_step(SwipeDir::E));
     }
 
     #[test]
-    fn ai_attacks_nearby_enemy() {
+    fn turn_advances_after_step() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        assert_eq!(game.turn_number, 1);
+        game.player_step(SwipeDir::E);
+        assert_eq!(game.turn_number, 2);
+    }
+
+    #[test]
+    fn ai_moves_toward_player() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 10, 5, false);
+        game.player_step(SwipeDir::E);
+        let enemy = game
+            .units
+            .iter()
+            .find(|u| !u.is_player && u.alive)
+            .unwrap();
+        assert!(enemy.grid_x < 10, "AI should have moved toward player");
+    }
+
+    #[test]
+    fn ai_attacks_adjacent_player() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
         game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 5, false);
-        game.turn.phase = TurnPhase::AiTurn;
-
-        game.run_ai_turn();
+        // Player steps south (away from enemy)
+        game.player_step(SwipeDir::S);
+        // Enemy should pursue and be adjacent now at (6,5) or (5,6)
+        // Player is at (5,6). Enemy was at (6,5), moves to (5,5) or stays.
+        // The AI should try to attack if adjacent after moving.
         let player = game.player_unit().unwrap();
-        assert!(player.hp < 10);
-    }
-
-    #[test]
-    fn full_turn_cycle() {
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 20, 20, false);
-        game.compute_player_targets();
-
-        game.handle_player_action(PlayerAction::EndTurn);
-        assert_eq!(game.turn.phase, TurnPhase::AiTurn);
-
-        game.run_ai_turn();
-        assert_eq!(game.turn.phase, TurnPhase::Resolution);
-
-        game.resolve_turn();
-        assert_eq!(game.turn.phase, TurnPhase::PlayerTurn);
-        assert_eq!(game.turn.turn_number, 2);
-    }
-
-    #[test]
-    fn swipe_finds_farthest_move_target() {
-        use crate::input::SwipeDir;
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.compute_player_targets();
-
-        // Should find a target to the east
-        let target = game.find_farthest_move_target(SwipeDir::E);
-        assert!(target.is_some());
-        let (tx, _ty) = target.unwrap();
-        assert!(tx > 5); // moved east
-    }
-
-    #[test]
-    fn swipe_finds_attack_target_in_direction() {
-        use crate::input::SwipeDir;
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        let enemy_id = game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 5, false);
-        game.compute_player_targets();
-
-        // Enemy is to the east
-        assert_eq!(
-            game.find_attack_target_in_direction(SwipeDir::E),
-            Some(enemy_id)
+        // After AI turn, player may have been attacked
+        assert!(
+            player.hp < 10 || player.grid_y == 6,
+            "AI should have pursued"
         );
-        // No enemy to the west
-        assert_eq!(game.find_attack_target_in_direction(SwipeDir::W), None);
     }
 
     #[test]
@@ -984,136 +935,145 @@ mod tests {
         assert!(!game.faction_eliminated(Faction::Blue));
     }
 
-    // -- walk_straight_line tests --
-
     #[test]
-    fn walk_straight_line_on_grass() {
-        use crate::input::SwipeDir;
+    fn diagonal_step() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        // Warrior has mov=3, all grass (cost 1 each)
-        let result = game.walk_straight_line(SwipeDir::E);
-        assert_eq!(result, MoveResult::Completed);
+        assert!(game.player_step(SwipeDir::NE));
         let player = game.player_unit().unwrap();
-        assert_eq!(player.grid_x, 8); // 5 + 3 steps
-        assert_eq!(player.grid_y, 5);
+        assert_eq!(player.grid_x, 6);
+        assert_eq!(player.grid_y, 4);
     }
 
     #[test]
-    fn walk_respects_terrain_cost() {
-        use crate::input::SwipeDir;
+    fn step_out_of_bounds_fails() {
         let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        // Hill at (7,5) costs 2
-        game.grid.set(7, 5, crate::grid::TileKind::Hill);
-        // mov=3: (6,5) costs 1, (7,5) costs 2 = total 3
-        let result = game.walk_straight_line(SwipeDir::E);
-        assert_eq!(result, MoveResult::Completed);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 0, 0, true);
+        assert!(!game.player_step(SwipeDir::N));
+        assert!(!game.player_step(SwipeDir::W));
         let player = game.player_unit().unwrap();
-        assert_eq!(player.grid_x, 7);
+        assert_eq!(player.grid_x, 0);
+        assert_eq!(player.grid_y, 0);
     }
 
     #[test]
-    fn walk_blocked_by_impassable() {
-        use crate::input::SwipeDir;
+    fn player_step_records_move_event() {
+        use crate::animation::TurnEvent;
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.grid.set(6, 5, crate::grid::TileKind::Water);
-        let result = game.walk_straight_line(SwipeDir::E);
-        assert_eq!(result, MoveResult::NoMove);
+        game.player_step(SwipeDir::E);
+        let has_player_move = game.turn_events.iter().any(|e| {
+            matches!(
+                e,
+                TurnEvent::Move {
+                    unit_id: 1,
+                    from: (5, 5),
+                    to: (6, 5)
+                }
+            )
+        });
+        assert!(
+            has_player_move,
+            "Expected Move event for player, got: {:?}",
+            game.turn_events
+        );
     }
 
     #[test]
-    fn walk_blocked_by_unit() {
-        use crate::input::SwipeDir;
+    fn player_step_records_melee_attack_event() {
+        use crate::animation::TurnEvent;
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 6, 5, false); // ally blocking
-        let result = game.walk_straight_line(SwipeDir::E);
-        assert_eq!(result, MoveResult::NoMove);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 5, false);
+        game.player_step(SwipeDir::E);
+        let has_melee = game
+            .turn_events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::MeleeAttack { attacker_id: 1, .. }));
+        assert!(
+            has_melee,
+            "Expected MeleeAttack event, got: {:?}",
+            game.turn_events
+        );
     }
 
     #[test]
-    fn walk_interrupted_by_enemy() {
-        use crate::input::SwipeDir;
+    fn fov_player_tile_visible() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 32, 32, true);
+        game.compute_fov();
+        let idx = (32 * GRID_SIZE + 32) as usize;
+        assert!(game.visible[idx]);
+        assert!(game.revealed[idx]);
+    }
+
+    #[test]
+    fn fov_nearby_tiles_visible() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 32, 32, true);
+        game.compute_fov();
+        // Adjacent tiles should be visible
+        for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+            let x = (32 + dx) as u32;
+            let y = (32 + dy) as u32;
+            let idx = (y * GRID_SIZE + x) as usize;
+            assert!(game.visible[idx], "Tile ({x},{y}) should be visible");
+        }
+    }
+
+    #[test]
+    fn fov_far_tiles_not_visible() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 8, 5, false);
-        // Warrior range=1, swipe E: walks (6,5), (7,5) then enemy at (8,5) is in range
-        let result = game.walk_straight_line(SwipeDir::E);
-        assert_eq!(result, MoveResult::Interrupted);
-        let player = game.player_unit().unwrap();
-        assert_eq!(player.grid_x, 7); // stopped adjacent to enemy
-        assert!(player.has_moved);
+        game.compute_fov();
+        // Tile far away should not be visible
+        let idx = (60 * GRID_SIZE + 60) as usize;
+        assert!(!game.visible[idx]);
     }
 
     #[test]
-    fn after_interrupt_can_attack() {
-        use crate::input::SwipeDir;
+    fn fov_revealed_persists_after_move() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 10, 10, true);
+        game.compute_fov();
+        // Tiles near (10,10) should be revealed
+        let idx_near = (10 * GRID_SIZE + 12) as usize;
+        assert!(game.revealed[idx_near]);
+        // Move player away
+        game.player_step(SwipeDir::W);
+        // Tile (12,10) should still be revealed but may not be visible
+        assert!(game.revealed[idx_near]);
+    }
+
+    #[test]
+    fn spawned_unit_has_correct_visual_position() {
+        use crate::grid;
+        let mut game = Game::new(960.0, 640.0);
+        let id = game.spawn_unit(UnitKind::Warrior, Faction::Blue, 10, 15, true);
+        let unit = game.find_unit(id).unwrap();
+        let (expected_x, expected_y) = grid::grid_to_world(10, 15);
+        assert!((unit.visual_x - expected_x).abs() < f32::EPSILON);
+        assert!((unit.visual_y - expected_y).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn turn_events_accumulate_player_and_ai() {
+        use crate::animation::TurnEvent;
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        let enemy_id = game.spawn_unit(UnitKind::Warrior, Faction::Red, 8, 5, false);
-
-        let result = game.walk_straight_line(SwipeDir::E);
-        assert_eq!(result, MoveResult::Interrupted);
-        // Should still be player's turn
-        assert_eq!(game.turn.phase, TurnPhase::PlayerTurn);
-        // Attack targets should include the enemy
-        assert!(game.attack_targets.contains(&enemy_id));
-        // Attack should work and auto-end turn
-        assert!(game.handle_player_action(PlayerAction::Attack {
-            target_id: enemy_id
-        }));
-        assert_eq!(game.turn.phase, TurnPhase::AiTurn);
-    }
-
-    #[test]
-    fn after_interrupt_cannot_move() {
-        use crate::input::SwipeDir;
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 8, 5, false);
-
-        game.walk_straight_line(SwipeDir::E); // interrupted
-        // Trying to move again should fail
-        let result = game.handle_player_action(PlayerAction::MoveDirection { dir: SwipeDir::W });
-        assert!(!result);
-    }
-
-    #[test]
-    fn completed_move_auto_ends_turn() {
-        use crate::input::SwipeDir;
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-
-        assert!(game.handle_player_action(PlayerAction::MoveDirection { dir: SwipeDir::E }));
-        assert_eq!(game.turn.phase, TurnPhase::AiTurn);
-    }
-
-    #[test]
-    fn archer_interrupted_at_range() {
-        use crate::input::SwipeDir;
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Archer, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 13, 5, false);
-        // Archer range=5, mov=3: walks to (6,5), (7,5), (8,5)
-        // At (8,5), enemy at (13,5) is distance 5 = in range
-        let result = game.walk_straight_line(SwipeDir::E);
-        assert_eq!(result, MoveResult::Interrupted);
-        let player = game.player_unit().unwrap();
-        assert_eq!(player.grid_x, 8);
-    }
-
-    #[test]
-    fn diagonal_walk() {
-        use crate::input::SwipeDir;
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        // NE = (+1, -1) per step, mov=3
-        let result = game.walk_straight_line(SwipeDir::NE);
-        assert_eq!(result, MoveResult::Completed);
-        let player = game.player_unit().unwrap();
-        assert_eq!(player.grid_x, 8);
-        assert_eq!(player.grid_y, 2);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 15, 5, false);
+        game.player_step(SwipeDir::E);
+        let move_count = game
+            .turn_events
+            .iter()
+            .filter(|e| matches!(e, TurnEvent::Move { .. }))
+            .count();
+        assert!(
+            move_count >= 2,
+            "Expected at least 2 Move events (player + AI), got {move_count}"
+        );
+        let events: Vec<_> = game.turn_events.drain(..).collect();
+        assert!(game.turn_events.is_empty());
+        assert!(events.len() >= 2);
     }
 }

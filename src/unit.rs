@@ -1,3 +1,4 @@
+use crate::grid;
 use crate::sprite::AnimationState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -157,6 +158,10 @@ pub struct Unit {
     pub has_moved: bool,
     /// Remaining seconds of death fade-out (0.0 = not dying or fully faded).
     pub death_fade: f32,
+    /// World-space visual X position (for animation interpolation).
+    pub visual_x: f32,
+    /// World-space visual Y position (for animation interpolation).
+    pub visual_y: f32,
 }
 
 impl Unit {
@@ -169,6 +174,7 @@ impl Unit {
         is_player: bool,
     ) -> Self {
         let stats = kind.base_stats();
+        let (vx, vy) = grid::grid_to_world(grid_x, grid_y);
         Self {
             id,
             kind,
@@ -186,6 +192,8 @@ impl Unit {
             has_attacked: false,
             has_moved: false,
             death_fade: 0.0,
+            visual_x: vx,
+            visual_y: vy,
         }
     }
 
@@ -289,6 +297,15 @@ mod tests {
     fn lancer_frame_size() {
         assert_eq!(UnitKind::Lancer.frame_size(), 320);
         assert_eq!(UnitKind::Warrior.frame_size(), 192);
+    }
+
+    #[test]
+    fn unit_visual_position_initialized() {
+        use crate::grid;
+        let unit = Unit::new(1, UnitKind::Warrior, Faction::Blue, 5, 10, false);
+        let (expected_x, expected_y) = grid::grid_to_world(5, 10);
+        assert!((unit.visual_x - expected_x).abs() < f32::EPSILON);
+        assert!((unit.visual_y - expected_y).abs() < f32::EPSILON);
     }
 
     #[test]
