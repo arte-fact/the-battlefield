@@ -1,3 +1,5 @@
+pub mod animation;
+pub mod autotile;
 pub mod camera;
 pub mod combat;
 pub mod game;
@@ -5,7 +7,7 @@ pub mod grid;
 pub mod input;
 pub mod particle;
 pub mod sprite;
-pub mod terrain_gen;
+pub mod mapgen;
 pub mod turn;
 pub mod unit;
 
