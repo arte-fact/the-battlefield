@@ -39,12 +39,15 @@ No two runs are the same. Armies are procedurally generated with different compo
 
 ### Turn Structure
 
-Each turn allows **one action** (move OR attack), then auto-ends:
+Each turn allows **one action** (move 1 tile OR attack), then auto-advances:
 
-1. **Orders phase** -- The player's squad commander issues or updates orders (advance to position X, hold this line, fall back). Orders are displayed clearly.
-2. **Player action phase** -- The player performs one action: move (swipe/click a direction) or attack (swipe toward/tap enemy). The turn auto-ends after a completed move or attack. If an enemy enters attack range during movement, the walk is interrupted and the player may attack before the turn ends.
-3. **AI action phase** -- All other units on both sides act simultaneously based on their orders and local AI behavior.
-4. **Resolution phase** -- Combat is resolved, morale is updated, units that break begin fleeing, dead units are removed.
+1. **Player action** -- The player swipes (or presses an arrow key / clicks) to move 1 tile in that direction, or attack an adjacent enemy in that direction. Attack takes priority over movement.
+2. **AI action** -- All non-player units act: each attacks an adjacent enemy if possible, otherwise moves 1 tile toward the nearest enemy.
+3. **Turn advance** -- The turn counter increments and all living units reset for the next turn.
+
+There is no End Turn button -- the turn auto-advances after every player action. This creates a fast, fluid rhythm inspired by classic roguelikes.
+
+**Auto-move:** The player can long-swipe (>60px) to set a pathfinding destination. The game computes an A* path and auto-plays turns step by step (one move per ~8 frames), with the camera following smoothly. Auto-move stops if an enemy blocks the path ahead, and attacks the enemy if it is the destination. Any manual input cancels the auto-move.
 
 ## Map and Battlefield
 
@@ -56,9 +59,9 @@ The battlefield uses a **64x64 pixel square grid**. Each cell can contain terrai
 
 The Tiny Swords tileset provides 5 color variants of ground tiles (grass + stone elevation) plus water tiles. Each tilemap is 576x384 (9x6 tiles at 64x64) and includes auto-tiling pieces (edges, corners, fills) for:
 
-- **Grass** -- Open ground, standard terrain
-- **Elevated ground** -- Raised terrain with cliff faces (functions as hills)
-- **Water** -- Animated water with foam edges (16-frame animation)
+- **Grass** -- Open ground, standard terrain. Auto-tiled using 4-bit cardinal bitmask (N/E/S/W neighbors) mapping to a 4x4 composed block in the tilemap (3x3 border pieces + V-strip col 3 + H-strip row 3 + isolated tile at (3,3)).
+- **Elevated ground** -- Raised terrain with cliff faces (functions as hills). Same auto-tiling system, offset to cols 5-8 in the tilemap. Rendered with shadow pass underneath + cliff face tiles below elevated edges. Uses Tilemap_color2 for visual distinction.
+- **Water** -- Animated water background with foam edges (16-frame animation, per-tile phase offset for organic look). Foam rendered on land tiles adjacent to water.
 
 | Terrain | Asset | Movement cost | Defense bonus | Notes |
 |---------|-------|:---:|:---:|-------|
@@ -110,8 +113,16 @@ The battlefield is conceptually divided into zones that inform army AI behavior:
 
 ### Procedural Battlefield Generation
 
-Terrain is generated with constraints to ensure playable, interesting battlefields:
+Terrain is generated procedurally using a seeded deterministic algorithm (BSP + WFC planned, currently simplex noise):
 
+**Current implementation:**
+- Seeded noise-based generation producing grass, water bodies, forest patches, rock outcrops, and elevated terrain
+- Elevation level 2 tiles placed on existing land, avoiding adjacency to water
+- Blue army spawns in the west third, Red army spawns in the east third
+- Both spawn areas guaranteed to be passable land
+- Different seeds produce different battlefields; same seed is deterministic
+
+**Design goals (not yet implemented):**
 - A mostly open center where the main engagement happens
 - Terrain features distributed to create tactical variety (flanking routes through forests, defensible hills, water crossings as chokepoints)
 - Objectives (buildings) placed at strategically interesting locations
@@ -412,34 +423,43 @@ Touch is the **primary input method**; mouse and keyboard are supported as secon
 
 | Input | Action | Details |
 |-------|--------|---------|
-| Swipe anywhere | Move or attack | 8-directional; attacks enemy in range if one exists in swipe direction, otherwise moves (see below) |
-| Tap End Turn button | End turn | On-screen button, always visible |
-| Pinch (two fingers) | Zoom camera | Replaces mouse wheel zoom |
-| Two-finger drag | Pan camera | Replaces WASD/arrow key panning |
+| Short swipe (30-60px) | Move 1 tile or attack | 8-directional; attacks adjacent enemy if one exists, otherwise moves 1 tile |
+| Long swipe (>60px) | Auto-move pathfinding | Swipe vector applied from player position to compute A* destination; game auto-plays turns along the path |
+| Pinch (two fingers) | Zoom camera | |
+| Two-finger drag | Pan camera | |
 
-### Swipe-Anywhere Movement & Attack (One Action Per Turn)
+### Swipe-Anywhere Movement & Attack
 
-Each turn allows one action: move OR attack. Swiping anywhere on the screen moves or attacks in the swiped direction. Attack takes priority over movement to avoid accidentally walking past enemies. The turn auto-ends after a completed action.
+**Key design principle:** The player swipes from **anywhere** on screen, and the swipe direction/distance determines the action. The swipe vector is applied from the player's position, not from the finger's position -- this prevents the finger from hiding the destination area.
 
-1. `touchstart` records the starting point (single-touch only; two-finger gestures are reserved for camera)
-2. `touchend` computes the delta vector
-3. If the swipe distance exceeds a minimum threshold (~30px), the direction is determined from 8 possibilities: **N, NE, E, SE, S, SW, W, NW** (using 45-degree sectors based on swipe angle)
-4. **Attack check:** If an attackable enemy exists in the swipe direction (within the same 45-degree sector), the nearest such enemy is attacked. The turn auto-ends.
-5. **Movement fallback:** If no enemy is in the swiped direction, the player walks **tile-by-tile in a straight line** until movement points are exhausted or an obstacle is hit.
-   - **Enemy interruption:** If an enemy enters attack range during the walk, movement stops immediately and the player may attack before the turn ends. This prevents accidentally walking past threats.
-   - **Completed walk:** If the walk finishes without interruption, the turn auto-ends.
-6. If no valid action exists in the swiped direction, nothing happens.
+#### Short Swipe (Single Step)
 
-This means swiping toward an enemy attacks them, and swiping toward open ground walks as far as possible in that direction. The player never needs to precisely target tiles or units — just indicate a direction.
+1. `touchstart` records the starting point (single-touch only; two-finger gestures are reserved for camera).
+2. During the gesture, a live preview path is shown (white overlay tiles).
+3. `touchend` computes the delta vector.
+4. If the distance is 30-60px, the direction is classified into 8 possibilities: **N, NE, E, SE, S, SW, W, NW** (45-degree sectors).
+5. **Attack check:** If an enemy occupies the adjacent tile in that direction, the player attacks it.
+6. **Movement:** Otherwise, the player moves 1 tile in that direction (if passable and unoccupied).
+7. The turn auto-advances (AI acts, turn counter increments).
+
+#### Long Swipe (Auto-Move with Pathfinding)
+
+1. If the swipe distance exceeds 60px, the swipe delta is converted to a world-space offset from the player's grid position.
+2. An A* path is computed from the player to the destination tile (up to 30 tiles, 4-directional, respects terrain passability).
+3. The path is stored as an auto-move queue. Every ~8 frames, one step is executed (player moves, AI acts, turn advances).
+4. The remaining path is shown as a blue tile overlay during execution.
+5. **Enemy encounter:** If an enemy blocks the next tile mid-path, auto-move stops. If the enemy is the final destination, the player attacks it.
+6. **Cancellation:** Any manual input (arrow key, short swipe, click) cancels the auto-move immediately.
+7. The camera smoothly follows the player during auto-move (lerp-based tracking).
 
 ### Keyboard & Mouse Controls (Secondary)
 
 | Input | Action |
 |-------|--------|
-| Click tile | Move in direction of tile / attack enemy on tile |
+| Arrow keys | Move 1 tile / attack adjacent enemy |
+| WASD | Pan camera |
 | Mouse wheel | Zoom camera |
-| WASD / Arrow keys | Pan camera |
-| Space | End turn |
+| Click tile | Move 1 tile toward clicked tile / attack enemy on tile |
 
 ### Visual Style
 
@@ -496,26 +516,35 @@ Top-down chibi pixel art from the Tiny Swords pack. The style is colorful, reada
 
 ### Sprite Sheet System
 
-All unit animations are horizontal strip sprite sheets. The rendering system needs to:
+All unit animations are horizontal strip sprite sheets. The rendering system:
 
-1. Load PNG sprite sheets as GPU textures
-2. Extract frames by index: `source_rect = (frame_index * frame_width, 0, frame_width, frame_height)`
-3. Track animation state per unit (current animation, current frame, frame timer)
-4. Handle horizontal flipping for left-facing units
-5. Handle Lancer's larger frame size (320x320 vs 192x192 for other units)
-6. Render particle effects as overlay animations at world positions
+1. Loads PNG sprite sheets as `HtmlImageElement` via async fetch, cached by URL
+2. Extracts frames by index: `source_rect = (frame_index * frame_width, 0, frame_width, frame_height)`
+3. Tracks animation state per unit (current animation, current frame, frame timer)
+4. Handles horizontal flipping for left-facing units (canvas scale -1 + translate)
+5. Handles Lancer's larger frame size (320x320 vs 192x192 for other units)
+6. Renders particle effects as overlay animations at world positions
+7. Units Y-sorted for correct visual layering
 
-### Architecture Principles
+### Architecture
 
-The architecture will emerge from the code as needed, following YAGNI. Initial structure:
+The codebase is organized into focused Rust modules:
 
-- **Game state** -- Core data structures representing the battlefield, units, and battle state
-- **Systems** -- Logic operating on game state (movement, combat, AI, morale)
-- **Rendering** -- HTML Canvas 2D translating game state to visuals, sprite sheet animation
-- **Input** -- Player input handling and action mapping
-- **Audio** -- Sound playback tied to game events
-
-Whether this evolves into ECS, component-based, or another pattern will be decided based on actual needs during development.
+| Module | Responsibility |
+|--------|---------------|
+| `grid.rs` | Tile grid (64x64), terrain types, passability, A* pathfinding |
+| `autotile.rs` | 4-bit cardinal bitmask auto-tiling for flat/elevated ground and cliffs |
+| `game.rs` | Game state (units, grid, camera, particles), player actions, auto-turn, auto-move queue |
+| `game_loop.rs` | Main loop: input processing, rendering, texture loading, HUD updates |
+| `input.rs` | Keyboard, mouse, and touch input (swipe detection, pinch-zoom, two-finger pan) |
+| `unit.rs` | Unit types, stats, factions, animation state |
+| `combat.rs` | Melee and ranged damage calculation |
+| `camera.rs` | Camera with pan, zoom, viewport, screen-to-world conversion |
+| `mapgen/` | Procedural terrain generation (seeded, deterministic) |
+| `renderer.rs` | Canvas 2D drawing helpers, texture management |
+| `sprite.rs` | Sprite sheet frame extraction |
+| `particle.rs` | Particle effects (dust, explosions) and arrow projectiles |
+| `lib.rs` | WASM entry point, canvas/DPR setup, game initialization |
 
 ### Performance Targets
 

@@ -92,8 +92,10 @@ pub struct Input {
     two_finger_prev_dist: Option<f32>,
     /// Previous two-finger midpoint (for pan detection)
     two_finger_prev_mid: Option<(f32, f32)>,
-    /// Completed swipe direction to consume
+    /// Completed swipe direction to consume (short swipe: 30-60px)
     pub swipe: Option<SwipeDir>,
+    /// Long swipe: screen-space delta (dx, dy) for pathfinding, applied from player position.
+    pub long_swipe_delta: Option<(f32, f32)>,
     /// Accumulated pinch zoom delta
     pub pinch_zoom: f32,
     /// Accumulated two-finger pan delta
@@ -124,6 +126,7 @@ impl Input {
             two_finger_prev_dist: None,
             two_finger_prev_mid: None,
             swipe: None,
+            long_swipe_delta: None,
             pinch_zoom: 0.0,
             touch_pan_x: 0.0,
             touch_pan_y: 0.0,
@@ -144,25 +147,40 @@ impl Input {
         self.keys_down.contains(key)
     }
 
-    /// Compute camera pan direction from WASD/arrow keys.
+    /// Compute camera pan direction from WASD keys.
     pub fn camera_pan(&self) -> (f32, f32) {
         let mut dx = 0.0f32;
         let mut dy = 0.0f32;
 
-        if self.is_key_down("ArrowLeft") || self.is_key_down("a") || self.is_key_down("A") {
+        if self.is_key_down("a") || self.is_key_down("A") {
             dx -= 1.0;
         }
-        if self.is_key_down("ArrowRight") || self.is_key_down("d") || self.is_key_down("D") {
+        if self.is_key_down("d") || self.is_key_down("D") {
             dx += 1.0;
         }
-        if self.is_key_down("ArrowUp") || self.is_key_down("w") || self.is_key_down("W") {
+        if self.is_key_down("w") || self.is_key_down("W") {
             dy -= 1.0;
         }
-        if self.is_key_down("ArrowDown") || self.is_key_down("s") || self.is_key_down("S") {
+        if self.is_key_down("s") || self.is_key_down("S") {
             dy += 1.0;
         }
 
         (dx, dy)
+    }
+
+    /// Take an arrow key press as a movement direction (consumed on read).
+    pub fn take_arrow_step(&mut self) -> Option<SwipeDir> {
+        if self.keys_down.remove("ArrowUp") {
+            Some(SwipeDir::N)
+        } else if self.keys_down.remove("ArrowDown") {
+            Some(SwipeDir::S)
+        } else if self.keys_down.remove("ArrowLeft") {
+            Some(SwipeDir::W)
+        } else if self.keys_down.remove("ArrowRight") {
+            Some(SwipeDir::E)
+        } else {
+            None
+        }
     }
 
     /// Consume the mouse click (returns true once per click).
@@ -244,7 +262,14 @@ impl Input {
             if start_id == touch_id && !self.was_multi_touch {
                 let dx = x - start_x;
                 let dy = y - start_y;
-                self.swipe = SwipeDir::from_delta(dx, dy, 30.0);
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist >= 60.0 {
+                    // Long swipe: store delta vector (applied from player position)
+                    self.long_swipe_delta = Some((dx, dy));
+                } else {
+                    // Short swipe: single step direction
+                    self.swipe = SwipeDir::from_delta(dx, dy, 30.0);
+                }
             }
             self.single_touch_start = None;
         }
@@ -255,9 +280,14 @@ impl Input {
         self.live_swipe
     }
 
-    /// Consume completed swipe.
+    /// Consume completed swipe (short: single step).
     pub fn take_swipe(&mut self) -> Option<SwipeDir> {
         self.swipe.take()
+    }
+
+    /// Consume long swipe delta (screen-space dx, dy) for pathfinding.
+    pub fn take_long_swipe(&mut self) -> Option<(f32, f32)> {
+        self.long_swipe_delta.take()
     }
 
     /// Consume pinch zoom delta.
@@ -301,11 +331,20 @@ mod tests {
     #[test]
     fn camera_pan_direction() {
         let mut input = Input::new();
-        input.key_down("ArrowRight".to_string());
-        input.key_down("ArrowUp".to_string());
+        input.key_down("d".to_string());
+        input.key_down("w".to_string());
         let (dx, dy) = input.camera_pan();
         assert!((dx - 1.0).abs() < f32::EPSILON);
         assert!((dy - (-1.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn arrow_key_step() {
+        let mut input = Input::new();
+        assert!(input.take_arrow_step().is_none());
+        input.key_down("ArrowRight".to_string());
+        assert_eq!(input.take_arrow_step(), Some(SwipeDir::E));
+        assert!(input.take_arrow_step().is_none()); // consumed
     }
 
     #[test]
@@ -369,12 +408,26 @@ mod tests {
     }
 
     #[test]
-    fn touch_swipe_lifecycle() {
+    fn touch_short_swipe_lifecycle() {
         let mut input = Input::new();
         input.on_touch_start(0, 100.0, 100.0, 1);
-        input.on_touch_end(0, 250.0, 100.0, 0); // swipe right
+        input.on_touch_end(0, 145.0, 100.0, 0); // 45px swipe right (short)
         assert_eq!(input.take_swipe(), Some(SwipeDir::E));
         assert_eq!(input.take_swipe(), None); // consumed
+    }
+
+    #[test]
+    fn touch_long_swipe_gives_delta() {
+        let mut input = Input::new();
+        input.on_touch_start(0, 100.0, 100.0, 1);
+        input.on_touch_end(0, 250.0, 120.0, 0); // 150px+ swipe (long)
+        assert_eq!(input.take_swipe(), None); // not a short swipe
+        let delta = input.take_long_swipe();
+        assert!(delta.is_some());
+        let (dx, dy) = delta.unwrap();
+        assert!((dx - 150.0).abs() < f32::EPSILON);
+        assert!((dy - 20.0).abs() < f32::EPSILON);
+        assert!(input.take_long_swipe().is_none()); // consumed
     }
 
     #[test]

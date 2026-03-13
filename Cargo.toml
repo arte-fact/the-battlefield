@@ -32,6 +32,7 @@ web-sys = { version = "0.3", features = [
     "TouchList",
     "Touch",
     "DomRect",
+    "ImageData",
 ] }
 js-sys = "0.3"
 log = "0.4"

@@ -70,37 +70,39 @@ cargo fmt --check
 
 ### Phase 1: Foundation
 
-- [ ] Rust project setup with `Cargo.toml` and WASM target
-- [ ] HTML Canvas 2D rendering pipeline (initialize canvas, basic draw)
-- [ ] Canvas setup and game loop (fixed timestep)
+- [x] Rust project setup with `Cargo.toml` and WASM target
+- [x] HTML Canvas 2D rendering pipeline (initialize canvas, basic draw)
+- [x] Canvas setup and game loop (fixed timestep)
 - [ ] GitHub Actions CI/CD pipeline (build, test, clippy, fmt)
 - [ ] GitHub Pages deployment
-- [ ] Sprite sheet loader (parse horizontal strip PNGs into frames)
-- [ ] Render a single animated unit (Warrior idle) on screen
+- [x] Sprite sheet loader (parse horizontal strip PNGs into frames)
+- [x] Render a single animated unit (Warrior idle) on screen
 
 ### Phase 2: Core Gameplay
 
-- [ ] 64x64 square grid map with tilemap rendering (Tiny Swords tilesets)
-- [ ] Camera controls (pan, zoom)
-- [ ] Turn system (player turn / AI turn)
-- [ ] Unit placement and movement on the grid (with dust particle FX)
-- [ ] Sprite facing (horizontal flip for left-facing units)
-- [ ] Basic melee combat (Warrior attack animation + explosion FX on hit)
-- [ ] Ranged combat (Archer shoot animation + arrow projectile)
-- [ ] Health system with HP bars (BigBar/SmallBar UI assets)
-- [ ] Unit death (explosion FX + fade out)
-- [ ] Touch input: swipe-anywhere movement & attack (8-directional with pathfinding auto-move)
-- [ ] Touch input: tap End Turn button
-- [ ] Touch input: pinch-to-zoom, two-finger-pan
-- [ ] Responsive canvas (fill viewport on mobile)
-- [ ] On-screen End Turn button
+- [x] 64x64 square grid map with tilemap rendering (Tiny Swords tilesets)
+- [x] Camera controls (pan, zoom, smooth follow)
+- [x] Turn system (auto-turn: player acts, then AI acts, turn advances)
+- [x] Unit placement and movement on the grid (with dust particle FX)
+- [x] Sprite facing (horizontal flip for left-facing units)
+- [x] Basic melee combat (Warrior attack animation + explosion FX on hit)
+- [x] Ranged combat (Archer shoot animation + arrow projectile)
+- [x] Health system with HP bars
+- [x] Unit death (explosion FX + fade out)
+- [x] Touch input: swipe-anywhere movement & attack (short swipe = 1 tile, long swipe = A* pathfinding auto-move)
+- [x] Touch input: pinch-to-zoom, two-finger-pan
+- [x] Responsive canvas (fill viewport on mobile, DPR scaling)
+- [x] Keyboard: arrow keys = movement, WASD = camera pan, mouse wheel = zoom
 
 ### Phase 3: Battlefield and Armies
 
-- [ ] Procedural terrain generation (grass, elevation, water, trees, rocks, bushes)
+- [x] Procedural terrain generation (grass, elevation, water, forest, rock)
+- [x] 4-bit cardinal bitmask auto-tiling (flat ground + elevated ground)
+- [x] Water rendering with animated foam edges
+- [x] Elevation rendering with shadows and cliff faces
+- [x] All 5 unit types functional (Warrior, Archer, Lancer, Pawn, Monk)
 - [ ] Building placement (castles, towers, houses, barracks, monastery)
 - [ ] Two-faction army generation (select from 5 faction colors)
-- [ ] All 5 unit types functional (Warrior, Archer, Lancer, Pawn, Monk)
 - [ ] Lancer: larger sprite (320x320), directional attack/defence, charge ability
 - [ ] Monk: heal animation + heal effect overlay on target
 - [ ] Pawn: tool variant animations as melee attack

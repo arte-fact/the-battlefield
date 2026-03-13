@@ -32,3 +32,13 @@ __MACOSX/
 
 # wasm-pack output
 /pkg
+
+# Browser automation logs
+.playwright-mcp/
+
+# Asset reference PDFs
+*.pdf
+
+# Verification screenshots
+verify-*.png
+game-*.png
