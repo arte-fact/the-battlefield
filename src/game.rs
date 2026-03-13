@@ -22,8 +22,8 @@ pub struct Game {
     pub auto_path: Vec<(u32, u32)>,
     /// Index into auto_path for next step to take.
     pub auto_path_idx: usize,
-    /// Frame counter for auto-move pacing.
-    pub auto_move_timer: u32,
+    /// Time accumulator for auto-move pacing (seconds).
+    pub auto_move_timer: f32,
     /// Tiles currently visible to the player this turn.
     pub visible: Vec<bool>,
     /// Tiles that have been seen at least once (revealed through fog).
@@ -55,7 +55,7 @@ impl Game {
             next_unit_id: 1,
             auto_path: Vec::new(),
             auto_path_idx: 0,
-            auto_move_timer: 0,
+            auto_move_timer: 0.0,
             visible: vec![false; size],
             revealed: vec![false; size],
             fog_dirty: true,
@@ -190,7 +190,7 @@ impl Game {
         if let Some(p) = path {
             self.auto_path = p;
             self.auto_path_idx = 0;
-            self.auto_move_timer = 0;
+            self.auto_move_timer = 0.0;
         }
     }
 
