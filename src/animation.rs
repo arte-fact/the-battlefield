@@ -33,6 +33,11 @@ pub enum TurnEvent {
         target_pos: (u32, u32),
         missed: bool,
     },
+    Heal {
+        healer_id: UnitId,
+        target_id: UnitId,
+        amount: i32,
+    },
 }
 
 /// Easing: deceleration curve.
@@ -87,6 +92,12 @@ pub enum AnimPhase {
         killed: bool,
         duration: f32,
         projectile_spawned: bool,
+    },
+    Heal {
+        healer_id: UnitId,
+        #[allow(dead_code)]
+        target_id: UnitId,
+        duration: f32,
     },
 }
 
@@ -169,6 +180,17 @@ impl TurnAnimator {
                         killed,
                         duration: RANGED_ATTACK_DURATION,
                         projectile_spawned: false,
+                    });
+                }
+                TurnEvent::Heal {
+                    healer_id,
+                    target_id,
+                    amount: _,
+                } => {
+                    self.phases.push_back(AnimPhase::Heal {
+                        healer_id,
+                        target_id,
+                        duration: MELEE_ATTACK_DURATION,
                     });
                 }
             }
@@ -294,6 +316,26 @@ impl TurnAnimator {
                                 defender.visual_y,
                             ));
                         }
+                    }
+                }
+                done
+            }
+            Some(AnimPhase::Heal {
+                healer_id,
+                duration,
+                ..
+            }) => {
+                let healer_id = *healer_id;
+                let duration = *duration;
+
+                if let Some(unit) = units.iter_mut().find(|u| u.id == healer_id) {
+                    unit.set_anim(UnitAnim::Attack);
+                }
+
+                let done = self.phase_elapsed >= duration;
+                if done {
+                    if let Some(unit) = units.iter_mut().find(|u| u.id == healer_id) {
+                        unit.set_anim(UnitAnim::Idle);
                     }
                 }
                 done

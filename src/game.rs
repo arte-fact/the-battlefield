@@ -5,6 +5,7 @@ use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::input::SwipeDir;
 use crate::mapgen;
 use crate::particle::{Particle, Projectile};
+use crate::turn::TurnState;
 use crate::unit::{Facing, Faction, Unit, UnitId, UnitKind};
 
 /// Player vision radius in tiles.
@@ -13,7 +14,7 @@ const FOV_RADIUS: i32 = 15;
 pub struct Game {
     pub grid: Grid,
     pub units: Vec<Unit>,
-    pub turn_number: u32,
+    pub turn_state: TurnState,
     pub camera: Camera,
     pub particles: Vec<Particle>,
     pub projectiles: Vec<Projectile>,
@@ -48,7 +49,7 @@ impl Game {
         Self {
             grid,
             units: Vec::new(),
-            turn_number: 1,
+            turn_state: TurnState::new(),
             camera,
             particles: Vec::new(),
             projectiles: Vec::new(),
@@ -62,6 +63,10 @@ impl Game {
             water_adjacency: vec![false; size],
             turn_events: Vec::new(),
         }
+    }
+
+    pub fn turn_number(&self) -> u32 {
+        self.turn_state.turn_number
     }
 
     pub fn spawn_unit(
@@ -163,7 +168,7 @@ impl Game {
         self.ai_turn(&position_snapshot);
 
         // Advance turn and reset all living units
-        self.turn_number += 1;
+        self.turn_state.turn_number += 1;
         for unit in &mut self.units {
             if unit.alive {
                 unit.reset_turn();
@@ -194,13 +199,28 @@ impl Game {
         }
     }
 
-    /// Process one auto-move step. Returns true if a step was taken.
-    /// If the next step is blocked, re-pathfinds around obstacles instead of stopping.
+    /// Compute the next auto-move direction without executing it.
+    /// Returns Some(dir) to pass to player_step, or None if path is done/stuck.
+    /// The caller (game_loop) is responsible for calling player_step with the result.
     pub fn auto_move_step(&mut self) -> bool {
+        if let Some(dir) = self.auto_move_next_dir() {
+            if self.player_step(dir) {
+                return true;
+            }
+            // Step failed — give up
+            self.auto_path.clear();
+            self.auto_path_idx = 0;
+        }
+        false
+    }
+
+    /// Compute the next direction for auto-move. Updates internal path state
+    /// but does NOT call player_step. Returns None if path is done or stuck.
+    fn auto_move_next_dir(&mut self) -> Option<SwipeDir> {
         if self.auto_path_idx >= self.auto_path.len() {
             self.auto_path.clear();
             self.auto_path_idx = 0;
-            return false;
+            return None;
         }
 
         let (tx, ty) = self.auto_path[self.auto_path_idx];
@@ -208,7 +228,8 @@ impl Game {
             Some(p) => p,
             None => {
                 self.auto_path.clear();
-                return false;
+                self.auto_path_idx = 0;
+                return None;
             }
         };
         let px = player.grid_x;
@@ -223,38 +244,33 @@ impl Game {
             if unit.faction != player_faction {
                 let is_destination = self.auto_path_idx == self.auto_path.len() - 1;
                 if is_destination {
-                    if let Some(dir) = SwipeDir::from_grid_delta(dx, dy) {
-                        self.player_step(dir);
-                    }
                     self.auto_path.clear();
                     self.auto_path_idx = 0;
-                    return true;
+                    return SwipeDir::from_grid_delta(dx, dy);
                 }
                 // Enemy in the way but not destination — re-path around them
-                return self.repath_around_units();
+                return self.repath_next_dir();
             }
         }
 
         if let Some(dir) = SwipeDir::from_grid_delta(dx, dy) {
-            if self.player_step(dir) {
-                self.auto_path_idx += 1;
-                return true;
-            }
+            self.auto_path_idx += 1;
+            return Some(dir);
         }
 
-        // Step failed (friendly unit or terrain) — try to re-path around
-        self.repath_around_units()
+        // Can't compute direction — try re-path
+        self.repath_next_dir()
     }
 
-    /// Re-compute auto-path from current player position to the original destination,
-    /// routing around currently occupied tiles. Returns true if a step was taken.
-    fn repath_around_units(&mut self) -> bool {
+    /// Re-compute auto-path around obstacles and return the next direction.
+    /// Does NOT call player_step.
+    fn repath_next_dir(&mut self) -> Option<SwipeDir> {
         let dest = match self.auto_path.last().copied() {
             Some(d) => d,
             None => {
                 self.auto_path.clear();
                 self.auto_path_idx = 0;
-                return false;
+                return None;
             }
         };
 
@@ -263,14 +279,13 @@ impl Game {
             None => {
                 self.auto_path.clear();
                 self.auto_path_idx = 0;
-                return false;
+                return None;
             }
         };
         let sx = player.grid_x;
         let sy = player.grid_y;
         let player_id = player.id;
 
-        // Build set of occupied positions (excluding the player)
         let occupied: Vec<(u32, u32)> = self
             .units
             .iter()
@@ -284,27 +299,17 @@ impl Game {
 
         match new_path {
             Some(p) if !p.is_empty() => {
+                let (tx, ty) = p[0];
                 self.auto_path = p;
-                self.auto_path_idx = 0;
-                // Take the first step immediately
-                let (tx, ty) = self.auto_path[0];
+                self.auto_path_idx = 1;
                 let dx = tx as i32 - sx as i32;
                 let dy = ty as i32 - sy as i32;
-                if let Some(dir) = SwipeDir::from_grid_delta(dx, dy) {
-                    if self.player_step(dir) {
-                        self.auto_path_idx = 1;
-                        return true;
-                    }
-                }
-                self.auto_path.clear();
-                self.auto_path_idx = 0;
-                false
+                SwipeDir::from_grid_delta(dx, dy)
             }
             _ => {
-                // No path found — give up
                 self.auto_path.clear();
                 self.auto_path_idx = 0;
-                false
+                None
             }
         }
     }
@@ -558,9 +563,11 @@ impl Game {
         }
     }
 
-    /// Each non-player unit: attack adjacent enemy or move 1 tile toward nearest enemy.
-    /// Ranged attacks target the position the enemy was at before the AI turn started,
-    /// so if the target moved earlier in this turn, the arrow misses (projectile lag).
+    /// AI vision radius in tiles (Chebyshev distance).
+    const AI_VISION_RADIUS: u32 = 10;
+
+    /// Process all AI units sequentially. Each unit re-queries live state so
+    /// earlier actions (kills, movement) are visible to later units.
     fn ai_turn(&mut self, position_snapshot: &[(UnitId, u32, u32)]) {
         let ai_indices: Vec<usize> = self
             .units
@@ -574,91 +581,209 @@ impl Game {
             if !self.units[ai_idx].alive {
                 continue;
             }
-            let faction = self.units[ai_idx].faction;
-            let ax = self.units[ai_idx].grid_x;
-            let ay = self.units[ai_idx].grid_y;
-            let range = self.units[ai_idx].stats.range;
-            let ai_id = self.units[ai_idx].id;
+            self.ai_unit_action(ai_idx, position_snapshot);
+        }
+    }
 
-            // Find nearest enemy using current positions (for targeting decisions)
-            let nearest_enemy = self
-                .units
+    /// Dispatch AI action based on unit type.
+    fn ai_unit_action(&mut self, ai_idx: usize, position_snapshot: &[(UnitId, u32, u32)]) {
+        let kind = self.units[ai_idx].kind;
+        match kind {
+            UnitKind::Monk => self.ai_monk_action(ai_idx),
+            UnitKind::Archer => self.ai_archer_action(ai_idx, position_snapshot),
+            UnitKind::Warrior | UnitKind::Pawn | UnitKind::Lancer => {
+                self.ai_melee_action(ai_idx, position_snapshot)
+            }
+        }
+    }
+
+    /// Find the nearest visible enemy for a unit at (ax, ay).
+    fn find_nearest_enemy(&self, ai_idx: usize) -> Option<(u32, u32, UnitId, u32)> {
+        let faction = self.units[ai_idx].faction;
+        let ax = self.units[ai_idx].grid_x;
+        let ay = self.units[ai_idx].grid_y;
+
+        self.units
+            .iter()
+            .filter(|u| u.alive && u.faction != faction)
+            .filter_map(|u| {
+                let dx = (ax as i32 - u.grid_x as i32).unsigned_abs();
+                let dy = (ay as i32 - u.grid_y as i32).unsigned_abs();
+                let dist = dx.max(dy);
+                if dist <= Self::AI_VISION_RADIUS {
+                    Some((u.grid_x, u.grid_y, u.id, dist))
+                } else {
+                    None
+                }
+            })
+            .min_by_key(|&(_, _, _, dist)| dist)
+    }
+
+    /// Warrior, Pawn, Lancer: attack adjacent enemy, else A* toward nearest.
+    fn ai_melee_action(&mut self, ai_idx: usize, position_snapshot: &[(UnitId, u32, u32)]) {
+        let ai_id = self.units[ai_idx].id;
+        let has_attacked = self.units[ai_idx].has_attacked;
+
+        let enemy = match self.find_nearest_enemy(ai_idx) {
+            Some(e) => e,
+            None => return,
+        };
+        let (ex, ey, enemy_id, dist) = enemy;
+
+        if !has_attacked && dist <= 1 {
+            let snap_pos = position_snapshot
                 .iter()
-                .filter(|u| u.alive && u.faction != faction)
-                .min_by_key(|u| {
+                .find(|(id, _, _)| *id == enemy_id)
+                .map(|&(_, x, y)| (x, y));
+            self.execute_attack(ai_id, enemy_id, snap_pos);
+        } else if !self.units[ai_idx].has_moved {
+            self.ai_move_toward(ai_idx, ex, ey);
+        }
+    }
+
+    /// Archer: ranged attack if in range, melee if adjacent, hold if in range, else A* approach.
+    fn ai_archer_action(&mut self, ai_idx: usize, position_snapshot: &[(UnitId, u32, u32)]) {
+        let ai_id = self.units[ai_idx].id;
+        let range = self.units[ai_idx].stats.range;
+        let has_attacked = self.units[ai_idx].has_attacked;
+
+        let enemy = match self.find_nearest_enemy(ai_idx) {
+            Some(e) => e,
+            None => return,
+        };
+        let (ex, ey, enemy_id, dist) = enemy;
+
+        if !has_attacked && dist > 1 && dist <= range {
+            // Ranged attack — use snapshot for projectile-lag mechanic
+            let snap_pos = position_snapshot
+                .iter()
+                .find(|(id, _, _)| *id == enemy_id)
+                .map(|&(_, x, y)| (x, y));
+            self.execute_attack(ai_id, enemy_id, snap_pos);
+        } else if !has_attacked && dist <= 1 {
+            // Melee fallback when adjacent
+            self.execute_attack(ai_id, enemy_id, None);
+        } else if dist <= range {
+            // Already in range — hold position, don't walk into melee
+        } else if !self.units[ai_idx].has_moved {
+            // Out of range — approach
+            self.ai_move_toward(ai_idx, ex, ey);
+        }
+    }
+
+    /// Monk: heal adjacent wounded ally (<60% HP), else move toward wounded ally. Never attacks.
+    fn ai_monk_action(&mut self, ai_idx: usize) {
+        let faction = self.units[ai_idx].faction;
+        let ax = self.units[ai_idx].grid_x;
+        let ay = self.units[ai_idx].grid_y;
+        let ai_id = self.units[ai_idx].id;
+        let has_attacked = self.units[ai_idx].has_attacked;
+
+        // Find adjacent ally below 60% HP (heal target)
+        let heal_target = self
+            .units
+            .iter()
+            .filter(|u| u.alive && u.faction == faction && u.id != ai_id)
+            .filter(|u| {
+                let dist = {
                     let dx = (ax as i32 - u.grid_x as i32).unsigned_abs();
                     let dy = (ay as i32 - u.grid_y as i32).unsigned_abs();
-                    dx.max(dy) // Chebyshev distance for 8-directional
+                    dx.max(dy)
+                };
+                dist <= 1 && (u.hp as f32) < (u.stats.max_hp as f32 * 0.6)
+            })
+            .min_by_key(|u| u.hp)
+            .map(|u| u.id);
+
+        if let Some(target_id) = heal_target {
+            if !has_attacked {
+                self.execute_heal(ai_idx, target_id);
+                return;
+            }
+        }
+
+        // Move toward lowest-HP wounded ally within vision
+        if !self.units[ai_idx].has_moved {
+            let move_target = self
+                .units
+                .iter()
+                .filter(|u| u.alive && u.faction == faction && u.id != ai_id)
+                .filter(|u| u.hp < u.stats.max_hp)
+                .filter(|u| {
+                    let dx = (ax as i32 - u.grid_x as i32).unsigned_abs();
+                    let dy = (ay as i32 - u.grid_y as i32).unsigned_abs();
+                    dx.max(dy) <= Self::AI_VISION_RADIUS
                 })
-                .map(|u| (u.grid_x, u.grid_y, u.id));
+                .min_by_key(|u| u.hp)
+                .map(|u| (u.grid_x, u.grid_y));
 
-            let (ex, ey, enemy_id) = match nearest_enemy {
-                Some(e) => e,
-                None => continue,
-            };
+            if let Some((tx, ty)) = move_target {
+                self.ai_move_toward(ai_idx, tx, ty);
+            }
+        }
+    }
 
-            let dist = {
-                let dx = (ax as i32 - ex as i32).unsigned_abs();
-                let dy = (ay as i32 - ey as i32).unsigned_abs();
-                dx.max(dy)
-            };
+    /// Execute a heal action between healer at ai_idx and target unit.
+    fn execute_heal(&mut self, healer_idx: usize, target_id: UnitId) {
+        let target_idx = match self.units.iter().position(|u| u.id == target_id) {
+            Some(i) => i,
+            None => return,
+        };
+        let healer_id = self.units[healer_idx].id;
 
-            if dist <= range {
-                // For ranged attacks, use the snapshot position (pre-turn)
-                let snap_pos = position_snapshot
-                    .iter()
-                    .find(|(id, _, _)| *id == enemy_id)
-                    .map(|&(_, x, y)| (x, y));
-                self.execute_attack(ai_id, enemy_id, snap_pos);
-            } else {
-                // Move 1 tile toward nearest enemy (8-directional)
-                let mut best = (ax, ay);
-                let mut best_dist = i32::MAX;
-                for &(sdx, sdy) in &[
-                    (0i32, -1i32), (1, 0), (0, 1), (-1, 0),
-                    (1, -1), (1, 1), (-1, 1), (-1, -1),
-                ] {
-                    let nx = ax as i32 + sdx;
-                    let ny = ay as i32 + sdy;
-                    if !self.grid.in_bounds(nx, ny) {
-                        continue;
-                    }
-                    let nx = nx as u32;
-                    let ny = ny as u32;
-                    if !self.grid.is_passable(nx, ny) {
-                        continue;
-                    }
-                    // Prevent corner-cutting for diagonal moves
-                    if !self.grid.can_move_diagonal(ax, ay, sdx, sdy) {
-                        continue;
-                    }
-                    if self.unit_at(nx, ny).is_some() {
-                        continue;
-                    }
-                    // Chebyshev distance for 8-directional
-                    let ddx = (nx as i32 - ex as i32).abs();
-                    let ddy = (ny as i32 - ey as i32).abs();
-                    let d = ddx.max(ddy);
-                    if d < best_dist {
-                        best_dist = d;
-                        best = (nx, ny);
-                    }
+        let (healer, target) = if healer_idx < target_idx {
+            let (left, right) = self.units.split_at_mut(target_idx);
+            (&mut left[healer_idx], &mut right[0])
+        } else {
+            let (left, right) = self.units.split_at_mut(healer_idx);
+            (&mut right[0], &mut left[target_idx])
+        };
+
+        let amount = combat::execute_heal(healer, target);
+        self.turn_events.push(TurnEvent::Heal {
+            healer_id,
+            target_id,
+            amount,
+        });
+    }
+
+    /// Move an AI unit one step toward (target_x, target_y) using A* pathfinding.
+    fn ai_move_toward(&mut self, ai_idx: usize, target_x: u32, target_y: u32) {
+        let ai_id = self.units[ai_idx].id;
+        let ax = self.units[ai_idx].grid_x;
+        let ay = self.units[ai_idx].grid_y;
+
+        // Build occupied set from all alive units except self
+        let occupied: Vec<(u32, u32)> = self
+            .units
+            .iter()
+            .filter(|u| u.alive && u.id != ai_id)
+            .map(|u| (u.grid_x, u.grid_y))
+            .collect();
+
+        // A* path with max_len=1 to get the first step direction
+        let path = self.grid.find_path(ax, ay, target_x, target_y, 30, |x, y| {
+            occupied.iter().any(|&(ox, oy)| ox == x && oy == y)
+        });
+
+        if let Some(steps) = path {
+            if let Some(&(nx, ny)) = steps.first() {
+                let unit = &mut self.units[ai_idx];
+                let old_x = unit.grid_x;
+                unit.grid_x = nx;
+                unit.grid_y = ny;
+                unit.has_moved = true;
+                unit.movement_left = unit.movement_left.saturating_sub(1);
+                if nx > old_x {
+                    unit.facing = Facing::Right;
+                } else if nx < old_x {
+                    unit.facing = Facing::Left;
                 }
-                if best != (ax, ay) {
-                    let unit = &mut self.units[ai_idx];
-                    unit.grid_x = best.0;
-                    unit.grid_y = best.1;
-                    if best.0 > ax {
-                        unit.facing = Facing::Right;
-                    } else if best.0 < ax {
-                        unit.facing = Facing::Left;
-                    }
-                    self.turn_events.push(TurnEvent::Move {
-                        unit_id: ai_id,
-                        from: (ax, ay),
-                        to: (best.0, best.1),
-                    });
-                }
+                self.turn_events.push(TurnEvent::Move {
+                    unit_id: ai_id,
+                    from: (ax, ay),
+                    to: (nx, ny),
+                });
             }
         }
     }
@@ -890,9 +1015,9 @@ mod tests {
     fn turn_advances_after_step() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        assert_eq!(game.turn_number, 1);
+        assert_eq!(game.turn_number(), 1);
         game.player_step(SwipeDir::E);
-        assert_eq!(game.turn_number, 2);
+        assert_eq!(game.turn_number(), 2);
     }
 
     #[test]
@@ -1075,5 +1200,96 @@ mod tests {
         let events: Vec<_> = game.turn_events.drain(..).collect();
         assert!(game.turn_events.is_empty());
         assert!(events.len() >= 2);
+    }
+
+    #[test]
+    fn ai_archer_holds_position_in_range() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        // Archer at distance 3 (within range 5) — should NOT advance
+        game.spawn_unit(UnitKind::Archer, Faction::Red, 8, 5, false);
+        game.player_step(SwipeDir::S); // player steps away
+        let archer = game.units.iter().find(|u| u.kind == UnitKind::Archer).unwrap();
+        assert_eq!(
+            archer.grid_x, 8,
+            "Archer should hold position when already in range"
+        );
+    }
+
+    #[test]
+    fn ai_monk_heals_wounded_ally() {
+        use crate::animation::TurnEvent;
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        // Red warrior at half HP, adjacent to red monk
+        let warrior_id = game.spawn_unit(UnitKind::Warrior, Faction::Red, 30, 30, false);
+        game.spawn_unit(UnitKind::Monk, Faction::Red, 31, 30, false);
+        // Wound the warrior to below 60%
+        game.units.iter_mut().find(|u| u.id == warrior_id).unwrap().hp = 3;
+        game.player_step(SwipeDir::E);
+        let has_heal = game
+            .turn_events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::Heal { .. }));
+        assert!(has_heal, "Monk should heal wounded adjacent ally");
+        let warrior = game.find_unit(warrior_id).unwrap();
+        assert!(warrior.hp > 3, "Warrior HP should have increased");
+    }
+
+    #[test]
+    fn ai_monk_does_not_attack() {
+        use crate::animation::TurnEvent;
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        // Monk directly adjacent to player — should NOT attack
+        game.spawn_unit(UnitKind::Monk, Faction::Red, 6, 5, false);
+        game.player_step(SwipeDir::S); // player steps away, monk becomes adjacent
+        let has_attack = game.turn_events.iter().any(|e| {
+            matches!(
+                e,
+                TurnEvent::MeleeAttack { .. } | TurnEvent::RangedAttack { .. }
+            )
+        });
+        assert!(!has_attack, "Monk should never attack enemies");
+    }
+
+    #[test]
+    fn ai_ignores_distant_enemies() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        // Enemy far beyond AI_VISION_RADIUS (10) — should not move
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 50, 50, false);
+        game.player_step(SwipeDir::E);
+        let enemy = game
+            .units
+            .iter()
+            .find(|u| u.faction == Faction::Red && u.alive)
+            .unwrap();
+        assert_eq!(enemy.grid_x, 50, "Distant AI should not move");
+        assert_eq!(enemy.grid_y, 50, "Distant AI should not move");
+    }
+
+    #[test]
+    fn ai_paths_around_obstacle() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        // Enemy at (10, 5) with a water wall blocking the direct path
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 10, 5, false);
+        for y in 0..GRID_SIZE {
+            game.grid.set(8, y, TileKind::Water);
+        }
+        // Leave a gap at y=3
+        game.grid.set(8, 3, TileKind::Grass);
+        game.player_step(SwipeDir::E);
+        let enemy = game
+            .units
+            .iter()
+            .find(|u| u.faction == Faction::Red && u.alive)
+            .unwrap();
+        // Enemy should have moved (not stuck behind water)
+        assert!(
+            enemy.grid_x != 10 || enemy.grid_y != 5,
+            "AI should path around water obstacle"
+        );
     }
 }

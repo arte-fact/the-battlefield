@@ -73,7 +73,7 @@ impl HudElements {
     }
 
     fn update(&self, game: &Game) {
-        let turn_text = format!("Turn {}", game.turn_number);
+        let turn_text = format!("Turn {}", game.turn_number());
         self.turn_display.set_text_content(Some(&turn_text));
 
         if let Some(player) = game.player_unit() {
@@ -168,12 +168,13 @@ pub fn run(
             let dt = dt.min(0.1);
             state_guard.elapsed += dt;
 
-            // Process input (never blocked — all units animate simultaneously)
+            // Process input
             {
+                let animating = state_guard.animator.is_playing();
                 let game = &mut state_guard.game;
                 let mut inp = input.borrow_mut();
 
-                // Camera controls
+                // Camera controls (always available, even during animations)
                 let (pan_x, pan_y) = inp.camera_pan();
                 if pan_x != 0.0 || pan_y != 0.0 {
                     game.camera.pan(pan_x, pan_y, dt as f32);
@@ -198,41 +199,44 @@ pub fn run(
                     game.camera.y -= pan_ty / game.camera.zoom;
                 }
 
-                // Any manual input cancels auto-move
-                let has_manual_input = inp.keys_down.iter().any(|k| k.starts_with("Arrow"))
-                    || inp.swipe.is_some()
-                    || inp.mouse_clicked;
+                // Game actions are gated behind animation completion
+                if !animating {
+                    // Any manual input cancels auto-move
+                    let has_manual_input = inp.keys_down.iter().any(|k| k.starts_with("Arrow"))
+                        || inp.swipe.is_some()
+                        || inp.mouse_clicked;
 
-                if has_manual_input {
-                    game.cancel_auto_path();
-                }
+                    if has_manual_input {
+                        game.cancel_auto_path();
+                    }
 
-                // Arrow keys -> movement (1 tile per press)
-                if let Some(dir) = inp.take_arrow_step() {
-                    game.player_step(dir);
-                }
+                    // Arrow keys -> movement (1 tile per press)
+                    if let Some(dir) = inp.take_arrow_step() {
+                        game.player_step(dir);
+                    }
 
-                // Touch short swipe -> movement (1 tile per swipe)
-                if let Some(dir) = inp.take_swipe() {
-                    game.player_step(dir);
-                }
+                    // Touch short swipe -> movement (1 tile per swipe)
+                    if let Some(dir) = inp.take_swipe() {
+                        game.player_step(dir);
+                    }
 
-                // Touch long swipe -> apply delta from player position for pathfinding
-                if let Some((sdx, sdy)) = inp.take_long_swipe() {
-                    if let Some(player) = game.player_unit() {
-                        let (pwx, pwy) = grid::grid_to_world(player.grid_x, player.grid_y);
-                        let wdx = sdx / game.camera.zoom;
-                        let wdy = sdy / game.camera.zoom;
-                        let (gx, gy) = grid::world_to_grid(pwx + wdx, pwy + wdy);
-                        if game.grid.in_bounds(gx, gy) {
-                            game.set_auto_path(gx as u32, gy as u32);
+                    // Touch long swipe -> apply delta from player position for pathfinding
+                    if let Some((sdx, sdy)) = inp.take_long_swipe() {
+                        if let Some(player) = game.player_unit() {
+                            let (pwx, pwy) = grid::grid_to_world(player.grid_x, player.grid_y);
+                            let wdx = sdx / game.camera.zoom;
+                            let wdy = sdy / game.camera.zoom;
+                            let (gx, gy) = grid::world_to_grid(pwx + wdx, pwy + wdy);
+                            if game.grid.in_bounds(gx, gy) {
+                                game.set_auto_path(gx as u32, gy as u32);
+                            }
                         }
                     }
-                }
 
-                // Mouse click -> derive direction from player, step 1 tile
-                if let Some((sx, sy)) = inp.take_click() {
-                    handle_click(game, sx, sy);
+                    // Mouse click -> derive direction from player, step 1 tile
+                    if let Some((sx, sy)) = inp.take_click() {
+                        handle_click(game, sx, sy);
+                    }
                 }
             }
 
@@ -276,8 +280,8 @@ pub fn run(
                 }
             }
 
-            // Process auto-move path (time-based: 0.15s per step)
-            if state_guard.game.is_auto_moving() {
+            // Process auto-move path (time-based: 0.15s per step, gated by animations)
+            if !state_guard.animator.is_playing() && state_guard.game.is_auto_moving() {
                 state_guard.game.auto_move_timer += dt as f32;
                 if state_guard.game.auto_move_timer >= 0.15 {
                     state_guard.game.auto_move_timer = 0.0;

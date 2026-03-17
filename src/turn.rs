@@ -12,10 +12,6 @@ pub enum TurnPhase {
 pub struct TurnState {
     pub phase: TurnPhase,
     pub turn_number: u32,
-    /// Set when the AI has finished processing.
-    pub ai_done: bool,
-    /// Set when resolution is complete.
-    pub resolution_done: bool,
 }
 
 impl Default for TurnState {
@@ -29,22 +25,14 @@ impl TurnState {
         Self {
             phase: TurnPhase::PlayerTurn,
             turn_number: 1,
-            ai_done: false,
-            resolution_done: false,
         }
     }
 
     /// Advance to the next phase. Returns the new phase.
     pub fn advance(&mut self) -> TurnPhase {
         self.phase = match self.phase {
-            TurnPhase::PlayerTurn => {
-                self.ai_done = false;
-                TurnPhase::AiTurn
-            }
-            TurnPhase::AiTurn => {
-                self.resolution_done = false;
-                TurnPhase::Resolution
-            }
+            TurnPhase::PlayerTurn => TurnPhase::AiTurn,
+            TurnPhase::AiTurn => TurnPhase::Resolution,
             TurnPhase::Resolution => {
                 self.turn_number += 1;
                 TurnPhase::PlayerTurn

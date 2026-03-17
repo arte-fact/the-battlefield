@@ -80,6 +80,15 @@ pub fn execute_ranged(attacker: &mut Unit, defender: &mut Unit, grid: &Grid) -> 
     }
 }
 
+/// Execute a heal: restore HP to an ally. Returns amount healed.
+pub fn execute_heal(healer: &mut Unit, target: &mut Unit) -> i32 {
+    let heal_amount = 3.min(target.stats.max_hp - target.hp);
+    target.hp += heal_amount;
+    healer.has_attacked = true;
+    healer.set_anim(UnitAnim::Attack);
+    heal_amount
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,7 +124,7 @@ mod tests {
     #[test]
     fn terrain_defense_reduces_damage() {
         let mut grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
-        grid.set(6, 5, crate::grid::TileKind::Hill);
+        grid.set(6, 5, crate::grid::TileKind::Forest);
         let attacker = make_warrior(1, Faction::Blue, 5, 5);
         let defender = make_archer(2, Faction::Red, 6, 5);
         // ATK 3 - DEF 1 - terrain 1 = 1
