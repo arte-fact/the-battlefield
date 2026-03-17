@@ -1,7 +1,6 @@
-use crate::animation;
 use crate::animation::TurnAnimator;
 use crate::autotile;
-use crate::game::Game;
+use crate::game::{Game, ATTACK_CONE_HALF_ANGLE};
 use crate::grid::{self, TileKind, TILE_SIZE};
 use crate::input::Input;
 use crate::particle::{Particle, Projectile};
@@ -15,6 +14,29 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 const ASSET_BASE: &str = "assets/Tiny Swords (Free Pack)";
+
+/// Deterministic pseudo-random flip based on grid position.
+/// Returns true for ~50% of tiles in a spatially uniform pattern.
+fn tile_flip(gx: u32, gy: u32) -> bool {
+    gx.wrapping_mul(48271).wrapping_add(gy.wrapping_mul(16807)) & 1 == 0
+}
+
+/// Draw a tile-sized image horizontally flipped.
+fn draw_tile_flipped(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    img: &web_sys::HtmlImageElement,
+    sx: f64, sy: f64, sw: f64, sh: f64,
+    dx: f64, dy: f64, dw: f64, dh: f64,
+) -> Result<(), JsValue> {
+    ctx.save();
+    ctx.translate(dx + dw / 2.0, dy + dh / 2.0)?;
+    ctx.scale(-1.0, 1.0)?;
+    ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+        img, sx, sy, sw, sh, -dw / 2.0, -dh / 2.0, dw, dh,
+    )?;
+    ctx.restore();
+    Ok(())
+}
 
 /// Texture keys for loaded unit animations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -35,6 +57,8 @@ struct LoadedTextures {
     foam_texture: Option<TextureId>,
     /// Tree sprite sheets: (texture_id, frame_w, frame_h) for 4 variants
     tree_textures: Vec<(TextureId, u32, u32)>,
+    /// Rock decoration textures: single 64x64 sprites for 4 variants
+    rock_textures: Vec<TextureId>,
 }
 
 impl LoadedTextures {
@@ -49,6 +73,7 @@ impl LoadedTextures {
             shadow_texture: None,
             foam_texture: None,
             tree_textures: Vec::new(),
+            rock_textures: Vec::new(),
         }
     }
 }
@@ -112,6 +137,13 @@ pub fn run(
 
     setup_input_listeners(canvas, &input)?;
 
+    // Set initial touch control layout based on canvas size and DPR
+    let dpr = canvas.width() as f32 / canvas.client_width().max(1) as f32;
+    {
+        let mut inp = input.borrow_mut();
+        inp.update_layout(canvas.width() as f32, canvas.height() as f32, dpr);
+    }
+
     // Create offscreen fog canvas (1 pixel per tile, bilinear-interpolated when drawn)
     let fog_canvas = document
         .create_element("canvas")?
@@ -133,8 +165,6 @@ pub fn run(
         fog_ctx,
         animator: TurnAnimator::new(),
     }));
-
-    let preview_path: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
 
     // Start async texture loading
     {
@@ -168,17 +198,10 @@ pub fn run(
             let dt = dt.min(0.1);
             state_guard.elapsed += dt;
 
-            // Process input
+            // Process input and real-time game logic
             {
-                let animating = state_guard.animator.is_playing();
                 let game = &mut state_guard.game;
                 let mut inp = input.borrow_mut();
-
-                // Camera controls (always available, even during animations)
-                let (pan_x, pan_y) = inp.camera_pan();
-                if pan_x != 0.0 || pan_y != 0.0 {
-                    game.camera.pan(pan_x, pan_y, dt as f32);
-                }
 
                 // Mouse wheel zoom
                 let scroll = inp.take_scroll();
@@ -199,72 +222,63 @@ pub fn run(
                     game.camera.y -= pan_ty / game.camera.zoom;
                 }
 
-                // Game actions are gated behind animation completion
-                if !animating {
-                    // Any manual input cancels auto-move
-                    let has_manual_input = inp.keys_down.iter().any(|k| k.starts_with("Arrow"))
-                        || inp.swipe.is_some()
-                        || inp.mouse_clicked;
+                // Snapshot positions for movement animations
+                let old_positions: Vec<(f32, f32)> = game.units.iter().map(|u| (u.x, u.y)).collect();
 
-                    if has_manual_input {
-                        game.cancel_auto_path();
-                    }
+                // Tick cooldowns for all units
+                game.tick_cooldowns(dt as f32);
 
-                    // Arrow keys -> movement (1 tile per press)
-                    if let Some(dir) = inp.take_arrow_step() {
-                        game.player_step(dir);
-                    }
+                // AI acts independently each frame
+                game.tick_ai(dt as f32);
 
-                    // Touch short swipe -> movement (1 tile per swipe)
-                    if let Some(dir) = inp.take_swipe() {
-                        game.player_step(dir);
-                    }
+                // Attack held: lock aim direction and facing
+                let attack_held = inp.is_key_down(" ") || inp.attack_button.pressed;
 
-                    // Touch long swipe -> apply delta from player position for pathfinding
-                    if let Some((sdx, sdy)) = inp.take_long_swipe() {
-                        if let Some(player) = game.player_unit() {
-                            let (pwx, pwy) = grid::grid_to_world(player.grid_x, player.grid_y);
-                            let wdx = sdx / game.camera.zoom;
-                            let wdy = sdy / game.camera.zoom;
-                            let (gx, gy) = grid::world_to_grid(pwx + wdx, pwy + wdy);
-                            if game.grid.in_bounds(gx, gy) {
-                                game.set_auto_path(gx as u32, gy as u32);
-                            }
-                        }
+                // Keyboard movement (WASD/ZQSD + arrows)
+                let (move_dx, move_dy) = inp.movement_direction();
+                if move_dx != 0.0 || move_dy != 0.0 {
+                    if !attack_held {
+                        game.player_aim_dir = move_dy.atan2(move_dx);
                     }
-
-                    // Mouse click -> derive direction from player, step 1 tile
-                    if let Some((sx, sy)) = inp.take_click() {
-                        handle_click(game, sx, sy);
-                    }
+                    game.try_player_move(move_dx, move_dy, dt as f32);
                 }
-            }
 
-            // Compute live swipe preview path (delta applied from player position)
-            {
-                let game = &state_guard.game;
-                let inp = input.borrow();
-                let mut pp = preview_path.borrow_mut();
-                pp.clear();
-                if let Some(swipe) = inp.swipe_state() {
-                    let sdx = swipe.current_x - swipe.start_x;
-                    let sdy = swipe.current_y - swipe.start_y;
-                    let dist = (sdx * sdx + sdy * sdy).sqrt();
-                    if dist >= 60.0 {
-                        if let Some(player) = game.player_unit() {
-                            let (pwx, pwy) = grid::grid_to_world(player.grid_x, player.grid_y);
-                            let wdx = sdx / game.camera.zoom;
-                            let wdy = sdy / game.camera.zoom;
-                            let (gx, gy) = grid::world_to_grid(pwx + wdx, pwy + wdy);
-                            if game.grid.in_bounds(gx, gy) {
-                                if let Some(path) = game.grid
-                                    .find_path(player.grid_x, player.grid_y, gx as u32, gy as u32, 30, |_, _| false) {
-                                    *pp = path;
-                                }
-                            }
+                // Virtual joystick movement (mobile)
+                let (joy_dx, joy_dy) = (inp.joystick.dx, inp.joystick.dy);
+                if joy_dx.abs() > 0.01 || joy_dy.abs() > 0.01 {
+                    if !attack_held {
+                        game.player_aim_dir = joy_dy.atan2(joy_dx);
+                    }
+                    game.try_player_move(joy_dx, joy_dy, dt as f32);
+                }
+
+                // Update player facing from aim direction (skip when attacking)
+                if !attack_held {
+                    let aim_cos = game.player_aim_dir.cos();
+                    if let Some(player) = game.player_unit_mut() {
+                        if aim_cos > 0.01 {
+                            player.facing = Facing::Right;
+                        } else if aim_cos < -0.01 {
+                            player.facing = Facing::Left;
                         }
                     }
                 }
+
+                // Attack: keyboard (space held or pressed) or touch button
+                let attack_input = inp.take_attack_key()
+                    || inp.take_attack_pressed()
+                    || attack_held;
+                if attack_input {
+                    if !game.tick_player_combat() {
+                        game.player_attack_swing();
+                    }
+                }
+
+                // Resolve circle-circle collisions
+                game.resolve_collisions();
+
+                // Update run/idle animations based on movement
+                game.update_movement_anims(&old_positions);
             }
 
             // Process turn events: spawn dust for moves, enqueue attack animations
@@ -280,16 +294,7 @@ pub fn run(
                 }
             }
 
-            // Process auto-move path (time-based: 0.15s per step, gated by animations)
-            if !state_guard.animator.is_playing() && state_guard.game.is_auto_moving() {
-                state_guard.game.auto_move_timer += dt as f32;
-                if state_guard.game.auto_move_timer >= 0.15 {
-                    state_guard.game.auto_move_timer = 0.0;
-                    state_guard.game.auto_move_step();
-                }
-            }
-
-            // Advance attack animations and collect spawned effects
+            // Advance all animations in parallel and collect spawned effects
             {
                 let LoopState { ref mut animator, ref mut game, .. } = *state_guard;
                 if animator.is_playing() {
@@ -302,9 +307,6 @@ pub fn run(
                     }
                 }
             }
-
-            // Smoothly lerp all unit visual positions toward their grid positions
-            animation::lerp_visual_positions(&mut state_guard.game.units, dt as f32);
 
             // Update game state (animations, particles, camera follow)
             state_guard.game.update(dt);
@@ -319,9 +321,9 @@ pub fn run(
         {
             if !*textures_loading.borrow() {
                 let loaded = loaded_textures.borrow();
-                let pp = preview_path.borrow();
+                let inp = input.borrow();
                 let mut state_guard = state.borrow_mut();
-                if let Err(e) = render_frame(&mut state_guard, &loaded, &pp) {
+                if let Err(e) = render_frame(&mut state_guard, &loaded, &inp) {
                     log::error!("Render error: {:?}", e);
                 }
             }
@@ -332,29 +334,6 @@ pub fn run(
 
     request_animation_frame(g.borrow().as_ref().unwrap());
     Ok(())
-}
-
-fn handle_click(game: &mut Game, screen_x: f32, screen_y: f32) {
-    use crate::input::SwipeDir;
-
-    let (wx, wy) = game.camera.screen_to_world(screen_x, screen_y);
-    let (gx, gy) = grid::world_to_grid(wx, wy);
-
-    if !game.grid.in_bounds(gx, gy) {
-        return;
-    }
-
-    let gx = gx as u32;
-    let gy = gy as u32;
-
-    // Derive direction from player to clicked tile
-    if let Some(player) = game.player_unit() {
-        let dx = gx as i32 - player.grid_x as i32;
-        let dy = gy as i32 - player.grid_y as i32;
-        if let Some(dir) = SwipeDir::from_grid_delta(dx, dy) {
-            game.player_step(dir);
-        }
-    }
 }
 
 fn setup_input_listeners(
@@ -381,19 +360,6 @@ fn setup_input_listeners(
         closure.forget();
     }
 
-    // Mouse click
-    {
-        let input_clone = input.clone();
-        let closure = Closure::wrap(Box::new(move |e: web_sys::MouseEvent| {
-            let mut inp = input_clone.borrow_mut();
-            inp.mouse_x = e.offset_x() as f32;
-            inp.mouse_y = e.offset_y() as f32;
-            inp.mouse_clicked = true;
-        }) as Box<dyn FnMut(_)>);
-        canvas.add_event_listener_with_callback("click", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
-
     // Mouse wheel (zoom)
     {
         let input_clone = input.clone();
@@ -417,9 +383,10 @@ fn setup_input_listeners(
             if count >= 1 {
                 let t = e.changed_touches().get(0).unwrap();
                 let (cx, cy) = canvas_touch_coords(&canvas_clone, &t);
+                let canvas_w = canvas_clone.width() as f32;
                 input_clone
                     .borrow_mut()
-                    .on_touch_start(t.identifier(), cx, cy, count);
+                    .on_touch_start(t.identifier(), cx, cy, count, canvas_w);
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("touchstart", closure.as_ref().unchecked_ref())?;
@@ -431,11 +398,10 @@ fn setup_input_listeners(
         let closure = Closure::wrap(Box::new(move |e: web_sys::TouchEvent| {
             e.prevent_default();
             let touches = e.touches();
-            if touches.length() == 1 {
-                let t = touches.get(0).unwrap();
-                let (cx, cy) = canvas_touch_coords(&canvas_clone, &t);
-                input_clone.borrow_mut().on_touch_move_single(cx, cy);
-            } else if touches.length() >= 2 {
+            let has_control = input_clone.borrow().has_active_control();
+
+            if touches.length() >= 2 && !has_control {
+                // Pure camera gesture (no controls active)
                 let t0 = touches.get(0).unwrap();
                 let t1 = touches.get(1).unwrap();
                 let (x0, y0) = canvas_touch_coords(&canvas_clone, &t0);
@@ -443,6 +409,13 @@ fn setup_input_listeners(
                 input_clone
                     .borrow_mut()
                     .on_touch_move_two_finger(x0, y0, x1, y1);
+            } else {
+                // Update each touch individually (joystick filters by touch_id)
+                for i in 0..touches.length() {
+                    let t = touches.get(i).unwrap();
+                    let (cx, cy) = canvas_touch_coords(&canvas_clone, &t);
+                    input_clone.borrow_mut().on_touch_move_single(t.identifier(), cx, cy);
+                }
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("touchmove", closure.as_ref().unchecked_ref())?;
@@ -557,7 +530,6 @@ async fn load_textures(
                     (UnitKind::Monk, UnitAnim::Idle) => ("Idle.png", 6),
                     (UnitKind::Monk, UnitAnim::Run) => ("Run.png", 4),
                     (UnitKind::Monk, UnitAnim::Attack) => ("Heal.png", 11),
-                    _ => continue,
                 };
 
                 let frame_size = kind.frame_size();
@@ -657,10 +629,17 @@ async fn load_textures(
         loaded.borrow_mut().tree_textures.push((tex_id, fw, fh));
     }
 
+    // Load rock decoration sprites (4 variants, 64x64 each)
+    for i in 1..=4 {
+        let url = format!("{}/Terrain/Decorations/Rocks/Rock{}.png", ASSET_BASE, i);
+        let tex_id = load_texture(state, &url, 64, 64, 1).await?;
+        loaded.borrow_mut().rock_textures.push(tex_id);
+    }
+
     Ok(())
 }
 
-fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, preview_path: &[(u32, u32)]) -> Result<(), JsValue> {
+fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -> Result<(), JsValue> {
     // Update fog offscreen canvas if FOV changed
     if state.game.fog_dirty {
         update_fog_canvas(&state.fog_ctx, &state.game)?;
@@ -684,7 +663,10 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, preview_path: &[
     ctx.save();
     ctx.translate(canvas_w / 2.0, canvas_h / 2.0)?;
     ctx.scale(zoom, zoom)?;
-    ctx.translate(-(game.camera.x as f64), -(game.camera.y as f64))?;
+    // Snap camera to pixel grid to prevent sub-pixel rendering artifacts
+    let cam_x = (game.camera.x as f64).round();
+    let cam_y = (game.camera.y as f64).round();
+    ctx.translate(-cam_x, -cam_y)?;
 
     // Visible tile range
     let (vl, vt, vr, vb) = game.camera.visible_rect();
@@ -706,17 +688,11 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, preview_path: &[
         state.elapsed,
     )?;
 
-    // 4. Draw grid overlay
-    draw_grid_lines(ctx, min_gx, min_gy, max_gx, max_gy)?;
+    // 4. Draw overlays (player highlight, HP bars, path line, attack target)
+    draw_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy, ts, &state.animator)?;
 
-    // 5. Draw overlays (player highlight, HP bars, path preview)
-    draw_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy, ts, preview_path, &state.animator)?;
-
-    // 6. Draw foreground sprites (units, particles, projectiles)
-    draw_foreground(ctx, game, loaded, tm, &state.animator)?;
-
-    // 7. Draw trees on forest tiles (on top of units for depth)
-    draw_trees(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy, state.elapsed)?;
+    // 6. Draw foreground sprites (units, particles, projectiles, trees) — Y-sorted together
+    draw_foreground(ctx, game, loaded, tm, &state.animator, min_gx, min_gy, max_gx, max_gy)?;
 
     // 8. Draw fog of war from cached offscreen canvas (single drawImage call)
     let grid_world_size = (game.grid.width as f64) * ts;
@@ -730,6 +706,9 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, preview_path: &[
     )?;
 
     ctx.restore();
+
+    // Draw touch controls in screen space (after camera transform is restored)
+    draw_touch_controls(ctx, input, state.canvas2d.dpr)?;
 
     Ok(())
 }
@@ -746,7 +725,6 @@ fn draw_tiles(
     elapsed: f64,
 ) -> Result<(), JsValue> {
     let ts = TILE_SIZE as f64;
-    let ts_draw = ts + 1.0;
 
     // Layer 1: Water background
     if let Some(water_tex_id) = loaded.water_texture {
@@ -756,7 +734,7 @@ fn draw_tiles(
                     let dx = (gx as f64) * ts;
                     let dy = (gy as f64) * ts;
                     ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                        img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts_draw, ts_draw,
+                        img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
                     )?;
                 }
             }
@@ -790,7 +768,7 @@ fn draw_tiles(
         }
     }
 
-    // Layer 3: Flat ground (auto-tiled)
+    // Layer 3: Flat ground (auto-tiled, center-fill tiles randomly flipped)
     if let Some(tilemap_tex_id) = loaded.tilemap_texture {
         if let Some((img, _, _, _)) = tm.get_image(tilemap_tex_id) {
             for gy in min_gy..max_gy {
@@ -802,9 +780,14 @@ fn draw_tiles(
                     let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
                     let dx = (gx as f64) * ts;
                     let dy = (gy as f64) * ts;
-                    ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                        img, sx, sy, sw, sh, dx, dy, ts_draw, ts_draw,
-                    )?;
+                    // Only flip center-fill tiles (col=1,row=1) — edges must stay aligned
+                    if col == 1 && row == 1 && tile_flip(gx, gy) {
+                        draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
+                    } else {
+                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            img, sx, sy, sw, sh, dx, dy, ts, ts,
+                        )?;
+                    }
                 }
             }
         }
@@ -855,18 +838,28 @@ fn draw_tiles(
                         let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
                         let dx = (gx as f64) * ts;
                         let dy = (gy as f64) * ts;
-                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                            img, sx, sy, sw, sh, dx, dy, ts_draw, ts_draw,
-                        )?;
+                        // Only flip center-fill elevated tiles (col=6,row=1)
+                        if col == 6 && row == 1 && tile_flip(gx, gy) {
+                            draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
+                        } else {
+                            ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                                img, sx, sy, sw, sh, dx, dy, ts, ts,
+                            )?;
+                        }
 
                         if let Some((ccol, crow)) =
                             autotile::cliff_src(&game.grid, gx, gy, level)
                         {
                             let (csx, csy, csw, csh) = grid::tilemap_src_rect(ccol, crow);
                             let cdy = ((gy + 1) as f64) * ts;
-                            ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                                img, csx, csy, csw, csh, dx, cdy, ts_draw, ts_draw,
-                            )?;
+                            // Flip cliffs randomly for variety
+                            if tile_flip(gx, gy.wrapping_add(1000)) {
+                                draw_tile_flipped(ctx, img, csx, csy, csw, csh, dx, cdy, ts, ts)?;
+                            } else {
+                                ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                                    img, csx, csy, csw, csh, dx, cdy, ts, ts,
+                                )?;
+                            }
                         }
                     }
                 }
@@ -877,84 +870,44 @@ fn draw_tiles(
     Ok(())
 }
 
-fn draw_grid_lines(
-    ctx: &web_sys::CanvasRenderingContext2d,
-    min_gx: u32,
-    min_gy: u32,
-    max_gx: u32,
-    max_gy: u32,
-) -> Result<(), JsValue> {
-    let ts = TILE_SIZE as f64;
-    ctx.set_stroke_style_str("rgba(0,0,0,0.08)");
-    ctx.set_line_width(0.5);
-    ctx.begin_path();
-    // Vertical lines
-    for gx in min_gx..=max_gx {
-        let x = (gx as f64) * ts;
-        ctx.move_to(x, (min_gy as f64) * ts);
-        ctx.line_to(x, (max_gy as f64) * ts);
-    }
-    // Horizontal lines
-    for gy in min_gy..=max_gy {
-        let y = (gy as f64) * ts;
-        ctx.move_to((min_gx as f64) * ts, y);
-        ctx.line_to((max_gx as f64) * ts, y);
-    }
-    ctx.stroke();
-    Ok(())
-}
-
 fn draw_overlays(
     ctx: &web_sys::CanvasRenderingContext2d,
     game: &Game,
-    min_gx: u32,
-    min_gy: u32,
-    max_gx: u32,
-    max_gy: u32,
-    ts: f64,
-    preview_path: &[(u32, u32)],
+    _min_gx: u32,
+    _min_gy: u32,
+    _max_gx: u32,
+    _max_gy: u32,
+    _ts: f64,
     animator: &TurnAnimator,
 ) -> Result<(), JsValue> {
-    // Highlight player tile
+    // Player position indicator (circle under player)
     if let Some(player) = game.player_unit() {
-        let dx = (player.grid_x as f64) * ts + 1.0;
-        let dy = (player.grid_y as f64) * ts + 1.0;
-        let size = ts - 2.0;
-        ctx.set_fill_style_str("rgba(255,255,51,0.3)");
-        ctx.fill_rect(dx, dy, size, size);
-    }
+        ctx.set_fill_style_str("rgba(255,255,51,0.2)");
+        ctx.begin_path();
+        ctx.arc(player.x as f64, player.y as f64, 24.0, 0.0, std::f64::consts::TAU)?;
+        ctx.fill();
 
-    // Draw auto-move path preview
-    if game.auto_path_idx < game.auto_path.len() {
-        for i in game.auto_path_idx..game.auto_path.len() {
-            let (px, py) = game.auto_path[i];
-            let dx = (px as f64) * ts + 2.0;
-            let dy = (py as f64) * ts + 2.0;
-            let size = ts - 4.0;
-            let alpha = if i == game.auto_path.len() - 1 {
-                0.5 // destination brighter
-            } else {
-                0.25
-            };
-            ctx.set_fill_style_str(&format!("rgba(100,149,237,{})", alpha));
-            ctx.fill_rect(dx, dy, size, size);
-        }
-    }
+        // Aim direction indicator (wedge showing attack cone)
+        let aim = game.player_aim_dir as f64;
+        let half = ATTACK_CONE_HALF_ANGLE as f64;
+        let radius = 40.0_f64;
+        let px = player.x as f64;
+        let py = player.y as f64;
 
-    // Live swipe preview path (during gesture)
-    if !preview_path.is_empty() {
-        for (i, &(px, py)) in preview_path.iter().enumerate() {
-            let dx = (px as f64) * ts + 2.0;
-            let dy = (py as f64) * ts + 2.0;
-            let size = ts - 4.0;
-            let alpha = if i == preview_path.len() - 1 {
-                0.45
-            } else {
-                0.2
-            };
-            ctx.set_fill_style_str(&format!("rgba(255,255,255,{})", alpha));
-            ctx.fill_rect(dx, dy, size, size);
-        }
+        ctx.set_fill_style_str("rgba(255,255,100,0.12)");
+        ctx.begin_path();
+        ctx.move_to(px, py);
+        ctx.arc(px, py, radius, aim - half, aim + half)?;
+        ctx.close_path();
+        ctx.fill();
+
+        ctx.set_stroke_style_str("rgba(255,255,100,0.35)");
+        ctx.set_line_width(1.0);
+        ctx.begin_path();
+        ctx.move_to(px, py);
+        ctx.arc(px, py, radius, aim - half, aim + half)?;
+        ctx.close_path();
+        ctx.stroke();
     }
 
     // HP bars for alive units (use visual_alive during animation)
@@ -967,7 +920,7 @@ fn draw_overlays(
         if !show {
             continue;
         }
-        let (wx, wy) = (unit.visual_x, unit.visual_y);
+        let (wx, wy) = (unit.x, unit.y);
         let bar_width = 48.0_f64;
         let bar_height = 6.0_f64;
         let bar_y = (wy as f64) - (TILE_SIZE as f64) * 0.45;
@@ -1001,123 +954,297 @@ fn draw_overlays(
     Ok(())
 }
 
+/// Draw touch controls in screen space (virtual joystick + attack button).
+fn draw_touch_controls(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    input: &Input,
+    dpr: f64,
+) -> Result<(), JsValue> {
+    if !input.is_touch_device {
+        return Ok(());
+    }
+
+    // Virtual joystick (only when active)
+    if input.joystick.active {
+        // Base circle
+        ctx.set_global_alpha(0.25);
+        ctx.set_fill_style_str("rgba(255,255,255,0.3)");
+        ctx.begin_path();
+        ctx.arc(
+            input.joystick.center_x as f64,
+            input.joystick.center_y as f64,
+            input.joystick.max_radius as f64,
+            0.0,
+            std::f64::consts::TAU,
+        )?;
+        ctx.fill();
+
+        // Stick knob
+        ctx.set_global_alpha(0.6);
+        ctx.set_fill_style_str("rgba(255,255,255,0.6)");
+        ctx.begin_path();
+        ctx.arc(
+            input.joystick.stick_x as f64,
+            input.joystick.stick_y as f64,
+            20.0 * dpr,
+            0.0,
+            std::f64::consts::TAU,
+        )?;
+        ctx.fill();
+    }
+
+    // Attack button (always visible on touch device)
+    let btn = &input.attack_button;
+    let alpha = if btn.pressed { 0.7 } else { 0.4 };
+    ctx.set_global_alpha(alpha);
+    ctx.set_fill_style_str("rgba(220,50,50,0.6)");
+    ctx.begin_path();
+    ctx.arc(
+        btn.center_x as f64,
+        btn.center_y as f64,
+        btn.radius as f64,
+        0.0,
+        std::f64::consts::TAU,
+    )?;
+    ctx.fill();
+
+    // Button label
+    ctx.set_global_alpha(0.9);
+    ctx.set_fill_style_str("white");
+    ctx.set_font(&format!("bold {}px monospace", (14.0 * dpr) as u32));
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+    ctx.fill_text("ATK", btn.center_x as f64, btn.center_y as f64)?;
+
+    ctx.set_global_alpha(1.0);
+    Ok(())
+}
+
+/// A drawable entity for Y-sorted rendering.
+enum Drawable {
+    Unit(usize),       // index into game.units
+    Tree(u32, u32),    // (gx, gy)
+    Rock(u32, u32),    // (gx, gy)
+    Particle(usize),   // index into game.particles
+}
+
 fn draw_foreground(
     ctx: &web_sys::CanvasRenderingContext2d,
     game: &Game,
     loaded: &LoadedTextures,
     tm: &TextureManager,
     animator: &TurnAnimator,
+    min_gx: u32,
+    min_gy: u32,
+    max_gx: u32,
+    max_gy: u32,
 ) -> Result<(), JsValue> {
-    // Unit sprites (sorted by Y for proper layering)
-    let mut unit_indices: Vec<usize> = game
-        .units
-        .iter()
-        .enumerate()
-        .filter(|(_, u)| {
-            if animator.is_playing() {
-                animator.is_visually_alive(u.id) || u.death_fade > 0.0
-            } else {
-                u.alive || u.death_fade > 0.0
+    let ts = TILE_SIZE as f64;
+
+    // Player position for tree transparency
+    let player_pos = game.player_unit().map(|u| (u.x as f64, u.y as f64));
+
+    // Collect all drawable entities with their Y-sort key (foot position)
+    let mut drawables: Vec<(f64, Drawable)> = Vec::new();
+
+    // Units
+    for (i, u) in game.units.iter().enumerate() {
+        let visible = if animator.is_playing() {
+            animator.is_visually_alive(u.id) || u.death_fade > 0.0
+        } else {
+            u.alive || u.death_fade > 0.0
+        };
+        if visible {
+            drawables.push((u.y as f64, Drawable::Unit(i)));
+        }
+    }
+
+    // Trees and rocks (visible range only)
+    for gy in min_gy..max_gy {
+        for gx in min_gx..max_gx {
+            let tile = game.grid.get(gx, gy);
+            let foot_y = ((gy + 1) as f64) * ts;
+            match tile {
+                TileKind::Forest if !loaded.tree_textures.is_empty() => {
+                    drawables.push((foot_y, Drawable::Tree(gx, gy)));
+                }
+                TileKind::Rock if !loaded.rock_textures.is_empty() => {
+                    drawables.push((foot_y, Drawable::Rock(gx, gy)));
+                }
+                _ => {}
             }
-        })
-        .map(|(i, _)| i)
-        .collect();
-    unit_indices.sort_by(|&a, &b| {
-        game.units[a]
-            .visual_y
-            .partial_cmp(&game.units[b].visual_y)
+        }
+    }
+
+    // Particles
+    for (i, _) in game.particles.iter().enumerate() {
+        drawables.push((game.particles[i].world_y as f64, Drawable::Particle(i)));
+    }
+
+    // Sort by Y (foot position), then by X for stability
+    drawables.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then(
-                game.units[a]
-                    .visual_x
-                    .partial_cmp(&game.units[b].visual_x)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
     });
 
-    for &idx in &unit_indices {
-        let unit = &game.units[idx];
-        let key = UnitTextureKey {
-            faction: unit.faction,
-            kind: unit.kind,
-            anim: unit.current_anim,
-        };
-
-        let tex_id = match loaded.unit_textures.get(&key) {
-            Some(&id) => id,
-            None => {
-                let fallback_key = UnitTextureKey {
+    // Draw in Y order
+    for (_, drawable) in &drawables {
+        match drawable {
+            Drawable::Unit(idx) => {
+                let unit = &game.units[*idx];
+                let key = UnitTextureKey {
                     faction: unit.faction,
                     kind: unit.kind,
-                    anim: UnitAnim::Idle,
+                    anim: unit.current_anim,
                 };
-                match loaded.unit_textures.get(&fallback_key) {
+
+                let tex_id = match loaded.unit_textures.get(&key) {
                     Some(&id) => id,
-                    None => continue,
+                    None => {
+                        let fallback_key = UnitTextureKey {
+                            faction: unit.faction,
+                            kind: unit.kind,
+                            anim: UnitAnim::Idle,
+                        };
+                        match loaded.unit_textures.get(&fallback_key) {
+                            Some(&id) => id,
+                            None => continue,
+                        }
+                    }
+                };
+
+                if let Some((img, frame_w, frame_h, _)) = tm.get_image(tex_id) {
+                    let sheet = SpriteSheet {
+                        frame_width: frame_w,
+                        frame_height: frame_h,
+                        frame_count: unit.animation.frame_count,
+                    };
+                    let (sx, sy, sw, sh) = sheet.frame_src_rect(unit.animation.current_frame);
+                    let sprite_size = unit.kind.frame_size() as f64;
+
+                    let opacity = if !unit.alive {
+                        (unit.death_fade / DEATH_FADE_DURATION).clamp(0.0, 1.0) as f64
+                    } else if unit.hit_flash > 0.0
+                        && (unit.hit_flash * 30.0) as i32 % 2 == 0
+                    {
+                        0.3
+                    } else {
+                        1.0
+                    };
+
+                    let dx = (unit.x as f64) - sprite_size / 2.0;
+                    let dy = (unit.y as f64) - sprite_size / 2.0;
+
+                    draw_sprite(
+                        ctx, img, sx, sy, sw, sh, dx, dy,
+                        sprite_size, sprite_size,
+                        unit.facing == Facing::Left, opacity,
+                    )?;
                 }
             }
-        };
 
-        if let Some((img, frame_w, frame_h, _)) = tm.get_image(tex_id) {
-            let sheet = SpriteSheet {
-                frame_width: frame_w,
-                frame_height: frame_h,
-                frame_count: unit.animation.frame_count,
-            };
-            let (sx, sy, sw, sh) = sheet.frame_src_rect(unit.animation.current_frame);
-            let (wx, wy) = (unit.visual_x, unit.visual_y);
-            let sprite_size = unit.kind.frame_size() as f64;
+            Drawable::Tree(gx, gy) => {
+                let variant_idx =
+                    (gx.wrapping_mul(31).wrapping_add(gy.wrapping_mul(17))) as usize
+                        % loaded.tree_textures.len();
+                let (tex_id, frame_w, frame_h) = loaded.tree_textures[variant_idx];
 
-            let opacity = if unit.alive {
-                1.0
-            } else {
-                (unit.death_fade / DEATH_FADE_DURATION).clamp(0.0, 1.0) as f64
-            };
+                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                    let fw = frame_w as f64;
+                    let fh = frame_h as f64;
 
-            let dx = (wx as f64) - sprite_size / 2.0;
-            let dy = (wy as f64) - sprite_size / 2.0;
+                    let draw_w = ts * 3.0;
+                    let draw_h = draw_w * (fh / fw);
+                    let dx = (*gx as f64) * ts + ts / 2.0 - draw_w / 2.0;
+                    let dy = (*gy as f64) * ts + ts - draw_h;
 
-            draw_sprite(
-                ctx,
-                img,
-                sx,
-                sy,
-                sw,
-                sh,
-                dx,
-                dy,
-                sprite_size,
-                sprite_size,
-                unit.facing == Facing::Left,
-                opacity,
-            )?;
+                    // Tree center in world coords
+                    let tree_cx = (*gx as f64) * ts + ts / 2.0;
+                    let tree_cy = (*gy as f64) * ts + ts / 2.0;
+
+                    // Semi-transparent when near the player to avoid hiding them
+                    let alpha = if let Some((px, py)) = player_pos {
+                        let dist_x = (tree_cx - px).abs();
+                        let dist_y = (tree_cy - py).abs();
+                        let dist = (dist_x * dist_x + dist_y * dist_y).sqrt();
+                        let fade_start = ts * 2.5; // start fading at 2.5 tiles
+                        let fade_end = ts * 1.0;   // fully transparent at 1 tile
+                        if dist < fade_end {
+                            0.3
+                        } else if dist < fade_start {
+                            let t = (dist - fade_end) / (fade_start - fade_end);
+                            0.3 + t * 0.7
+                        } else {
+                            1.0
+                        }
+                    } else {
+                        1.0
+                    };
+
+                    if (alpha - 1.0).abs() > 0.001 {
+                        ctx.set_global_alpha(alpha);
+                    }
+
+                    if tile_flip(*gx, *gy) {
+                        draw_tile_flipped(ctx, img, 0.0, 0.0, fw, fh, dx, dy, draw_w, draw_h)?;
+                    } else {
+                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            img, 0.0, 0.0, fw, fh, dx, dy, draw_w, draw_h,
+                        )?;
+                    }
+
+                    if (alpha - 1.0).abs() > 0.001 {
+                        ctx.set_global_alpha(1.0);
+                    }
+                }
+            }
+
+            Drawable::Rock(gx, gy) => {
+                let variant_idx =
+                    (gx.wrapping_mul(13).wrapping_add(gy.wrapping_mul(29))) as usize
+                        % loaded.rock_textures.len();
+                let tex_id = loaded.rock_textures[variant_idx];
+
+                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                    let dx = (*gx as f64) * ts;
+                    let dy = (*gy as f64) * ts;
+
+                    if tile_flip(*gx, *gy) {
+                        draw_tile_flipped(ctx, img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts)?;
+                    } else {
+                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
+                        )?;
+                    }
+                }
+            }
+
+            Drawable::Particle(idx) => {
+                let particle = &game.particles[*idx];
+                let filename = particle.kind.asset_filename();
+                let tex_id = match loaded.particle_textures.get(filename) {
+                    Some(&id) => id,
+                    None => continue,
+                };
+
+                if let Some((img, frame_w, frame_h, _)) = tm.get_image(tex_id) {
+                    let sheet = SpriteSheet {
+                        frame_width: frame_w,
+                        frame_height: frame_h,
+                        frame_count: particle.animation.frame_count,
+                    };
+                    let (sx, sy, sw, sh) = sheet.frame_src_rect(particle.animation.current_frame);
+                    let size = particle.kind.frame_size() as f64;
+                    let dx = (particle.world_x as f64) - size / 2.0;
+                    let dy = (particle.world_y as f64) - size / 2.0;
+
+                    draw_sprite(ctx, img, sx, sy, sw, sh, dx, dy, size, size, false, 1.0)?;
+                }
+            }
         }
     }
 
-    // Particle sprites
-    for particle in &game.particles {
-        let filename = particle.kind.asset_filename();
-        let tex_id = match loaded.particle_textures.get(filename) {
-            Some(&id) => id,
-            None => continue,
-        };
-
-        if let Some((img, frame_w, frame_h, _)) = tm.get_image(tex_id) {
-            let sheet = SpriteSheet {
-                frame_width: frame_w,
-                frame_height: frame_h,
-                frame_count: particle.animation.frame_count,
-            };
-            let (sx, sy, sw, sh) = sheet.frame_src_rect(particle.animation.current_frame);
-            let size = particle.kind.frame_size() as f64;
-            let dx = (particle.world_x as f64) - size / 2.0;
-            let dy = (particle.world_y as f64) - size / 2.0;
-
-            draw_sprite(ctx, img, sx, sy, sw, sh, dx, dy, size, size, false, 1.0)?;
-        }
-    }
-
-    // Arrow projectiles
+    // Arrow projectiles (drawn last — they fly above everything)
     if let Some(&arrow_tex_id) = loaded.arrow_texture.as_ref() {
         if let Some((img, _, _, _)) = tm.get_image(arrow_tex_id) {
             for proj in &game.projectiles {
@@ -1142,58 +1269,6 @@ fn draw_foreground(
     Ok(())
 }
 
-fn draw_trees(
-    ctx: &web_sys::CanvasRenderingContext2d,
-    game: &Game,
-    loaded: &LoadedTextures,
-    tm: &TextureManager,
-    min_gx: u32,
-    min_gy: u32,
-    max_gx: u32,
-    max_gy: u32,
-    _elapsed: f64,
-) -> Result<(), JsValue> {
-    if loaded.tree_textures.is_empty() {
-        return Ok(());
-    }
-
-    let ts = TILE_SIZE as f64;
-
-    for gy in min_gy..max_gy {
-        for gx in min_gx..max_gx {
-            if game.grid.get(gx, gy) != TileKind::Forest {
-                continue;
-            }
-
-            // Only draw on every other tile to avoid overlap
-            if (gx + gy) % 2 != 0 {
-                continue;
-            }
-
-            let variant_idx =
-                (gx.wrapping_mul(31).wrapping_add(gy.wrapping_mul(17))) as usize
-                    % loaded.tree_textures.len();
-            let (tex_id, frame_w, frame_h) = loaded.tree_textures[variant_idx];
-
-            if let Some((img, _, _, _)) = tm.get_image(tex_id) {
-                let fw = frame_w as f64;
-                let fh = frame_h as f64;
-
-                // Static: always use frame 0, draw at 2-tile width scaled proportionally
-                let draw_w = ts * 2.0;
-                let draw_h = draw_w * (fh / fw);
-                let dx = (gx as f64) * ts + ts / 2.0 - draw_w / 2.0;
-                let dy = (gy as f64) * ts + ts - draw_h;
-
-                ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                    img, 0.0, 0.0, fw, fh, dx, dy, draw_w, draw_h,
-                )?;
-            }
-        }
-    }
-
-    Ok(())
-}
 
 /// Update the offscreen fog canvas (1px per tile) using direct pixel manipulation.
 /// Only called when game.fog_dirty is true (i.e. after player moves).
