@@ -59,6 +59,10 @@ struct LoadedTextures {
     tree_textures: Vec<(TextureId, u32, u32)>,
     /// Rock decoration textures: single 64x64 sprites for 4 variants
     rock_textures: Vec<TextureId>,
+    /// Pre-flipped tree canvases: (canvas, frame_w, frame_h) for each variant
+    tree_textures_flipped: Vec<(web_sys::HtmlCanvasElement, u32, u32)>,
+    /// Pre-flipped rock canvases: one per variant
+    rock_textures_flipped: Vec<web_sys::HtmlCanvasElement>,
 }
 
 impl LoadedTextures {
@@ -74,6 +78,8 @@ impl LoadedTextures {
             foam_texture: None,
             tree_textures: Vec::new(),
             rock_textures: Vec::new(),
+            tree_textures_flipped: Vec::new(),
+            rock_textures_flipped: Vec::new(),
         }
     }
 }
@@ -155,6 +161,18 @@ pub fn run(
         .unwrap()
         .dyn_into::<web_sys::CanvasRenderingContext2d>()?;
 
+    // Create offscreen terrain cache canvas (full grid pre-rendered once)
+    let terrain_size = grid::GRID_SIZE * (TILE_SIZE as u32);
+    let terrain_canvas = document
+        .create_element("canvas")?
+        .dyn_into::<web_sys::HtmlCanvasElement>()?;
+    terrain_canvas.set_width(terrain_size);
+    terrain_canvas.set_height(terrain_size);
+    let terrain_ctx = terrain_canvas
+        .get_context("2d")?
+        .unwrap()
+        .dyn_into::<web_sys::CanvasRenderingContext2d>()?;
+
     let state = Rc::new(RefCell::new(LoopState {
         canvas2d,
         game,
@@ -163,6 +181,9 @@ pub fn run(
         elapsed: 0.0,
         fog_canvas,
         fog_ctx,
+        terrain_canvas,
+        terrain_ctx,
+        terrain_dirty: true,
         animator: TurnAnimator::new(),
     }));
 
@@ -502,7 +523,6 @@ async fn load_textures(
         (UnitKind::Warrior, "Warrior"),
         (UnitKind::Archer, "Archer"),
         (UnitKind::Lancer, "Lancer"),
-        (UnitKind::Pawn, "Pawn"),
         (UnitKind::Monk, "Monk"),
     ];
     let anims = [
@@ -524,9 +544,6 @@ async fn load_textures(
                     (UnitKind::Lancer, UnitAnim::Idle) => ("Lancer_Idle.png", 12),
                     (UnitKind::Lancer, UnitAnim::Run) => ("Lancer_Run.png", 6),
                     (UnitKind::Lancer, UnitAnim::Attack) => ("Lancer_Right_Attack.png", 3),
-                    (UnitKind::Pawn, UnitAnim::Idle) => ("Pawn_Idle.png", 8),
-                    (UnitKind::Pawn, UnitAnim::Run) => ("Pawn_Run.png", 6),
-                    (UnitKind::Pawn, UnitAnim::Attack) => ("Pawn_Interact Axe.png", 6),
                     (UnitKind::Monk, UnitAnim::Idle) => ("Idle.png", 6),
                     (UnitKind::Monk, UnitAnim::Run) => ("Run.png", 4),
                     (UnitKind::Monk, UnitAnim::Attack) => ("Heal.png", 11),
@@ -636,6 +653,73 @@ async fn load_textures(
         loaded.borrow_mut().rock_textures.push(tex_id);
     }
 
+    // Pre-flip tree and rock textures at load time (eliminates per-frame save/translate/scale/restore)
+    {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let guard = state.borrow();
+        let tm = &guard.texture_manager;
+        let loaded_ref = loaded.borrow();
+
+        let mut tree_flipped = Vec::new();
+        for &(tex_id, fw, fh) in &loaded_ref.tree_textures {
+            if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                let c = document
+                    .create_element("canvas")
+                    .unwrap()
+                    .dyn_into::<web_sys::HtmlCanvasElement>()
+                    .unwrap();
+                c.set_width(fw);
+                c.set_height(fh);
+                let fctx = c
+                    .get_context("2d")
+                    .unwrap()
+                    .unwrap()
+                    .dyn_into::<web_sys::CanvasRenderingContext2d>()
+                    .unwrap();
+                let _ = fctx.translate(fw as f64, 0.0);
+                let _ = fctx.scale(-1.0, 1.0);
+                let _ = fctx
+                    .draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                        img, 0.0, 0.0, fw as f64, fh as f64, 0.0, 0.0, fw as f64, fh as f64,
+                    );
+                tree_flipped.push((c, fw, fh));
+            }
+        }
+
+        let mut rock_flipped = Vec::new();
+        for &tex_id in &loaded_ref.rock_textures {
+            if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                let c = document
+                    .create_element("canvas")
+                    .unwrap()
+                    .dyn_into::<web_sys::HtmlCanvasElement>()
+                    .unwrap();
+                c.set_width(64);
+                c.set_height(64);
+                let fctx = c
+                    .get_context("2d")
+                    .unwrap()
+                    .unwrap()
+                    .dyn_into::<web_sys::CanvasRenderingContext2d>()
+                    .unwrap();
+                let _ = fctx.translate(64.0, 0.0);
+                let _ = fctx.scale(-1.0, 1.0);
+                let _ = fctx
+                    .draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                        img, 0.0, 0.0, 64.0, 64.0, 0.0, 0.0, 64.0, 64.0,
+                    );
+                rock_flipped.push(c);
+            }
+        }
+
+        drop(loaded_ref);
+        drop(guard);
+
+        let mut loaded_mut = loaded.borrow_mut();
+        loaded_mut.tree_textures_flipped = tree_flipped;
+        loaded_mut.rock_textures_flipped = rock_flipped;
+    }
+
     Ok(())
 }
 
@@ -644,6 +728,17 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     if state.game.fog_dirty {
         update_fog_canvas(&state.fog_ctx, &state.game)?;
         state.game.fog_dirty = false;
+    }
+
+    // Render terrain cache once (all static layers pre-rendered to offscreen canvas)
+    if state.terrain_dirty {
+        render_terrain_cache(
+            &state.terrain_ctx,
+            &state.game,
+            loaded,
+            &state.texture_manager,
+        )?;
+        state.terrain_dirty = false;
     }
 
     let ctx = &state.canvas2d.ctx;
@@ -659,14 +754,16 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     ctx.fill_rect(0.0, 0.0, canvas_w, canvas_h);
 
     // 2. Apply camera transform
+    // Snap the screen-space offset to integer pixels so all tile edges align perfectly.
+    // screen_x = zoom * (world_x - cam) + viewport/2, so snapping
+    // (viewport/2 - zoom * cam) to integer ensures every tile corner is pixel-exact
+    // (since zoom is snapped to 1/64 steps, zoom * 64 is always integer).
     let zoom = game.camera.zoom as f64;
+    let offset_x = (canvas_w / 2.0 - zoom * (game.camera.x as f64)).round();
+    let offset_y = (canvas_h / 2.0 - zoom * (game.camera.y as f64)).round();
     ctx.save();
-    ctx.translate(canvas_w / 2.0, canvas_h / 2.0)?;
+    ctx.translate(offset_x, offset_y)?;
     ctx.scale(zoom, zoom)?;
-    // Snap camera to pixel grid to prevent sub-pixel rendering artifacts
-    let cam_x = (game.camera.x as f64).round();
-    let cam_y = (game.camera.y as f64).round();
-    ctx.translate(-cam_x, -cam_y)?;
 
     // Visible tile range
     let (vl, vt, vr, vb) = game.camera.visible_rect();
@@ -675,18 +772,9 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     let max_gx = ((vr / TILE_SIZE).ceil() as i32).min(game.grid.width as i32) as u32;
     let max_gy = ((vb / TILE_SIZE).ceil() as i32).min(game.grid.height as i32) as u32;
 
-    // 3. Draw terrain tiles
-    draw_tiles(
-        ctx,
-        game,
-        loaded,
-        tm,
-        min_gx,
-        min_gy,
-        max_gx,
-        max_gy,
-        state.elapsed,
-    )?;
+    // 3. Blit cached terrain (single draw call) + animated foam
+    ctx.draw_image_with_html_canvas_element(&state.terrain_canvas, 0.0, 0.0)?;
+    draw_foam(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy, state.elapsed)?;
 
     // 4. Draw overlays (player highlight, HP bars, path line, attack target)
     draw_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy, ts, &state.animator)?;
@@ -713,24 +801,23 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     Ok(())
 }
 
-fn draw_tiles(
+/// Render all static terrain layers to the offscreen terrain cache canvas.
+/// Called once after textures load; the result is blitted each frame.
+fn render_terrain_cache(
     ctx: &web_sys::CanvasRenderingContext2d,
     game: &Game,
     loaded: &LoadedTextures,
     tm: &TextureManager,
-    min_gx: u32,
-    min_gy: u32,
-    max_gx: u32,
-    max_gy: u32,
-    elapsed: f64,
 ) -> Result<(), JsValue> {
     let ts = TILE_SIZE as f64;
+    let w = game.grid.width;
+    let h = game.grid.height;
 
-    // Layer 1: Water background
+    // Layer 1: Water background (full grid)
     if let Some(water_tex_id) = loaded.water_texture {
         if let Some((img, _, _, _)) = tm.get_image(water_tex_id) {
-            for gy in min_gy..max_gy {
-                for gx in min_gx..max_gx {
+            for gy in 0..h {
+                for gx in 0..w {
                     let dx = (gx as f64) * ts;
                     let dy = (gy as f64) * ts;
                     ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
@@ -741,38 +828,11 @@ fn draw_tiles(
         }
     }
 
-    // Layer 2: Water foam (on land tiles adjacent to water)
-    if let Some(foam_tex_id) = loaded.foam_texture {
-        if let Some((img, _, _, _)) = tm.get_image(foam_tex_id) {
-            let foam_fps = 8.0;
-            let global_frame = (elapsed * foam_fps) as u32;
-
-            for gy in min_gy..max_gy {
-                for gx in min_gx..max_gx {
-                    let idx = (gy * game.grid.width + gx) as usize;
-                    if !game.water_adjacency.get(idx).copied().unwrap_or(false) {
-                        continue;
-                    }
-                    let tile_offset =
-                        (gx.wrapping_mul(7).wrapping_add(gy.wrapping_mul(13))) % 16;
-                    let frame = (global_frame + tile_offset) % 16;
-                    let foam_size = 192.0_f64;
-                    let sx = (frame as f64) * foam_size;
-                    let dx = (gx as f64) * ts + ts / 2.0 - foam_size / 2.0;
-                    let dy = (gy as f64) * ts + ts / 2.0 - foam_size / 2.0;
-                    ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                        img, sx, 0.0, foam_size, foam_size, dx, dy, foam_size, foam_size,
-                    )?;
-                }
-            }
-        }
-    }
-
-    // Layer 3: Flat ground (auto-tiled, center-fill tiles randomly flipped)
+    // Layer 3: Flat ground (auto-tiled, flips amortized since drawn once)
     if let Some(tilemap_tex_id) = loaded.tilemap_texture {
         if let Some((img, _, _, _)) = tm.get_image(tilemap_tex_id) {
-            for gy in min_gy..max_gy {
-                for gx in min_gx..max_gx {
+            for gy in 0..h {
+                for gx in 0..w {
                     if !game.grid.get(gx, gy).is_land() {
                         continue;
                     }
@@ -780,7 +840,6 @@ fn draw_tiles(
                     let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
                     let dx = (gx as f64) * ts;
                     let dy = (gy as f64) * ts;
-                    // Only flip center-fill tiles (col=1,row=1) — edges must stay aligned
                     if col == 1 && row == 1 && tile_flip(gx, gy) {
                         draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
                     } else {
@@ -799,14 +858,12 @@ fn draw_tiles(
         if let Some(shadow_tex_id) = loaded.shadow_texture {
             if let Some((img, _, _, _)) = tm.get_image(shadow_tex_id) {
                 ctx.set_global_alpha(0.5);
-                for gy in min_gy..max_gy {
-                    for gx in min_gx..max_gx {
+                for gy in 0..h {
+                    for gx in 0..w {
                         if game.grid.elevation(gx, gy) < level {
                             continue;
                         }
-                        if gy + 1 < game.grid.height
-                            && game.grid.elevation(gx, gy + 1) < level
-                        {
+                        if gy + 1 < h && game.grid.elevation(gx, gy + 1) < level {
                             let shadow_size = 192.0_f64;
                             let dx = (gx as f64) * ts + ts / 2.0 - shadow_size / 2.0;
                             let dy = ((gy + 1) as f64) * ts + ts / 2.0 - shadow_size / 2.0;
@@ -828,8 +885,8 @@ fn draw_tiles(
         };
         if let Some(tilemap_tex_id) = elev_tex_id {
             if let Some((img, _, _, _)) = tm.get_image(tilemap_tex_id) {
-                for gy in min_gy..max_gy {
-                    for gx in min_gx..max_gx {
+                for gy in 0..h {
+                    for gx in 0..w {
                         if game.grid.elevation(gx, gy) < level {
                             continue;
                         }
@@ -838,7 +895,6 @@ fn draw_tiles(
                         let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
                         let dx = (gx as f64) * ts;
                         let dy = (gy as f64) * ts;
-                        // Only flip center-fill elevated tiles (col=6,row=1)
                         if col == 6 && row == 1 && tile_flip(gx, gy) {
                             draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
                         } else {
@@ -852,7 +908,6 @@ fn draw_tiles(
                         {
                             let (csx, csy, csw, csh) = grid::tilemap_src_rect(ccol, crow);
                             let cdy = ((gy + 1) as f64) * ts;
-                            // Flip cliffs randomly for variety
                             if tile_flip(gx, gy.wrapping_add(1000)) {
                                 draw_tile_flipped(ctx, img, csx, csy, csw, csh, dx, cdy, ts, ts)?;
                             } else {
@@ -862,6 +917,49 @@ fn draw_tiles(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Draw animated water foam (the only per-frame terrain layer).
+fn draw_foam(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    loaded: &LoadedTextures,
+    tm: &TextureManager,
+    min_gx: u32,
+    min_gy: u32,
+    max_gx: u32,
+    max_gy: u32,
+    elapsed: f64,
+) -> Result<(), JsValue> {
+    let ts = TILE_SIZE as f64;
+
+    if let Some(foam_tex_id) = loaded.foam_texture {
+        if let Some((img, _, _, _)) = tm.get_image(foam_tex_id) {
+            let foam_fps = 8.0;
+            let global_frame = (elapsed * foam_fps) as u32;
+
+            for gy in min_gy..max_gy {
+                for gx in min_gx..max_gx {
+                    let idx = (gy * game.grid.width + gx) as usize;
+                    if !game.water_adjacency.get(idx).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    let tile_offset =
+                        (gx.wrapping_mul(7).wrapping_add(gy.wrapping_mul(13))) % 16;
+                    let frame = (global_frame + tile_offset) % 16;
+                    let foam_size = 192.0_f64;
+                    let sx = (frame as f64) * foam_size;
+                    let dx = (gx as f64) * ts + ts / 2.0 - foam_size / 2.0;
+                    let dy = (gy as f64) * ts + ts / 2.0 - foam_size / 2.0;
+                    ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                        img, sx, 0.0, foam_size, foam_size, dx, dy, foam_size, foam_size,
+                    )?;
                 }
             }
         }
@@ -1186,7 +1284,11 @@ fn draw_foreground(
                     }
 
                     if tile_flip(*gx, *gy) {
-                        draw_tile_flipped(ctx, img, 0.0, 0.0, fw, fh, dx, dy, draw_w, draw_h)?;
+                        if let Some((flipped, _, _)) = loaded.tree_textures_flipped.get(variant_idx) {
+                            ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                                flipped, 0.0, 0.0, fw, fh, dx, dy, draw_w, draw_h,
+                            )?;
+                        }
                     } else {
                         ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
                             img, 0.0, 0.0, fw, fh, dx, dy, draw_w, draw_h,
@@ -1210,7 +1312,11 @@ fn draw_foreground(
                     let dy = (*gy as f64) * ts;
 
                     if tile_flip(*gx, *gy) {
-                        draw_tile_flipped(ctx, img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts)?;
+                        if let Some(flipped) = loaded.rock_textures_flipped.get(variant_idx) {
+                            ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                                flipped, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
+                            )?;
+                        }
                     } else {
                         ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
                             img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
@@ -1359,5 +1465,8 @@ struct LoopState {
     elapsed: f64,
     fog_canvas: web_sys::HtmlCanvasElement,
     fog_ctx: web_sys::CanvasRenderingContext2d,
+    terrain_canvas: web_sys::HtmlCanvasElement,
+    terrain_ctx: web_sys::CanvasRenderingContext2d,
+    terrain_dirty: bool,
     animator: TurnAnimator,
 }
