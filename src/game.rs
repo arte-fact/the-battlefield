@@ -1339,6 +1339,8 @@ impl Game {
             self.camera.x += (pvx - self.camera.x) * lerp;
             self.camera.y += (pvy - self.camera.y) * lerp;
         }
+        let world_size = GRID_SIZE as f32 * TILE_SIZE;
+        self.camera.clamp_to_world(world_size, world_size);
     }
 
     pub fn is_player_alive(&self) -> bool {
@@ -1438,8 +1440,8 @@ impl Game {
     pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
         self.grid = mapgen::generate_battlefield(seed);
 
-        let (blue_x, blue_y) = mapgen::blue_spawn_area(); // (5, 5)
-        let (red_x, red_y) = mapgen::red_spawn_area();     // (58, 58)
+        let (blue_x, blue_y) = mapgen::blue_spawn_area();
+        let (red_x, red_y) = mapgen::red_spawn_area();
 
         // Each faction's objective is the other faction's base
         self.blue_objective = grid::grid_to_world(red_x, red_y);
@@ -1455,8 +1457,8 @@ impl Game {
         ];
 
         // Blue rally point for initial army spawn
-        let blue_rally_gx = self.bases[0].rally_gx; // 5
-        let blue_rally_gy = self.bases[0].rally_gy; // 10
+        let blue_rally_gx = self.bases[0].rally_gx;
+        let blue_rally_gy = self.bases[0].rally_gy;
 
         // Blue army (player side) — 16 units at rally point
         // Front line: player warrior + 4 warriors
@@ -1479,8 +1481,8 @@ impl Game {
         self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_rally_gx.saturating_sub(3), blue_rally_gy.saturating_sub(1), false);
 
         // Red rally point for initial army spawn
-        let red_rally_gx = self.bases[1].rally_gx; // 58
-        let red_rally_gy = self.bases[1].rally_gy; // 53
+        let red_rally_gx = self.bases[1].rally_gx;
+        let red_rally_gy = self.bases[1].rally_gy;
 
         // Red army (enemy side) — 15 units at rally point
         // Front line: 5 warriors
@@ -1670,9 +1672,11 @@ mod tests {
     #[test]
     fn fov_player_tile_visible() {
         let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 32, 32, true);
+        // Place in center of playable area
+        let c = GRID_SIZE / 2;
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, c, c, true);
         game.compute_fov();
-        let idx = (32 * GRID_SIZE + 32) as usize;
+        let idx = (c * GRID_SIZE + c) as usize;
         assert!(game.visible[idx]);
         assert!(game.revealed[idx]);
     }
@@ -1680,11 +1684,12 @@ mod tests {
     #[test]
     fn fov_nearby_tiles_visible() {
         let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 32, 32, true);
+        let c = GRID_SIZE / 2;
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, c, c, true);
         game.compute_fov();
         for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
-            let x = (32 + dx) as u32;
-            let y = (32 + dy) as u32;
+            let x = (c as i32 + dx) as u32;
+            let y = (c as i32 + dy) as u32;
             let idx = (y * GRID_SIZE + x) as usize;
             assert!(game.visible[idx], "Tile ({x},{y}) should be visible");
         }
@@ -1693,18 +1698,18 @@ mod tests {
     #[test]
     fn fov_far_tiles_not_visible() {
         let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 20, 20, true);
         game.compute_fov();
-        let idx = (60 * GRID_SIZE + 60) as usize;
+        let idx = (100 * GRID_SIZE + 100) as usize;
         assert!(!game.visible[idx]);
     }
 
     #[test]
     fn fov_revealed_persists_after_move() {
         let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 10, 10, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 30, 30, true);
         game.compute_fov();
-        let idx_near = (10 * GRID_SIZE + 12) as usize;
+        let idx_near = (30 * GRID_SIZE + 32) as usize;
         assert!(game.revealed[idx_near]);
         game.player_step(SwipeDir::W);
         assert!(game.revealed[idx_near]);
@@ -1793,26 +1798,26 @@ mod tests {
     #[test]
     fn ai_ignores_distant_enemies() {
         let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 50, 50, false);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 20, 20, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 80, 80, false);
         game.player_step(SwipeDir::E);
         let enemy = game
             .units
             .iter()
             .find(|u| u.faction == Faction::Red && u.alive)
             .unwrap();
-        assert_eq!(enemy.grid_cell(), (50, 50), "Distant AI should not move");
+        assert_eq!(enemy.grid_cell(), (80, 80), "Distant AI should not move");
     }
 
     #[test]
     fn ai_paths_around_obstacle() {
         let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 10, 5, false);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 20, 20, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 25, 20, false);
         for y in 0..GRID_SIZE {
-            game.grid.set(8, y, TileKind::Water);
+            game.grid.set(23, y, TileKind::Water);
         }
-        game.grid.set(8, 3, TileKind::Grass);
+        game.grid.set(23, 18, TileKind::Grass);
         game.player_step(SwipeDir::E);
         let enemy = game
             .units
@@ -1820,7 +1825,7 @@ mod tests {
             .find(|u| u.faction == Faction::Red && u.alive)
             .unwrap();
         assert!(
-            enemy.grid_cell() != (10, 5),
+            enemy.grid_cell() != (25, 20),
             "AI should path around water obstacle"
         );
     }
@@ -2108,8 +2113,10 @@ mod tests {
     fn tick_zones_updates_capture_progress() {
         let mut game = Game::new(960.0, 640.0);
         game.zone_manager = ZoneManager::create_default_zones();
-        // Place a Blue unit inside zone 0 (center_gx=16, center_gy=16)
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 16, 16, false);
+        let z0gx = game.zone_manager.zones[0].center_gx;
+        let z0gy = game.zone_manager.zones[0].center_gy;
+        // Place a Blue unit inside zone 0
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, z0gx, z0gy, false);
         game.tick_zones(4.0);
         assert!(
             game.zone_manager.zones[0].progress > 0.0,
@@ -2119,12 +2126,14 @@ mod tests {
 
     #[test]
     fn ai_targets_zone_not_spawn() {
+        use crate::grid::{BORDER_SIZE, PLAYABLE_SIZE};
         let mut game = Game::new(960.0, 640.0);
         game.zone_manager = ZoneManager::create_default_zones();
-        game.blue_objective = grid::grid_to_world(58, 58);
-        // All zones neutral — Blue should target nearest zone (16,16), not enemy base
+        let red_spawn = BORDER_SIZE + PLAYABLE_SIZE - 6;
+        game.blue_objective = grid::grid_to_world(red_spawn, red_spawn);
+        // All zones neutral — Blue should target nearest zone, not enemy base
         let obj = game.faction_objective(Faction::Blue);
-        let (base_wx, _) = grid::grid_to_world(58, 58);
+        let (base_wx, _) = grid::grid_to_world(red_spawn, red_spawn);
         assert!(
             obj.0 < base_wx,
             "Blue should target a zone (x < {base_wx}), got x={}", obj.0
@@ -2133,9 +2142,10 @@ mod tests {
 
     #[test]
     fn production_spawns_units() {
+        use crate::grid::BORDER_SIZE;
         let mut game = Game::new(960.0, 640.0);
         game.bases = vec![FactionBase::create_blue_base()];
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 10, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, BORDER_SIZE + 5, BORDER_SIZE + 10, true);
         let count_before = game.units.len();
         // Tick production for enough time to produce a full group (~40s) + dispatch
         for _ in 0..420 {

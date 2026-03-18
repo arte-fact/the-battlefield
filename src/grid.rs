@@ -32,7 +32,9 @@ impl TileKind {
     }
 }
 
-pub const GRID_SIZE: u32 = 64;
+pub const PLAYABLE_SIZE: u32 = 96;
+pub const BORDER_SIZE: u32 = 32;
+pub const GRID_SIZE: u32 = PLAYABLE_SIZE + 2 * BORDER_SIZE; // 160
 
 /// Decorative elements that sit on top of tiles without affecting gameplay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,7 +43,7 @@ pub enum Decoration {
     WaterRock,
 }
 
-/// The battlefield grid: a 64x64 array of tiles.
+/// The battlefield grid: a GRID_SIZE x GRID_SIZE array of tiles.
 pub struct Grid {
     tiles: Vec<TileKind>,
     elevations: Vec<u8>,
@@ -327,7 +329,7 @@ mod tests {
     fn new_grass_grid() {
         let grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
         assert_eq!(grid.get(0, 0), TileKind::Grass);
-        assert_eq!(grid.get(63, 63), TileKind::Grass);
+        assert_eq!(grid.get(GRID_SIZE - 1, GRID_SIZE - 1), TileKind::Grass);
     }
 
     #[test]
@@ -342,9 +344,9 @@ mod tests {
     fn in_bounds() {
         let grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
         assert!(grid.in_bounds(0, 0));
-        assert!(grid.in_bounds(63, 63));
+        assert!(grid.in_bounds(GRID_SIZE as i32 - 1, GRID_SIZE as i32 - 1));
         assert!(!grid.in_bounds(-1, 0));
-        assert!(!grid.in_bounds(64, 0));
+        assert!(!grid.in_bounds(GRID_SIZE as i32, 0));
     }
 
     #[test]
@@ -382,7 +384,7 @@ mod tests {
     fn elevation_defaults_to_zero() {
         let grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
         assert_eq!(grid.elevation(0, 0), 0);
-        assert_eq!(grid.elevation(63, 63), 0);
+        assert_eq!(grid.elevation(GRID_SIZE - 1, GRID_SIZE - 1), 0);
     }
 
     #[test]

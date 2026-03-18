@@ -1,4 +1,4 @@
-use crate::grid::{self, TILE_SIZE};
+use crate::grid::{self, BORDER_SIZE, PLAYABLE_SIZE, TILE_SIZE};
 use crate::unit::{Faction, Unit};
 
 /// Seconds for a single unit to fully capture a neutral zone.
@@ -98,12 +98,13 @@ impl ZoneManager {
     }
 
     pub fn create_default_zones() -> Self {
+        let b = BORDER_SIZE;
         let zones = vec![
-            CaptureZone::new(0, "Forward Blue", 16, 16, ZONE_RADIUS),
-            CaptureZone::new(1, "Upper Pass", 24, 24, ZONE_RADIUS),
-            CaptureZone::new(2, "Center", 32, 32, ZONE_RADIUS),
-            CaptureZone::new(3, "Lower Pass", 40, 40, ZONE_RADIUS),
-            CaptureZone::new(4, "Forward Red", 48, 48, ZONE_RADIUS),
+            CaptureZone::new(0, "Forward Blue", b + 24, b + 24, ZONE_RADIUS),
+            CaptureZone::new(1, "Upper Pass", b + 36, b + 36, ZONE_RADIUS),
+            CaptureZone::new(2, "Center", b + 48, b + 48, ZONE_RADIUS),
+            CaptureZone::new(3, "Lower Pass", b + 60, b + 60, ZONE_RADIUS),
+            CaptureZone::new(4, "Forward Red", b + 72, b + 72, ZONE_RADIUS),
         ];
         Self {
             zones,
@@ -212,8 +213,8 @@ impl ZoneManager {
     /// Returns None if all zones are controlled by this faction.
     pub fn best_target_zone(&self, faction: Faction) -> Option<&CaptureZone> {
         let (own_x, own_y): (f32, f32) = match faction {
-            Faction::Blue => (5.0, 5.0),
-            _ => (58.0, 58.0),
+            Faction::Blue => ((BORDER_SIZE + 5) as f32, (BORDER_SIZE + 5) as f32),
+            _ => ((BORDER_SIZE + PLAYABLE_SIZE - 6) as f32, (BORDER_SIZE + PLAYABLE_SIZE - 6) as f32),
         };
 
         let dist_sq = |z: &CaptureZone| -> i32 {
@@ -276,7 +277,8 @@ impl ZoneManager {
 
     /// Return the zone positions (grid coordinates) for mapgen clearing.
     pub fn default_zone_centers() -> Vec<(u32, u32)> {
-        vec![(16, 16), (24, 24), (32, 32), (40, 40), (48, 48)]
+        let b = BORDER_SIZE;
+        vec![(b + 24, b + 24), (b + 36, b + 36), (b + 48, b + 48), (b + 60, b + 60), (b + 72, b + 72)]
     }
 }
 
@@ -287,24 +289,24 @@ mod tests {
 
     #[test]
     fn zone_contains_center() {
-        let zone = CaptureZone::new(0, "Test", 32, 32, 4);
-        assert!(zone.contains_grid(32, 32)); // center
-        assert!(zone.contains_grid(28, 32)); // 4 tiles left (on boundary)
-        assert!(zone.contains_grid(32, 28)); // 4 tiles up (on boundary)
-        assert!(zone.contains_grid(30, 30)); // sqrt(8) ≈ 2.83, inside
+        let zone = CaptureZone::new(0, "Test", 64, 64, 4);
+        assert!(zone.contains_grid(64, 64)); // center
+        assert!(zone.contains_grid(60, 64)); // 4 tiles left (on boundary)
+        assert!(zone.contains_grid(64, 60)); // 4 tiles up (on boundary)
+        assert!(zone.contains_grid(62, 62)); // sqrt(8) ≈ 2.83, inside
     }
 
     #[test]
     fn zone_excludes_outside() {
-        let zone = CaptureZone::new(0, "Test", 32, 32, 4);
-        assert!(!zone.contains_grid(27, 32)); // 5 tiles away
-        assert!(!zone.contains_grid(32, 37)); // 5 tiles away
-        assert!(!zone.contains_grid(28, 28)); // diagonal corner, sqrt(32) > 4
+        let zone = CaptureZone::new(0, "Test", 64, 64, 4);
+        assert!(!zone.contains_grid(59, 64)); // 5 tiles away
+        assert!(!zone.contains_grid(64, 69)); // 5 tiles away
+        assert!(!zone.contains_grid(60, 60)); // diagonal corner, sqrt(32) > 4
     }
 
     #[test]
     fn zone_contains_world_check() {
-        let zone = CaptureZone::new(0, "Test", 32, 32, 4);
+        let zone = CaptureZone::new(0, "Test", 64, 64, 4);
         // Center should be inside
         assert!(zone.contains_world(zone.center_wx, zone.center_wy));
         // Far outside
@@ -419,7 +421,7 @@ mod tests {
     fn best_target_nearest_uncontrolled() {
         let mut mgr = ZoneManager::create_default_zones();
         mgr.zones[0].state = ZoneState::Controlled(Faction::Blue);
-        // Zones 1-4 are neutral, zone 1 (24,24) is nearest to Blue base (5,5)
+        // Zones 1-4 are neutral, zone 1 is nearest to Blue base
         let target = mgr.best_target_zone(Faction::Blue).unwrap();
         assert_eq!(target.id, 1);
     }
@@ -436,10 +438,13 @@ mod tests {
     #[test]
     fn count_units_tallies_correctly() {
         let mut mgr = ZoneManager::create_default_zones();
+        let b = BORDER_SIZE;
+        let z0x = b + 24; // Forward Blue zone center
+        let z0y = b + 24;
         let units = vec![
-            Unit::new(1, UnitKind::Warrior, Faction::Blue, 16, 16, false),
-            Unit::new(2, UnitKind::Warrior, Faction::Blue, 16, 17, false),
-            Unit::new(3, UnitKind::Warrior, Faction::Red, 16, 15, false),
+            Unit::new(1, UnitKind::Warrior, Faction::Blue, z0x, z0y, false),
+            Unit::new(2, UnitKind::Warrior, Faction::Blue, z0x, z0y + 1, false),
+            Unit::new(3, UnitKind::Warrior, Faction::Red, z0x, z0y - 1, false),
             Unit::new(4, UnitKind::Warrior, Faction::Red, 0, 0, false), // outside all zones
         ];
         mgr.count_units(&units);

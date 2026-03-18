@@ -2,7 +2,7 @@ use crate::animation::TurnAnimator;
 use crate::autotile;
 use crate::building::BuildingKind;
 use crate::game::{Game, ATTACK_CONE_HALF_ANGLE};
-use crate::grid::{self, Decoration, TileKind, TILE_SIZE};
+use crate::grid::{self, Decoration, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::input::Input;
 use crate::particle::Particle;
 use crate::renderer::{draw_sprite, load_image, Canvas2d, TextureId, TextureManager};
@@ -177,15 +177,15 @@ pub fn run(
     let fog_canvas = document
         .create_element("canvas")?
         .dyn_into::<web_sys::HtmlCanvasElement>()?;
-    fog_canvas.set_width(grid::GRID_SIZE);
-    fog_canvas.set_height(grid::GRID_SIZE);
+    fog_canvas.set_width(game.grid.width);
+    fog_canvas.set_height(game.grid.height);
     let fog_ctx = fog_canvas
         .get_context("2d")?
         .unwrap()
         .dyn_into::<web_sys::CanvasRenderingContext2d>()?;
 
     // Create offscreen terrain cache canvas (full grid pre-rendered once)
-    let terrain_size = grid::GRID_SIZE * (TILE_SIZE as u32);
+    let terrain_size = game.grid.width * (TILE_SIZE as u32);
     let terrain_canvas = document
         .create_element("canvas")?
         .dyn_into::<web_sys::HtmlCanvasElement>()?;
@@ -265,6 +265,10 @@ pub fn run(
                     game.camera.x -= pan_tx / game.camera.zoom;
                     game.camera.y -= pan_ty / game.camera.zoom;
                 }
+
+                // Clamp camera to world bounds after pan/zoom
+                let world_size = GRID_SIZE as f32 * TILE_SIZE;
+                game.camera.clamp_to_world(world_size, world_size);
 
                 // Only run game logic if no winner yet
                 if game.winner.is_none() {
@@ -926,6 +930,15 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
         grid_world_size,
         grid_world_size,
     )?;
+
+    // 9. Fill solid black outside the grid to hide background when zoomed out.
+    // Use a large margin so it covers any visible area beyond the grid.
+    let margin = grid_world_size;
+    ctx.set_fill_style_str("#000");
+    ctx.fill_rect(-margin, -margin, margin, grid_world_size + 2.0 * margin); // left
+    ctx.fill_rect(grid_world_size, -margin, margin, grid_world_size + 2.0 * margin); // right
+    ctx.fill_rect(0.0, -margin, grid_world_size, margin); // top
+    ctx.fill_rect(0.0, grid_world_size, grid_world_size, margin); // bottom
 
     ctx.restore();
 

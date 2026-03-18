@@ -11,7 +11,7 @@ pub struct Camera {
     pub viewport_h: f32,
 }
 
-const MIN_ZOOM: f32 = 0.25;
+const MIN_ZOOM: f32 = 0.5;
 const MAX_ZOOM: f32 = 4.0;
 const PAN_SPEED: f32 = 400.0; // pixels per second at zoom 1.0
 
@@ -51,6 +51,14 @@ impl Camera {
             self.x + half_w,
             self.y + half_h,
         )
+    }
+
+    /// Clamp camera so the viewport never extends past the world bounds (0,0)-(world_w, world_h).
+    pub fn clamp_to_world(&mut self, world_w: f32, world_h: f32) {
+        let half_w = self.viewport_w / (2.0 * self.zoom);
+        let half_h = self.viewport_h / (2.0 * self.zoom);
+        self.x = self.x.clamp(half_w, (world_w - half_w).max(half_w));
+        self.y = self.y.clamp(half_h, (world_h - half_h).max(half_h));
     }
 
     /// Convert screen pixel position to world-space position.

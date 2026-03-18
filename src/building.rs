@@ -1,4 +1,4 @@
-use crate::grid;
+use crate::grid::{self, BORDER_SIZE, PLAYABLE_SIZE};
 use crate::unit::{Faction, UnitKind};
 
 /// Group composition targets.
@@ -151,26 +151,29 @@ impl FactionBase {
         }
     }
 
-    /// Create the Blue faction base in the top-left corner.
+    /// Create the Blue faction base in the top-left of the playable area.
     pub fn create_blue_base() -> Self {
         let f = Faction::Blue;
+        let b = BORDER_SIZE;
         let buildings = vec![
-            ProductionBuilding::new(BuildingKind::Barracks, f, 3, 4),
-            ProductionBuilding::new(BuildingKind::Archery, f, 7, 4),
-            ProductionBuilding::new(BuildingKind::Monastery, f, 5, 7),
+            ProductionBuilding::new(BuildingKind::Barracks, f, b + 3, b + 4),
+            ProductionBuilding::new(BuildingKind::Archery, f, b + 7, b + 4),
+            ProductionBuilding::new(BuildingKind::Monastery, f, b + 5, b + 7),
         ];
-        Self::new(f, buildings, 5, 10)
+        Self::new(f, buildings, b + 5, b + 10)
     }
 
-    /// Create the Red faction base in the bottom-right corner.
+    /// Create the Red faction base in the bottom-right of the playable area.
     pub fn create_red_base() -> Self {
         let f = Faction::Red;
+        let b = BORDER_SIZE;
+        let p = PLAYABLE_SIZE;
         let buildings = vec![
-            ProductionBuilding::new(BuildingKind::Barracks, f, 60, 59),
-            ProductionBuilding::new(BuildingKind::Archery, f, 56, 59),
-            ProductionBuilding::new(BuildingKind::Monastery, f, 58, 56),
+            ProductionBuilding::new(BuildingKind::Barracks, f, b + p - 4, b + p - 5),
+            ProductionBuilding::new(BuildingKind::Archery, f, b + p - 8, b + p - 5),
+            ProductionBuilding::new(BuildingKind::Monastery, f, b + p - 6, b + p - 8),
         ];
-        Self::new(f, buildings, 58, 53)
+        Self::new(f, buildings, b + p - 6, b + p - 11)
     }
 
     /// Accept a produced unit into the staging area.
@@ -245,9 +248,11 @@ pub fn all_building_positions() -> Vec<(u32, u32)> {
 
 /// Rally point positions for both bases (for mapgen clearing).
 pub fn all_rally_positions() -> Vec<(u32, u32)> {
+    let b = BORDER_SIZE;
+    let p = PLAYABLE_SIZE;
     vec![
-        (5, 10),  // Blue rally
-        (58, 53), // Red rally
+        (b + 5, b + 10),      // Blue rally
+        (b + p - 6, b + p - 11), // Red rally
     ]
 }
 
