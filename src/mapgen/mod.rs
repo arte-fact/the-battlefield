@@ -313,11 +313,11 @@ fn ensure_center_path(grid: &mut Grid, rng: &mut Rng) {
     }
 }
 
-/// Clear a 3x3 area around each capture zone center so units can always reach them.
+/// Clear a 5x5 area around each capture zone center for tower footprint and surroundings.
 fn clear_zone_centers(grid: &mut Grid) {
     for (cx, cy) in ZoneManager::default_zone_centers() {
-        for dy in -1i32..=1 {
-            for dx in -1i32..=1 {
+        for dy in -2i32..=2 {
+            for dx in -2i32..=2 {
                 let nx = cx as i32 + dx;
                 let ny = cy as i32 + dy;
                 if grid.in_bounds(nx, ny) {
@@ -579,8 +579,8 @@ mod tests {
     fn zone_centers_clear() {
         let grid = generate_battlefield(42);
         for (cx, cy) in crate::zone::ZoneManager::default_zone_centers() {
-            for dy in -1i32..=1 {
-                for dx in -1i32..=1 {
+            for dy in -2i32..=2 {
+                for dx in -2i32..=2 {
                     let x = (cx as i32 + dx) as u32;
                     let y = (cy as i32 + dy) as u32;
                     assert!(

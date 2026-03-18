@@ -16,7 +16,7 @@ pub const MAX_REINFORCEMENTS_PER_WAVE: u32 = 2;
 /// Hard cap on total units per faction to avoid performance issues.
 pub const MAX_UNITS_PER_FACTION: usize = 25;
 
-/// Capture zone radius in tiles (Chebyshev distance).
+/// Capture zone radius in tiles (Euclidean distance).
 pub const ZONE_RADIUS: u32 = 4;
 
 /// Capture zone states.
@@ -65,18 +65,18 @@ impl CaptureZone {
         }
     }
 
-    /// Returns true if a world-space position is within this zone (Chebyshev distance).
+    /// Returns true if a world-space position is within this zone (Euclidean distance).
     pub fn contains_world(&self, wx: f32, wy: f32) -> bool {
-        let dx = (wx - self.center_wx).abs();
-        let dy = (wy - self.center_wy).abs();
-        dx <= self.radius_world && dy <= self.radius_world
+        let dx = wx - self.center_wx;
+        let dy = wy - self.center_wy;
+        dx * dx + dy * dy <= self.radius_world * self.radius_world
     }
 
-    /// Returns true if a grid cell is within this zone.
+    /// Returns true if a grid cell is within this zone (Euclidean distance).
     pub fn contains_grid(&self, gx: u32, gy: u32) -> bool {
-        let dx = (gx as i32 - self.center_gx as i32).unsigned_abs();
-        let dy = (gy as i32 - self.center_gy as i32).unsigned_abs();
-        dx <= self.radius && dy <= self.radius
+        let dx = gx as i32 - self.center_gx as i32;
+        let dy = gy as i32 - self.center_gy as i32;
+        (dx * dx + dy * dy) as u32 <= self.radius * self.radius
     }
 }
 
@@ -242,16 +242,18 @@ mod tests {
     #[test]
     fn zone_contains_center() {
         let zone = CaptureZone::new(0, "Test", 32, 32, 4);
-        assert!(zone.contains_grid(32, 32));
-        assert!(zone.contains_grid(28, 28));
-        assert!(zone.contains_grid(36, 36));
+        assert!(zone.contains_grid(32, 32)); // center
+        assert!(zone.contains_grid(28, 32)); // 4 tiles left (on boundary)
+        assert!(zone.contains_grid(32, 28)); // 4 tiles up (on boundary)
+        assert!(zone.contains_grid(30, 30)); // sqrt(8) ≈ 2.83, inside
     }
 
     #[test]
     fn zone_excludes_outside() {
         let zone = CaptureZone::new(0, "Test", 32, 32, 4);
-        assert!(!zone.contains_grid(27, 32));
-        assert!(!zone.contains_grid(32, 37));
+        assert!(!zone.contains_grid(27, 32)); // 5 tiles away
+        assert!(!zone.contains_grid(32, 37)); // 5 tiles away
+        assert!(!zone.contains_grid(28, 28)); // diagonal corner, sqrt(32) > 4
     }
 
     #[test]

@@ -72,6 +72,8 @@ struct LoadedTextures {
     water_rock_textures: Vec<(TextureId, u32, u32)>,
     /// Pre-flipped water rock canvases: (canvas, frame_w, frame_h) for each variant
     water_rock_textures_flipped: Vec<(web_sys::HtmlCanvasElement, u32, u32)>,
+    /// Tower building textures: index 0=Black(neutral), 1=Blue, 2=Red (128x256 each)
+    tower_textures: Vec<TextureId>,
 }
 
 impl LoadedTextures {
@@ -93,6 +95,7 @@ impl LoadedTextures {
             bush_textures_flipped: Vec::new(),
             water_rock_textures: Vec::new(),
             water_rock_textures_flipped: Vec::new(),
+            tower_textures: Vec::new(),
         }
     }
 }
@@ -685,6 +688,16 @@ async fn load_textures(
             .push((tex_id, 64, 64));
     }
 
+    // Load tower building sprites (3 color variants: Black=neutral, Blue, Red)
+    {
+        let tower_colors = ["Black Buildings", "Blue Buildings", "Red Buildings"];
+        for color_folder in &tower_colors {
+            let url = format!("{}/Buildings/{}/Tower.png", ASSET_BASE, color_folder);
+            let tex_id = load_texture(state, &url, 128, 256, 1).await?;
+            loaded.borrow_mut().tower_textures.push(tex_id);
+        }
+    }
+
     // Pre-flip tree and rock textures at load time (eliminates per-frame save/translate/scale/restore)
     {
         let document = web_sys::window().unwrap().document().unwrap();
@@ -1049,10 +1062,8 @@ fn draw_zone_overlays(
     max_gx: u32,
     max_gy: u32,
 ) -> Result<(), JsValue> {
-    let ts = TILE_SIZE as f64;
-
     for zone in &game.zone_manager.zones {
-        // Skip zones entirely outside the visible range
+        // Skip zones entirely outside the visible range (bounding box of circle)
         let zone_min_gx = zone.center_gx.saturating_sub(zone.radius);
         let zone_min_gy = zone.center_gy.saturating_sub(zone.radius);
         let zone_max_gx = zone.center_gx + zone.radius + 1;
@@ -1064,10 +1075,9 @@ fn draw_zone_overlays(
             continue;
         }
 
-        let x = zone_min_gx as f64 * ts;
-        let y = zone_min_gy as f64 * ts;
-        let w = (zone.radius * 2 + 1) as f64 * ts;
-        let h = (zone.radius * 2 + 1) as f64 * ts;
+        let cx = zone.center_wx as f64;
+        let cy = zone.center_wy as f64;
+        let r = zone.radius_world as f64;
 
         // Fill + border color by state
         let (fill_color, border_color) = match zone.state {
@@ -1080,34 +1090,37 @@ fn draw_zone_overlays(
             _ => ("rgba(200,200,200,0.06)", "rgba(200,200,200,0.25)"),
         };
 
-        // Semi-transparent fill
+        // Semi-transparent circular fill
         ctx.set_fill_style_str(fill_color);
-        ctx.fill_rect(x, y, w, h);
+        ctx.begin_path();
+        ctx.arc(cx, cy, r, 0.0, std::f64::consts::TAU)?;
+        ctx.fill();
 
-        // Dashed border
+        // Dashed circular border
         ctx.set_stroke_style_str(border_color);
         ctx.set_line_width(2.0);
         let dash = js_sys::Array::new();
         dash.push(&JsValue::from(8.0));
         dash.push(&JsValue::from(4.0));
         ctx.set_line_dash(&dash)?;
-        ctx.stroke_rect(x, y, w, h);
+        ctx.begin_path();
+        ctx.arc(cx, cy, r, 0.0, std::f64::consts::TAU)?;
+        ctx.stroke();
         ctx.set_line_dash(&js_sys::Array::new())?;
 
-        // Zone name label (above zone)
-        let label_x = zone.center_wx as f64;
-        let label_y = y - 14.0;
+        // Zone name label (above circle)
+        let label_y = cy - r - 14.0;
         ctx.set_font("bold 11px monospace");
         ctx.set_text_align("center");
         ctx.set_text_baseline("bottom");
         ctx.set_fill_style_str("rgba(255,255,255,0.7)");
-        ctx.fill_text(zone.name, label_x, label_y)?;
+        ctx.fill_text(zone.name, cx, label_y)?;
 
-        // Progress bar (just below the label, above zone)
-        let bar_w = w * 0.5;
+        // Progress bar (just below the label, above circle)
+        let bar_w = r;
         let bar_h = 4.0;
-        let bar_x = label_x - bar_w / 2.0;
-        let bar_y = y - 6.0;
+        let bar_x = cx - bar_w / 2.0;
+        let bar_y = cy - r - 6.0;
 
         // Bar background
         ctx.set_fill_style_str("rgba(0,0,0,0.4)");
@@ -1428,6 +1441,7 @@ enum Drawable {
     Tree(u32, u32),     // (gx, gy)
     Rock(u32, u32),     // (gx, gy)
     WaterRock(u32, u32), // (gx, gy)
+    Building(u8),       // zone index
     Particle(usize),    // index into game.particles
 }
 
@@ -1483,6 +1497,12 @@ fn draw_foreground(
                 drawables.push((foot_y, Drawable::WaterRock(gx, gy)));
             }
         }
+    }
+
+    // Buildings at zone centers
+    for (i, zone) in game.zone_manager.zones.iter().enumerate() {
+        let foot_y = (zone.center_gy as f64 + 1.0) * ts;
+        drawables.push((foot_y, Drawable::Building(i as u8)));
     }
 
     // Particles
@@ -1659,6 +1679,50 @@ fn draw_foreground(
                         ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
                             img, 0.0, 0.0, fw, fh, dx, dy, ts, ts,
                         )?;
+                    }
+                }
+            }
+
+            Drawable::Building(zone_idx) => {
+                if loaded.tower_textures.is_empty() {
+                    continue;
+                }
+                let zone = &game.zone_manager.zones[*zone_idx as usize];
+
+                // Select tower color based on zone state
+                let color_idx = match zone.state {
+                    ZoneState::Controlled(Faction::Blue)
+                    | ZoneState::Capturing(Faction::Blue) => 1,
+                    ZoneState::Controlled(Faction::Red)
+                    | ZoneState::Capturing(Faction::Red) => 2,
+                    _ => 0, // Black (neutral / contested)
+                };
+
+                let tex_id = loaded.tower_textures[color_idx];
+                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                    let draw_w = ts * 2.0;
+                    let draw_h = ts * 4.0;
+                    let dx = (zone.center_gx as f64) * ts + ts / 2.0 - draw_w / 2.0;
+                    let dy = (zone.center_gy as f64) * ts + ts - draw_h;
+
+                    // Pulse opacity during capturing to show in-progress
+                    let alpha = match zone.state {
+                        ZoneState::Capturing(_) => {
+                            (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0)
+                        }
+                        _ => 1.0,
+                    };
+
+                    if (alpha - 1.0).abs() > 0.001 {
+                        ctx.set_global_alpha(alpha);
+                    }
+
+                    ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                        img, 0.0, 0.0, 128.0, 256.0, dx, dy, draw_w, draw_h,
+                    )?;
+
+                    if (alpha - 1.0).abs() > 0.001 {
+                        ctx.set_global_alpha(1.0);
                     }
                 }
             }
