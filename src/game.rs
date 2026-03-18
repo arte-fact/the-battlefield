@@ -1,4 +1,5 @@
 use crate::animation::TurnEvent;
+use crate::building::FactionBase;
 use crate::camera::Camera;
 use crate::combat;
 use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
@@ -52,6 +53,10 @@ pub struct Game {
     pub red_objective: (f32, f32),
     /// Capture zone manager.
     pub zone_manager: ZoneManager,
+    /// Faction bases with production buildings.
+    pub bases: Vec<FactionBase>,
+    /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
+    pub winner: Option<Faction>,
 }
 
 impl Game {
@@ -81,6 +86,8 @@ impl Game {
             blue_objective: (0.0, 0.0),
             red_objective: (0.0, 0.0),
             zone_manager: ZoneManager::empty(),
+            bases: Vec::new(),
+            winner: None,
         }
     }
 
@@ -789,7 +796,7 @@ impl Game {
     }
 
     /// Return the strategic objective for a faction (world-space coordinates).
-    /// Prioritizes capture zones; falls back to enemy spawn if all zones are controlled.
+    /// Prioritizes capture zones; falls back to enemy base if all zones are controlled.
     fn faction_objective(&self, faction: Faction) -> (f32, f32) {
         if let Some(zone) = self.zone_manager.best_target_zone(faction) {
             return (zone.center_wx, zone.center_wy);
@@ -1346,61 +1353,78 @@ impl Game {
     pub fn tick_zones(&mut self, dt: f32) {
         self.zone_manager.count_units(&self.units);
         self.zone_manager.tick_capture(dt);
+        if self.winner.is_none() {
+            if let Some(faction) = self.zone_manager.tick_victory(dt) {
+                self.winner = Some(faction);
+            }
+        }
     }
 
-    /// Spawn reinforcement units for factions with zone control advantage.
-    pub fn tick_reinforcements(&mut self, dt: f32) {
-        use crate::zone::{MAX_REINFORCEMENTS_PER_WAVE, MAX_UNITS_PER_FACTION, REINFORCEMENT_INTERVAL};
+    /// Tick production buildings and dispatch groups from faction bases.
+    pub fn tick_production(&mut self, dt: f32) {
+        use crate::zone::MAX_UNITS_PER_FACTION;
 
-        self.zone_manager.reinforcement_timer += dt;
-        if self.zone_manager.reinforcement_timer < REINFORCEMENT_INTERVAL {
-            return;
-        }
-        self.zone_manager.reinforcement_timer = 0.0;
+        for base_idx in 0..self.bases.len() {
+            let faction = self.bases[base_idx].faction;
 
-        for &faction in &[Faction::Blue, Faction::Red] {
-            let own_zones = self.zone_manager.zones_controlled_by(faction);
-            let enemy_faction = match faction {
-                Faction::Blue => Faction::Red,
-                _ => Faction::Blue,
-            };
-            let enemy_zones = self.zone_manager.zones_controlled_by(enemy_faction);
+            // Count alive units + staged units for faction cap check
+            let alive_count = self.units.iter().filter(|u| u.alive && u.faction == faction).count();
+            let staged = self.bases[base_idx].total_staged() as usize;
+            let at_cap = alive_count + staged >= MAX_UNITS_PER_FACTION;
 
-            let reinforcements = own_zones
-                .saturating_sub(enemy_zones)
-                .min(MAX_REINFORCEMENTS_PER_WAVE);
-            if reinforcements == 0 {
-                continue;
+            // Tick production buildings (only if under cap)
+            if !at_cap {
+                let mut produced: Vec<UnitKind> = Vec::new();
+                for building in &mut self.bases[base_idx].buildings {
+                    if let Some(kind) = building.tick(dt) {
+                        produced.push(kind);
+                    }
+                }
+                for kind in produced {
+                    self.bases[base_idx].receive_unit(kind);
+                }
             }
 
-            let current_count = self.units.iter().filter(|u| u.alive && u.faction == faction).count();
-            if current_count >= MAX_UNITS_PER_FACTION {
-                continue;
-            }
+            // Tick staging timer
+            self.bases[base_idx].tick_staging(dt);
 
-            // Find the controlled zone closest to own deployment
-            let own_x: f32 = match faction {
-                Faction::Blue => 5.0,
-                _ => 59.0,
-            };
-            let spawn_zone = self
-                .zone_manager
-                .zones
-                .iter()
-                .filter(|z| z.state == crate::zone::ZoneState::Controlled(faction))
-                .min_by_key(|z| ((z.center_gx as f32 - own_x).abs() * 10.0) as i32);
+            // Check for dispatch
+            if self.bases[base_idx].group_ready() || self.bases[base_idx].should_force_dispatch() {
+                let rally_gx = self.bases[base_idx].rally_gx;
+                let rally_gy = self.bases[base_idx].rally_gy;
+                let (warriors, lancers, archers, monks) = self.bases[base_idx].dispatch_group();
 
-            if let Some(zone) = spawn_zone {
-                let zone_gx = zone.center_gx;
-                let zone_gy = zone.center_gy;
-                let kinds = [UnitKind::Warrior, UnitKind::Lancer, UnitKind::Archer];
-                let turn = self.turn_state.turn_number as usize;
-                for i in 0..reinforcements {
-                    let kind = kinds[(turn + i as usize) % kinds.len()];
-                    let offset = (i as i32) - (reinforcements as i32 / 2);
-                    let gy = (zone_gy as i32 + offset)
+                // Spawn units at rally point with slight offsets
+                let mut offset = 0u32;
+                for _ in 0..warriors {
+                    let gy = (rally_gy as i32 + (offset as i32) - (warriors as i32 / 2))
                         .clamp(0, GRID_SIZE as i32 - 1) as u32;
-                    self.spawn_unit(kind, faction, zone_gx, gy, false);
+                    self.spawn_unit(UnitKind::Warrior, faction, rally_gx, gy, false);
+                    offset += 1;
+                }
+                offset = 0;
+                for _ in 0..lancers {
+                    let gx = if faction == Faction::Blue { rally_gx.saturating_sub(1) } else { rally_gx + 1 };
+                    let gy = (rally_gy as i32 + (offset as i32) - (lancers as i32 / 2))
+                        .clamp(0, GRID_SIZE as i32 - 1) as u32;
+                    self.spawn_unit(UnitKind::Lancer, faction, gx, gy, false);
+                    offset += 1;
+                }
+                offset = 0;
+                for _ in 0..archers {
+                    let gx = if faction == Faction::Blue { rally_gx.saturating_sub(2) } else { rally_gx + 2 };
+                    let gy = (rally_gy as i32 + (offset as i32) - (archers as i32 / 2))
+                        .clamp(0, GRID_SIZE as i32 - 1) as u32;
+                    self.spawn_unit(UnitKind::Archer, faction, gx, gy, false);
+                    offset += 1;
+                }
+                offset = 0;
+                for _ in 0..monks {
+                    let gx = if faction == Faction::Blue { rally_gx.saturating_sub(3) } else { rally_gx + 3 };
+                    let gy = (rally_gy as i32 + (offset as i32) - (monks as i32 / 2))
+                        .clamp(0, GRID_SIZE as i32 - 1) as u32;
+                    self.spawn_unit(UnitKind::Monk, faction, gx, gy, false);
+                    offset += 1;
                 }
             }
         }
@@ -1414,58 +1438,72 @@ impl Game {
     pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
         self.grid = mapgen::generate_battlefield(seed);
 
-        let (blue_x, blue_y) = mapgen::blue_spawn_area();
-        let (red_x, red_y) = mapgen::red_spawn_area();
+        let (blue_x, blue_y) = mapgen::blue_spawn_area(); // (5, 5)
+        let (red_x, red_y) = mapgen::red_spawn_area();     // (58, 58)
 
-        // Each faction's objective is the other faction's spawn zone
+        // Each faction's objective is the other faction's base
         self.blue_objective = grid::grid_to_world(red_x, red_y);
         self.red_objective = grid::grid_to_world(blue_x, blue_y);
 
-        // Initialize capture zones
+        // Initialize capture zones (diagonal)
         self.zone_manager = ZoneManager::create_default_zones();
 
-        // Blue army (player side) — 15 units
-        // Front line: player warrior + 4 warriors (armored, forward)
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x + 1, blue_y, true);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x + 1, blue_y + 1, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x + 1, blue_y.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x + 1, blue_y + 2, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x + 1, blue_y.saturating_sub(2), false);
-        // Lancers: second line (poke over warriors with range 2)
-        for i in 0..3u32 {
-            self.spawn_unit(UnitKind::Lancer, Faction::Blue, blue_x, blue_y + i, false);
-            self.spawn_unit(UnitKind::Lancer, Faction::Blue, blue_x, blue_y.saturating_sub(1 + i), false);
-        }
-        // Archers: third line
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y + 1, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y, false);
-        // Monks: rear
-        self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_x.saturating_sub(3), blue_y + 1, false);
-        self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_x.saturating_sub(3), blue_y.saturating_sub(1), false);
+        // Initialize faction bases with production buildings
+        self.bases = vec![
+            FactionBase::create_blue_base(),
+            FactionBase::create_red_base(),
+        ];
 
-        // Red army (enemy side) — 15 units
-        // Front line: 5 warriors (armored, forward)
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x.saturating_sub(1), red_y, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x.saturating_sub(1), red_y + 1, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x.saturating_sub(1), red_y.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x.saturating_sub(1), red_y + 2, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x.saturating_sub(1), red_y.saturating_sub(2), false);
+        // Blue rally point for initial army spawn
+        let blue_rally_gx = self.bases[0].rally_gx; // 5
+        let blue_rally_gy = self.bases[0].rally_gy; // 10
+
+        // Blue army (player side) — 16 units at rally point
+        // Front line: player warrior + 4 warriors
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_rally_gx + 1, blue_rally_gy, true);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_rally_gx + 1, blue_rally_gy + 1, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_rally_gx + 1, blue_rally_gy.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_rally_gx + 1, blue_rally_gy + 2, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_rally_gx + 1, blue_rally_gy.saturating_sub(2), false);
         // Lancers: second line
         for i in 0..3u32 {
-            self.spawn_unit(UnitKind::Lancer, Faction::Red, red_x, red_y + i, false);
-            self.spawn_unit(UnitKind::Lancer, Faction::Red, red_x, red_y.saturating_sub(1 + i), false);
+            self.spawn_unit(UnitKind::Lancer, Faction::Blue, blue_rally_gx, blue_rally_gy + i, false);
+            self.spawn_unit(UnitKind::Lancer, Faction::Blue, blue_rally_gx, blue_rally_gy.saturating_sub(1 + i), false);
         }
         // Archers: third line
-        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y + 1, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_rally_gx.saturating_sub(2), blue_rally_gy + 1, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_rally_gx.saturating_sub(2), blue_rally_gy.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_rally_gx.saturating_sub(2), blue_rally_gy, false);
         // Monks: rear
-        self.spawn_unit(UnitKind::Monk, Faction::Red, red_x + 3, red_y + 1, false);
-        self.spawn_unit(UnitKind::Monk, Faction::Red, red_x + 3, red_y.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_rally_gx.saturating_sub(3), blue_rally_gy + 1, false);
+        self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_rally_gx.saturating_sub(3), blue_rally_gy.saturating_sub(1), false);
 
-        // Camera starts centered on player
-        let (cx, cy) = grid::grid_to_world(blue_x, blue_y);
+        // Red rally point for initial army spawn
+        let red_rally_gx = self.bases[1].rally_gx; // 58
+        let red_rally_gy = self.bases[1].rally_gy; // 53
+
+        // Red army (enemy side) — 15 units at rally point
+        // Front line: 5 warriors
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_rally_gx.saturating_sub(1), red_rally_gy, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_rally_gx.saturating_sub(1), red_rally_gy + 1, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_rally_gx.saturating_sub(1), red_rally_gy.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_rally_gx.saturating_sub(1), red_rally_gy + 2, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_rally_gx.saturating_sub(1), red_rally_gy.saturating_sub(2), false);
+        // Lancers: second line
+        for i in 0..3u32 {
+            self.spawn_unit(UnitKind::Lancer, Faction::Red, red_rally_gx, red_rally_gy + i, false);
+            self.spawn_unit(UnitKind::Lancer, Faction::Red, red_rally_gx, red_rally_gy.saturating_sub(1 + i), false);
+        }
+        // Archers: third line
+        self.spawn_unit(UnitKind::Archer, Faction::Red, red_rally_gx + 2, red_rally_gy + 1, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, red_rally_gx + 2, red_rally_gy.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, red_rally_gx + 2, red_rally_gy, false);
+        // Monks: rear
+        self.spawn_unit(UnitKind::Monk, Faction::Red, red_rally_gx + 3, red_rally_gy + 1, false);
+        self.spawn_unit(UnitKind::Monk, Faction::Red, red_rally_gx + 3, red_rally_gy.saturating_sub(1), false);
+
+        // Camera starts centered on player (Blue rally point)
+        let (cx, cy) = grid::grid_to_world(blue_rally_gx, blue_rally_gy);
         self.camera.x = cx;
         self.camera.y = cy;
         self.camera.zoom = 1.0;
@@ -2070,8 +2108,8 @@ mod tests {
     fn tick_zones_updates_capture_progress() {
         let mut game = Game::new(960.0, 640.0);
         game.zone_manager = ZoneManager::create_default_zones();
-        // Place a Blue unit inside zone 0 (center_gx=16, center_gy=32)
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 16, 32, false);
+        // Place a Blue unit inside zone 0 (center_gx=16, center_gy=16)
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 16, 16, false);
         game.tick_zones(4.0);
         assert!(
             game.zone_manager.zones[0].progress > 0.0,
@@ -2083,31 +2121,30 @@ mod tests {
     fn ai_targets_zone_not_spawn() {
         let mut game = Game::new(960.0, 640.0);
         game.zone_manager = ZoneManager::create_default_zones();
-        game.blue_objective = grid::grid_to_world(58, 32);
-        // All zones neutral — Blue should target nearest zone, not enemy spawn
+        game.blue_objective = grid::grid_to_world(58, 58);
+        // All zones neutral — Blue should target nearest zone (16,16), not enemy base
         let obj = game.faction_objective(Faction::Blue);
-        let (spawn_wx, _) = grid::grid_to_world(58, 32);
+        let (base_wx, _) = grid::grid_to_world(58, 58);
         assert!(
-            obj.0 < spawn_wx,
-            "Blue should target a zone (x < {spawn_wx}), got x={}", obj.0
+            obj.0 < base_wx,
+            "Blue should target a zone (x < {base_wx}), got x={}", obj.0
         );
     }
 
     #[test]
-    fn reinforcements_spawn_on_zone_advantage() {
+    fn production_spawns_units() {
         let mut game = Game::new(960.0, 640.0);
-        game.zone_manager = ZoneManager::create_default_zones();
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 32, true);
-        // Give Blue 3 zones, Red 0
-        game.zone_manager.zones[0].state = crate::zone::ZoneState::Controlled(Faction::Blue);
-        game.zone_manager.zones[1].state = crate::zone::ZoneState::Controlled(Faction::Blue);
-        game.zone_manager.zones[2].state = crate::zone::ZoneState::Controlled(Faction::Blue);
-        let count_before = game.units.iter().filter(|u| u.faction == Faction::Blue).count();
-        game.tick_reinforcements(crate::zone::REINFORCEMENT_INTERVAL + 0.1);
-        let count_after = game.units.iter().filter(|u| u.faction == Faction::Blue).count();
+        game.bases = vec![FactionBase::create_blue_base()];
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 10, true);
+        let count_before = game.units.len();
+        // Tick production for enough time to produce a full group (~40s) + dispatch
+        for _ in 0..420 {
+            game.tick_production(0.1);
+        }
+        let count_after = game.units.len();
         assert!(
             count_after > count_before,
-            "Blue should have received reinforcements ({count_before} -> {count_after})"
+            "Production should have spawned units ({count_before} -> {count_after})"
         );
     }
 }

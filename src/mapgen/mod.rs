@@ -1,5 +1,6 @@
 pub mod simplex;
 
+use crate::building;
 use crate::grid::{Decoration, Grid, TileKind, GRID_SIZE};
 use crate::zone::ZoneManager;
 use simplex::Simplex;
@@ -180,18 +181,21 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> Gr
     }
 
     // --- Phase C: Post-processing ---
-    let deploy_left = 10;
-    let deploy_right = w - 10;
 
-    // Clear deployment zones
-    clear_zone(&mut grid, 0, 0, deploy_left, h);
-    clear_zone(&mut grid, deploy_right, 0, w - deploy_right, h);
+    // Clear deployment zones (diagonal corners instead of full-width strips)
+    // Blue base: top-left 12x12
+    clear_zone(&mut grid, 0, 0, 12, 12);
+    // Red base: bottom-right 12x12
+    clear_zone(&mut grid, w - 12, h - 12, 12, 12);
 
-    // Ensure a clear corridor through the center
-    ensure_center_path(&mut grid, &mut rng);
+    // Ensure a clear diagonal corridor from base to base
+    ensure_diagonal_path(&mut grid, &mut rng);
 
-    // Clear 3x3 areas around capture zone centers so units can always reach them
+    // Clear 5x5 areas around capture zone centers so units can always reach them
     clear_zone_centers(&mut grid);
+
+    // Clear 5x5 areas around building footprints
+    clear_building_footprints(&mut grid);
 
     grid
 }
@@ -295,14 +299,19 @@ fn clear_zone(grid: &mut Grid, x: u32, y: u32, w: u32, h: u32) {
     }
 }
 
-/// Ensure there's a passable path through the center of the battlefield.
-/// Clears a 3-tile-wide corridor at the vertical center.
-fn ensure_center_path(grid: &mut Grid, rng: &mut Rng) {
-    let center_y = grid.height / 2;
-    for x in 0..grid.width {
+/// Ensure there's a passable diagonal path from top-left base to bottom-right base.
+/// Clears a 3-tile-wide corridor along the diagonal from ~(10,10) to ~(53,53).
+fn ensure_diagonal_path(grid: &mut Grid, rng: &mut Rng) {
+    let start = 10u32;
+    let end = 53u32;
+    let steps = end - start;
+    for i in 0..=steps {
+        let cx = start + i;
+        let cy = start + i;
         let wobble = (rng.range(3) as i32) - 1; // -1, 0, or 1
-        for dy in -1..=1 {
-            let y = (center_y as i32 + dy + wobble).clamp(0, grid.height as i32 - 1) as u32;
+        for d in -1i32..=1 {
+            let x = (cx as i32 + d + wobble).clamp(0, grid.width as i32 - 1) as u32;
+            let y = (cy as i32 + d + wobble).clamp(0, grid.height as i32 - 1) as u32;
             let tile = grid.get(x, y);
             if tile == TileKind::Water || tile == TileKind::Rock || tile == TileKind::Forest {
                 grid.set(x, y, TileKind::Grass);
@@ -334,14 +343,37 @@ fn clear_zone_centers(grid: &mut Grid) {
     }
 }
 
-/// Suggested player spawn position (left deployment zone center).
-pub fn blue_spawn_area() -> (u32, u32) {
-    (5, GRID_SIZE / 2)
+/// Clear 5x5 areas around each building footprint and rally point.
+fn clear_building_footprints(grid: &mut Grid) {
+    let mut positions = building::all_building_positions();
+    positions.extend(building::all_rally_positions());
+    for (cx, cy) in positions {
+        for dy in -2i32..=2 {
+            for dx in -2i32..=2 {
+                let nx = cx as i32 + dx;
+                let ny = cy as i32 + dy;
+                if grid.in_bounds(nx, ny) {
+                    let (ux, uy) = (nx as u32, ny as u32);
+                    let tile = grid.get(ux, uy);
+                    if tile == TileKind::Water || tile == TileKind::Rock || tile == TileKind::Forest {
+                        grid.set(ux, uy, TileKind::Grass);
+                    }
+                    grid.set_elevation(ux, uy, 0);
+                    grid.set_decoration(ux, uy, None);
+                }
+            }
+        }
+    }
 }
 
-/// Suggested enemy spawn area center (right deployment zone).
+/// Suggested player spawn position (Blue base, top-left corner).
+pub fn blue_spawn_area() -> (u32, u32) {
+    (5, 5)
+}
+
+/// Suggested enemy spawn area center (Red base, bottom-right corner).
 pub fn red_spawn_area() -> (u32, u32) {
-    (GRID_SIZE - 6, GRID_SIZE / 2)
+    (58, 58)
 }
 
 #[cfg(test)]
@@ -380,56 +412,61 @@ mod tests {
     #[test]
     fn deployment_zones_clear() {
         let grid = generate_battlefield(42);
-        for y in 0..GRID_SIZE {
-            for x in 0..10 {
+        // Blue base: top-left 12x12
+        for y in 0..12 {
+            for x in 0..12 {
                 assert_eq!(
                     grid.get(x, y),
                     TileKind::Grass,
-                    "Non-grass at ({x},{y}) in left deploy zone"
+                    "Non-grass at ({x},{y}) in Blue deploy zone"
                 );
                 assert_eq!(
                     grid.elevation(x, y),
                     0,
-                    "Non-zero elevation at ({x},{y}) in left deploy zone"
+                    "Non-zero elevation at ({x},{y}) in Blue deploy zone"
                 );
                 assert_eq!(
                     grid.decoration(x, y),
                     None,
-                    "Decoration at ({x},{y}) in left deploy zone"
+                    "Decoration at ({x},{y}) in Blue deploy zone"
                 );
             }
         }
-        for y in 0..GRID_SIZE {
-            for x in (GRID_SIZE - 10)..GRID_SIZE {
+        // Red base: bottom-right 12x12
+        for y in (GRID_SIZE - 12)..GRID_SIZE {
+            for x in (GRID_SIZE - 12)..GRID_SIZE {
                 assert_eq!(
                     grid.get(x, y),
                     TileKind::Grass,
-                    "Non-grass at ({x},{y}) in right deploy zone"
+                    "Non-grass at ({x},{y}) in Red deploy zone"
                 );
                 assert_eq!(
                     grid.elevation(x, y),
                     0,
-                    "Non-zero elevation at ({x},{y}) in right deploy zone"
+                    "Non-zero elevation at ({x},{y}) in Red deploy zone"
                 );
                 assert_eq!(
                     grid.decoration(x, y),
                     None,
-                    "Decoration at ({x},{y}) in right deploy zone"
+                    "Decoration at ({x},{y}) in Red deploy zone"
                 );
             }
         }
     }
 
     #[test]
-    fn center_path_passable() {
+    fn diagonal_path_passable() {
         let grid = generate_battlefield(42);
-        let center_y = GRID_SIZE / 2;
-        for x in 0..GRID_SIZE {
-            let passable = (center_y.saturating_sub(2)..=center_y + 2)
-                .any(|y| grid.is_passable(x, y));
+        // Diagonal corridor from ~(10,10) to ~(53,53) should have passable tiles
+        for i in 10u32..=53 {
+            let passable = (i.saturating_sub(2)..=i + 2).any(|d| {
+                let x = d.min(GRID_SIZE - 1);
+                let y = d.min(GRID_SIZE - 1);
+                grid.is_passable(x, y)
+            });
             assert!(
                 passable,
-                "No passable tile near center at column {x}"
+                "No passable tile near diagonal at step {i}"
             );
         }
     }
@@ -568,11 +605,11 @@ mod tests {
     #[test]
     fn spawn_areas_in_deployment_zones() {
         let (bx, by) = blue_spawn_area();
-        assert!(bx < 10);
-        assert!(by < GRID_SIZE);
+        assert!(bx < 12, "Blue spawn x should be in top-left zone");
+        assert!(by < 12, "Blue spawn y should be in top-left zone");
         let (rx, ry) = red_spawn_area();
-        assert!(rx >= GRID_SIZE - 10);
-        assert!(ry < GRID_SIZE);
+        assert!(rx >= GRID_SIZE - 12, "Red spawn x should be in bottom-right zone");
+        assert!(ry >= GRID_SIZE - 12, "Red spawn y should be in bottom-right zone");
     }
 
     #[test]

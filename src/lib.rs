@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod autotile;
+pub mod building;
 pub mod camera;
 pub mod combat;
 pub mod game;

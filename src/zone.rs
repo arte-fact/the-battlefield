@@ -7,12 +7,6 @@ pub const BASE_CAPTURE_TIME: f32 = 8.0;
 /// Maximum capture rate multiplier (diminishing returns).
 const MAX_CAPTURE_MULTIPLIER: f32 = 3.0;
 
-/// Interval between reinforcement wave checks (seconds).
-pub const REINFORCEMENT_INTERVAL: f32 = 15.0;
-
-/// Maximum reinforcement units per wave per faction.
-pub const MAX_REINFORCEMENTS_PER_WAVE: u32 = 2;
-
 /// Hard cap on total units per faction to avoid performance issues.
 pub const MAX_UNITS_PER_FACTION: usize = 25;
 
@@ -80,10 +74,17 @@ impl CaptureZone {
     }
 }
 
+/// Duration (seconds) a faction must hold all zones to win.
+pub const VICTORY_HOLD_TIME: f32 = 120.0;
+
 /// Manages all capture zones on the battlefield.
 pub struct ZoneManager {
     pub zones: Vec<CaptureZone>,
     pub reinforcement_timer: f32,
+    /// Tracks how long a faction has held all zones. Resets when control is lost.
+    pub victory_timer: f32,
+    /// The faction currently holding all zones (if any).
+    pub victory_candidate: Option<Faction>,
 }
 
 impl ZoneManager {
@@ -91,20 +92,24 @@ impl ZoneManager {
         Self {
             zones: Vec::new(),
             reinforcement_timer: 0.0,
+            victory_timer: 0.0,
+            victory_candidate: None,
         }
     }
 
     pub fn create_default_zones() -> Self {
         let zones = vec![
-            CaptureZone::new(0, "Forward Blue", 16, 32, ZONE_RADIUS),
-            CaptureZone::new(1, "North Flank", 25, 18, ZONE_RADIUS),
+            CaptureZone::new(0, "Forward Blue", 16, 16, ZONE_RADIUS),
+            CaptureZone::new(1, "Upper Pass", 24, 24, ZONE_RADIUS),
             CaptureZone::new(2, "Center", 32, 32, ZONE_RADIUS),
-            CaptureZone::new(3, "South Flank", 39, 46, ZONE_RADIUS),
-            CaptureZone::new(4, "Forward Red", 48, 32, ZONE_RADIUS),
+            CaptureZone::new(3, "Lower Pass", 40, 40, ZONE_RADIUS),
+            CaptureZone::new(4, "Forward Red", 48, 48, ZONE_RADIUS),
         ];
         Self {
             zones,
             reinforcement_timer: 0.0,
+            victory_timer: 0.0,
+            victory_candidate: None,
         }
     }
 
@@ -206,17 +211,23 @@ impl ZoneManager {
     /// Priority: contested zones first, then nearest uncontrolled zone to own spawn.
     /// Returns None if all zones are controlled by this faction.
     pub fn best_target_zone(&self, faction: Faction) -> Option<&CaptureZone> {
-        let own_x: f32 = match faction {
-            Faction::Blue => 5.0,
-            _ => 59.0,
+        let (own_x, own_y): (f32, f32) = match faction {
+            Faction::Blue => (5.0, 5.0),
+            _ => (58.0, 58.0),
         };
 
-        // Priority 1: Contested zones (reinforce — nearest to own spawn)
+        let dist_sq = |z: &CaptureZone| -> i32 {
+            let dx = z.center_gx as f32 - own_x;
+            let dy = z.center_gy as f32 - own_y;
+            ((dx * dx + dy * dy) * 10.0) as i32
+        };
+
+        // Priority 1: Contested zones (reinforce — nearest to own base)
         let contested = self
             .zones
             .iter()
             .filter(|z| z.state == ZoneState::Contested)
-            .min_by_key(|z| ((z.center_gx as f32 - own_x).abs() * 10.0) as i32);
+            .min_by_key(|z| dist_sq(z));
         if contested.is_some() {
             return contested;
         }
@@ -225,12 +236,47 @@ impl ZoneManager {
         self.zones
             .iter()
             .filter(|z| z.state != ZoneState::Controlled(faction))
-            .min_by_key(|z| ((z.center_gx as f32 - own_x).abs() * 10.0) as i32)
+            .min_by_key(|z| dist_sq(z))
+    }
+
+    /// Update victory timer. Returns Some(faction) if a faction has won.
+    pub fn tick_victory(&mut self, dt: f32) -> Option<Faction> {
+        match self.all_zones_controlled_by() {
+            Some(faction) => {
+                if self.victory_candidate == Some(faction) {
+                    self.victory_timer += dt;
+                } else {
+                    // New faction took total control — reset timer
+                    self.victory_candidate = Some(faction);
+                    self.victory_timer = dt;
+                }
+                if self.victory_timer >= VICTORY_HOLD_TIME {
+                    Some(faction)
+                } else {
+                    None
+                }
+            }
+            None => {
+                // No total control — reset
+                self.victory_timer = 0.0;
+                self.victory_candidate = None;
+                None
+            }
+        }
+    }
+
+    /// Progress toward victory (0.0 to 1.0) for the faction currently holding all zones.
+    pub fn victory_progress(&self) -> f32 {
+        if self.victory_candidate.is_some() {
+            (self.victory_timer / VICTORY_HOLD_TIME).min(1.0)
+        } else {
+            0.0
+        }
     }
 
     /// Return the zone positions (grid coordinates) for mapgen clearing.
     pub fn default_zone_centers() -> Vec<(u32, u32)> {
-        vec![(16, 32), (25, 18), (32, 32), (39, 46), (48, 32)]
+        vec![(16, 16), (24, 24), (32, 32), (40, 40), (48, 48)]
     }
 }
 
@@ -373,7 +419,7 @@ mod tests {
     fn best_target_nearest_uncontrolled() {
         let mut mgr = ZoneManager::create_default_zones();
         mgr.zones[0].state = ZoneState::Controlled(Faction::Blue);
-        // Zones 1-4 are neutral, zone 1 (x=25) is nearest to Blue spawn (x=5)
+        // Zones 1-4 are neutral, zone 1 (24,24) is nearest to Blue base (5,5)
         let target = mgr.best_target_zone(Faction::Blue).unwrap();
         assert_eq!(target.id, 1);
     }
@@ -391,9 +437,9 @@ mod tests {
     fn count_units_tallies_correctly() {
         let mut mgr = ZoneManager::create_default_zones();
         let units = vec![
-            Unit::new(1, UnitKind::Warrior, Faction::Blue, 16, 32, false),
-            Unit::new(2, UnitKind::Warrior, Faction::Blue, 16, 33, false),
-            Unit::new(3, UnitKind::Warrior, Faction::Red, 16, 31, false),
+            Unit::new(1, UnitKind::Warrior, Faction::Blue, 16, 16, false),
+            Unit::new(2, UnitKind::Warrior, Faction::Blue, 16, 17, false),
+            Unit::new(3, UnitKind::Warrior, Faction::Red, 16, 15, false),
             Unit::new(4, UnitKind::Warrior, Faction::Red, 0, 0, false), // outside all zones
         ];
         mgr.count_units(&units);
@@ -423,5 +469,53 @@ mod tests {
         mgr.zones[0].progress = 0.95;
         mgr.tick_capture(10.0); // way more than needed
         assert!((mgr.zones[0].progress - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn victory_timer_accumulates() {
+        let mut mgr = ZoneManager::create_default_zones();
+        for zone in &mut mgr.zones {
+            zone.state = ZoneState::Controlled(Faction::Blue);
+        }
+        // Tick for 60s — should not trigger victory yet
+        assert!(mgr.tick_victory(60.0).is_none());
+        assert!((mgr.victory_timer - 60.0).abs() < f32::EPSILON);
+        assert_eq!(mgr.victory_candidate, Some(Faction::Blue));
+    }
+
+    #[test]
+    fn victory_triggers_after_hold_time() {
+        let mut mgr = ZoneManager::create_default_zones();
+        for zone in &mut mgr.zones {
+            zone.state = ZoneState::Controlled(Faction::Blue);
+        }
+        assert!(mgr.tick_victory(VICTORY_HOLD_TIME + 1.0).is_some());
+    }
+
+    #[test]
+    fn victory_timer_resets_on_loss() {
+        let mut mgr = ZoneManager::create_default_zones();
+        for zone in &mut mgr.zones {
+            zone.state = ZoneState::Controlled(Faction::Blue);
+        }
+        mgr.tick_victory(60.0);
+        assert!(mgr.victory_timer > 0.0);
+
+        // Lose a zone
+        mgr.zones[0].state = ZoneState::Neutral;
+        mgr.tick_victory(1.0);
+        assert!((mgr.victory_timer).abs() < f32::EPSILON);
+        assert_eq!(mgr.victory_candidate, None);
+    }
+
+    #[test]
+    fn victory_progress_fraction() {
+        let mut mgr = ZoneManager::create_default_zones();
+        for zone in &mut mgr.zones {
+            zone.state = ZoneState::Controlled(Faction::Red);
+        }
+        mgr.tick_victory(60.0);
+        let progress = mgr.victory_progress();
+        assert!((progress - 0.5).abs() < 0.01, "Expected ~0.5, got {progress}");
     }
 }

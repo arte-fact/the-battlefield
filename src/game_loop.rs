@@ -1,5 +1,6 @@
 use crate::animation::TurnAnimator;
 use crate::autotile;
+use crate::building::BuildingKind;
 use crate::game::{Game, ATTACK_CONE_HALF_ANGLE};
 use crate::grid::{self, Decoration, TileKind, TILE_SIZE};
 use crate::input::Input;
@@ -74,6 +75,11 @@ struct LoadedTextures {
     water_rock_textures_flipped: Vec<(web_sys::HtmlCanvasElement, u32, u32)>,
     /// Tower building textures: index 0=Black(neutral), 1=Blue, 2=Red (128x256 each)
     tower_textures: Vec<TextureId>,
+    /// Base building textures: indexed by kind_index * 2 + faction_index
+    /// kind_index: 0=Barracks, 1=Archery, 2=Monastery
+    /// faction_index: 0=Blue, 1=Red
+    /// Each entry: (texture_id, sprite_width, sprite_height)
+    building_textures: Vec<(TextureId, u32, u32)>,
 }
 
 impl LoadedTextures {
@@ -96,6 +102,7 @@ impl LoadedTextures {
             water_rock_textures: Vec::new(),
             water_rock_textures_flipped: Vec::new(),
             tower_textures: Vec::new(),
+            building_textures: Vec::new(),
         }
     }
 }
@@ -259,65 +266,68 @@ pub fn run(
                     game.camera.y -= pan_ty / game.camera.zoom;
                 }
 
-                // Snapshot positions for movement animations
-                let old_positions: Vec<(f32, f32)> = game.units.iter().map(|u| (u.x, u.y)).collect();
+                // Only run game logic if no winner yet
+                if game.winner.is_none() {
+                    // Snapshot positions for movement animations
+                    let old_positions: Vec<(f32, f32)> = game.units.iter().map(|u| (u.x, u.y)).collect();
 
-                // Tick cooldowns for all units
-                game.tick_cooldowns(dt as f32);
+                    // Tick cooldowns for all units
+                    game.tick_cooldowns(dt as f32);
 
-                // AI acts independently each frame
-                game.tick_ai(dt as f32);
+                    // AI acts independently each frame
+                    game.tick_ai(dt as f32);
 
-                // Capture zone progression and reinforcements
-                game.tick_zones(dt as f32);
-                game.tick_reinforcements(dt as f32);
+                    // Capture zone progression and base production
+                    game.tick_zones(dt as f32);
+                    game.tick_production(dt as f32);
 
-                // Attack held: lock aim direction and facing
-                let attack_held = inp.is_key_down(" ") || inp.attack_button.pressed;
+                    // Attack held: lock aim direction and facing
+                    let attack_held = inp.is_key_down(" ") || inp.attack_button.pressed;
 
-                // Keyboard movement (WASD/ZQSD + arrows)
-                let (move_dx, move_dy) = inp.movement_direction();
-                if move_dx != 0.0 || move_dy != 0.0 {
-                    if !attack_held {
-                        game.player_aim_dir = move_dy.atan2(move_dx);
+                    // Keyboard movement (WASD/ZQSD + arrows)
+                    let (move_dx, move_dy) = inp.movement_direction();
+                    if move_dx != 0.0 || move_dy != 0.0 {
+                        if !attack_held {
+                            game.player_aim_dir = move_dy.atan2(move_dx);
+                        }
+                        game.try_player_move(move_dx, move_dy, dt as f32);
                     }
-                    game.try_player_move(move_dx, move_dy, dt as f32);
-                }
 
-                // Virtual joystick movement (mobile)
-                let (joy_dx, joy_dy) = (inp.joystick.dx, inp.joystick.dy);
-                if joy_dx.abs() > 0.01 || joy_dy.abs() > 0.01 {
-                    if !attack_held {
-                        game.player_aim_dir = joy_dy.atan2(joy_dx);
+                    // Virtual joystick movement (mobile)
+                    let (joy_dx, joy_dy) = (inp.joystick.dx, inp.joystick.dy);
+                    if joy_dx.abs() > 0.01 || joy_dy.abs() > 0.01 {
+                        if !attack_held {
+                            game.player_aim_dir = joy_dy.atan2(joy_dx);
+                        }
+                        game.try_player_move(joy_dx, joy_dy, dt as f32);
                     }
-                    game.try_player_move(joy_dx, joy_dy, dt as f32);
-                }
 
-                // Update player facing from aim direction (skip when attacking)
-                if !attack_held {
-                    let aim_cos = game.player_aim_dir.cos();
-                    if let Some(player) = game.player_unit_mut() {
-                        if aim_cos > 0.01 {
-                            player.facing = Facing::Right;
-                        } else if aim_cos < -0.01 {
-                            player.facing = Facing::Left;
+                    // Update player facing from aim direction (skip when attacking)
+                    if !attack_held {
+                        let aim_cos = game.player_aim_dir.cos();
+                        if let Some(player) = game.player_unit_mut() {
+                            if aim_cos > 0.01 {
+                                player.facing = Facing::Right;
+                            } else if aim_cos < -0.01 {
+                                player.facing = Facing::Left;
+                            }
                         }
                     }
+
+                    // Attack: keyboard (space held or pressed) or touch button
+                    let attack_input = inp.take_attack_key()
+                        || inp.take_attack_pressed()
+                        || attack_held;
+                    if attack_input {
+                        game.player_attack();
+                    }
+
+                    // Resolve circle-circle collisions
+                    game.resolve_collisions();
+
+                    // Update run/idle animations based on movement
+                    game.update_movement_anims(&old_positions);
                 }
-
-                // Attack: keyboard (space held or pressed) or touch button
-                let attack_input = inp.take_attack_key()
-                    || inp.take_attack_pressed()
-                    || attack_held;
-                if attack_input {
-                    game.player_attack();
-                }
-
-                // Resolve circle-circle collisions
-                game.resolve_collisions();
-
-                // Update run/idle animations based on movement
-                game.update_movement_anims(&old_positions);
             }
 
             // Process turn events: spawn dust for moves, enqueue attack animations
@@ -698,6 +708,27 @@ async fn load_textures(
         }
     }
 
+    // Load base building sprites (3 kinds × 2 factions)
+    // Index: kind_index * 2 + faction_index
+    {
+        let kinds = [
+            (BuildingKind::Barracks, 192u32, 256u32),
+            (BuildingKind::Archery, 192, 256),
+            (BuildingKind::Monastery, 192, 320),
+        ];
+        let faction_folders = ["Blue Buildings", "Red Buildings"];
+        for &(kind, sw, sh) in &kinds {
+            for faction_folder in &faction_folders {
+                let url = format!(
+                    "{}/Buildings/{}/{}",
+                    ASSET_BASE, faction_folder, kind.asset_filename()
+                );
+                let tex_id = load_texture(state, &url, sw, sh, 1).await?;
+                loaded.borrow_mut().building_textures.push((tex_id, sw, sh));
+            }
+        }
+    }
+
     // Pre-flip tree and rock textures at load time (eliminates per-frame save/translate/scale/restore)
     {
         let document = web_sys::window().unwrap().document().unwrap();
@@ -900,6 +931,12 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
 
     // Draw zone HUD pips in screen space (top-right corner)
     draw_zone_hud(ctx, game, canvas_w, state.canvas2d.dpr)?;
+
+    // Draw victory progress bar (when a faction holds all zones)
+    draw_victory_progress(ctx, game, canvas_w, canvas_h, state.canvas2d.dpr)?;
+
+    // Draw victory overlay (when a faction has won)
+    draw_victory_overlay(ctx, game, canvas_w, canvas_h, state.canvas2d.dpr)?;
 
     // Draw touch controls in screen space (after camera transform is restored)
     draw_touch_controls(ctx, input, state.canvas2d.dpr)?;
@@ -1369,6 +1406,114 @@ fn draw_overlays(
     Ok(())
 }
 
+/// Draw a progress bar when a faction is holding all zones toward victory.
+fn draw_victory_progress(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    canvas_w: f64,
+    _canvas_h: f64,
+    dpr: f64,
+) -> Result<(), JsValue> {
+    let progress = game.zone_manager.victory_progress();
+    if progress < f32::EPSILON || game.winner.is_some() {
+        return Ok(());
+    }
+
+    let faction = match game.zone_manager.victory_candidate {
+        Some(f) => f,
+        None => return Ok(()),
+    };
+
+    let bar_w = 300.0 * dpr;
+    let bar_h = 24.0 * dpr;
+    let bar_x = (canvas_w - bar_w) / 2.0;
+    let bar_y = 60.0 * dpr;
+    let radius = 6.0 * dpr;
+
+    // Background
+    ctx.set_fill_style_str("rgba(0, 0, 0, 0.6)");
+    ctx.begin_path();
+    ctx.round_rect_with_f64(bar_x, bar_y, bar_w, bar_h, radius)?;
+    ctx.fill();
+
+    // Fill
+    let color = match faction {
+        Faction::Blue => "rgba(70, 130, 230, 0.9)",
+        _ => "rgba(220, 60, 60, 0.9)",
+    };
+    ctx.set_fill_style_str(color);
+    let fill_w = bar_w * progress as f64;
+    if fill_w > 0.5 {
+        ctx.begin_path();
+        ctx.round_rect_with_f64(bar_x, bar_y, fill_w, bar_h, radius)?;
+        ctx.fill();
+    }
+
+    // Label
+    let font_size = 14.0 * dpr;
+    ctx.set_font(&format!("bold {font_size}px sans-serif"));
+    ctx.set_fill_style_str("white");
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+    let remaining = ((1.0 - progress) * crate::zone::VICTORY_HOLD_TIME) as u32;
+    let label = match faction {
+        Faction::Blue => format!("Blue holds all zones - Victory in {remaining}s"),
+        _ => format!("Red holds all zones - Victory in {remaining}s"),
+    };
+    ctx.fill_text(&label, canvas_w / 2.0, bar_y + bar_h / 2.0)?;
+
+    Ok(())
+}
+
+/// Draw victory overlay when a faction has won.
+fn draw_victory_overlay(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    canvas_w: f64,
+    canvas_h: f64,
+    dpr: f64,
+) -> Result<(), JsValue> {
+    let faction = match game.winner {
+        Some(f) => f,
+        None => return Ok(()),
+    };
+
+    // Semi-transparent overlay
+    ctx.set_fill_style_str("rgba(0, 0, 0, 0.5)");
+    ctx.fill_rect(0.0, 0.0, canvas_w, canvas_h);
+
+    // Victory text
+    let big_font = 48.0 * dpr;
+    let small_font = 20.0 * dpr;
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+
+    let (title, color) = match faction {
+        Faction::Blue => ("BLUE VICTORY", "rgba(70, 150, 255, 1.0)"),
+        _ => ("RED VICTORY", "rgba(255, 80, 80, 1.0)"),
+    };
+
+    // Shadow
+    ctx.set_font(&format!("bold {big_font}px sans-serif"));
+    ctx.set_fill_style_str("rgba(0, 0, 0, 0.7)");
+    ctx.fill_text(title, canvas_w / 2.0 + 2.0 * dpr, canvas_h / 2.0 + 2.0 * dpr)?;
+
+    // Title
+    ctx.set_fill_style_str(color);
+    ctx.fill_text(title, canvas_w / 2.0, canvas_h / 2.0)?;
+
+    // Subtitle
+    ctx.set_font(&format!("{small_font}px sans-serif"));
+    ctx.set_fill_style_str("rgba(255, 255, 255, 0.8)");
+    ctx.fill_text(
+        "All capture zones held for 2 minutes",
+        canvas_w / 2.0,
+        canvas_h / 2.0 + big_font * 0.8,
+    )?;
+
+    Ok(())
+}
+
 /// Draw touch controls in screen space (virtual joystick + attack button).
 fn draw_touch_controls(
     ctx: &web_sys::CanvasRenderingContext2d,
@@ -1437,12 +1582,13 @@ fn draw_touch_controls(
 
 /// A drawable entity for Y-sorted rendering.
 enum Drawable {
-    Unit(usize),        // index into game.units
-    Tree(u32, u32),     // (gx, gy)
-    Rock(u32, u32),     // (gx, gy)
-    WaterRock(u32, u32), // (gx, gy)
-    Building(u8),       // zone index
-    Particle(usize),    // index into game.particles
+    Unit(usize),            // index into game.units
+    Tree(u32, u32),         // (gx, gy)
+    Rock(u32, u32),         // (gx, gy)
+    WaterRock(u32, u32),    // (gx, gy)
+    Building(u8),           // zone index (tower)
+    BaseBuilding(usize, usize), // (base_index, building_index)
+    Particle(usize),        // index into game.particles
 }
 
 fn draw_foreground(
@@ -1499,10 +1645,18 @@ fn draw_foreground(
         }
     }
 
-    // Buildings at zone centers
+    // Tower buildings at zone centers
     for (i, zone) in game.zone_manager.zones.iter().enumerate() {
         let foot_y = (zone.center_gy as f64 + 1.0) * ts;
         drawables.push((foot_y, Drawable::Building(i as u8)));
+    }
+
+    // Base buildings
+    for (bi, base) in game.bases.iter().enumerate() {
+        for (bj, building) in base.buildings.iter().enumerate() {
+            let foot_y = (building.grid_y as f64 + 1.0) * ts;
+            drawables.push((foot_y, Drawable::BaseBuilding(bi, bj)));
+        }
     }
 
     // Particles
@@ -1723,6 +1877,42 @@ fn draw_foreground(
 
                     if (alpha - 1.0).abs() > 0.001 {
                         ctx.set_global_alpha(1.0);
+                    }
+                }
+            }
+
+            Drawable::BaseBuilding(base_idx, building_idx) => {
+                if loaded.building_textures.is_empty() {
+                    continue;
+                }
+                let base = &game.bases[*base_idx];
+                let building = &base.buildings[*building_idx];
+
+                // Texture index: kind_index * 2 + faction_index
+                let kind_index = match building.kind {
+                    BuildingKind::Barracks => 0,
+                    BuildingKind::Archery => 1,
+                    BuildingKind::Monastery => 2,
+                };
+                let faction_index = match base.faction {
+                    Faction::Blue => 0,
+                    _ => 1,
+                };
+                let tex_idx = kind_index * 2 + faction_index;
+
+                if tex_idx < loaded.building_textures.len() {
+                    let (tex_id, sprite_w, sprite_h) = loaded.building_textures[tex_idx];
+                    if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                        let sw = sprite_w as f64;
+                        let sh = sprite_h as f64;
+                        let draw_w = ts * 3.0;
+                        let draw_h = draw_w * (sh / sw);
+                        let dx = (building.grid_x as f64) * ts + ts / 2.0 - draw_w / 2.0;
+                        let dy = (building.grid_y as f64) * ts + ts - draw_h;
+
+                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            img, 0.0, 0.0, sw, sh, dx, dy, draw_w, draw_h,
+                        )?;
                     }
                 }
             }
