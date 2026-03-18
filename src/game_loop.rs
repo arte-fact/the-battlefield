@@ -1,12 +1,13 @@
 use crate::animation::TurnAnimator;
 use crate::autotile;
 use crate::game::{Game, ATTACK_CONE_HALF_ANGLE};
-use crate::grid::{self, TileKind, TILE_SIZE};
+use crate::grid::{self, Decoration, TileKind, TILE_SIZE};
 use crate::input::Input;
 use crate::particle::Particle;
 use crate::renderer::{draw_sprite, load_image, Canvas2d, TextureId, TextureManager};
 use crate::sprite::SpriteSheet;
 use crate::unit::{Facing, Faction, UnitAnim, UnitKind, DEATH_FADE_DURATION};
+use crate::zone::ZoneState;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -63,6 +64,14 @@ struct LoadedTextures {
     tree_textures_flipped: Vec<(web_sys::HtmlCanvasElement, u32, u32)>,
     /// Pre-flipped rock canvases: one per variant
     rock_textures_flipped: Vec<web_sys::HtmlCanvasElement>,
+    /// Bush sprite sheets: (texture_id, frame_w, frame_h) for 4 variants (128x128 frames)
+    bush_textures: Vec<(TextureId, u32, u32)>,
+    /// Pre-flipped bush canvases: (canvas, frame_w, frame_h) for each variant
+    bush_textures_flipped: Vec<(web_sys::HtmlCanvasElement, u32, u32)>,
+    /// Water rock sprite sheets: (texture_id, frame_w, frame_h) for 4 variants (64x64 frames)
+    water_rock_textures: Vec<(TextureId, u32, u32)>,
+    /// Pre-flipped water rock canvases: (canvas, frame_w, frame_h) for each variant
+    water_rock_textures_flipped: Vec<(web_sys::HtmlCanvasElement, u32, u32)>,
 }
 
 impl LoadedTextures {
@@ -80,6 +89,10 @@ impl LoadedTextures {
             rock_textures: Vec::new(),
             tree_textures_flipped: Vec::new(),
             rock_textures_flipped: Vec::new(),
+            bush_textures: Vec::new(),
+            bush_textures_flipped: Vec::new(),
+            water_rock_textures: Vec::new(),
+            water_rock_textures_flipped: Vec::new(),
         }
     }
 }
@@ -251,6 +264,10 @@ pub fn run(
 
                 // AI acts independently each frame
                 game.tick_ai(dt as f32);
+
+                // Capture zone progression and reinforcements
+                game.tick_zones(dt as f32);
+                game.tick_reinforcements(dt as f32);
 
                 // Attack held: lock aim direction and facing
                 let attack_held = inp.is_key_down(" ") || inp.attack_button.pressed;
@@ -648,6 +665,26 @@ async fn load_textures(
         loaded.borrow_mut().rock_textures.push(tex_id);
     }
 
+    // Load bush sprites (4 variants, 1024x128, 8 frames of 128x128)
+    for i in 1..=4 {
+        let url = format!("{}/Terrain/Decorations/Bushes/Bushe{}.png", ASSET_BASE, i);
+        let tex_id = load_texture(state, &url, 128, 128, 8).await?;
+        loaded.borrow_mut().bush_textures.push((tex_id, 128, 128));
+    }
+
+    // Load water rock sprites (4 variants, 1024x64, 16 frames of 64x64)
+    for i in 1..=4 {
+        let url = format!(
+            "{}/Terrain/Decorations/Rocks in the Water/Water Rocks_0{}.png",
+            ASSET_BASE, i
+        );
+        let tex_id = load_texture(state, &url, 64, 64, 16).await?;
+        loaded
+            .borrow_mut()
+            .water_rock_textures
+            .push((tex_id, 64, 64));
+    }
+
     // Pre-flip tree and rock textures at load time (eliminates per-frame save/translate/scale/restore)
     {
         let document = web_sys::window().unwrap().document().unwrap();
@@ -707,12 +744,66 @@ async fn load_textures(
             }
         }
 
+        let mut bush_flipped = Vec::new();
+        for &(tex_id, fw, fh) in &loaded_ref.bush_textures {
+            if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                let c = document
+                    .create_element("canvas")
+                    .unwrap()
+                    .dyn_into::<web_sys::HtmlCanvasElement>()
+                    .unwrap();
+                c.set_width(fw);
+                c.set_height(fh);
+                let fctx = c
+                    .get_context("2d")
+                    .unwrap()
+                    .unwrap()
+                    .dyn_into::<web_sys::CanvasRenderingContext2d>()
+                    .unwrap();
+                let _ = fctx.translate(fw as f64, 0.0);
+                let _ = fctx.scale(-1.0, 1.0);
+                let _ = fctx
+                    .draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                        img, 0.0, 0.0, fw as f64, fh as f64, 0.0, 0.0, fw as f64, fh as f64,
+                    );
+                bush_flipped.push((c, fw, fh));
+            }
+        }
+
+        let mut water_rock_flipped = Vec::new();
+        for &(tex_id, fw, fh) in &loaded_ref.water_rock_textures {
+            if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                let c = document
+                    .create_element("canvas")
+                    .unwrap()
+                    .dyn_into::<web_sys::HtmlCanvasElement>()
+                    .unwrap();
+                c.set_width(fw);
+                c.set_height(fh);
+                let fctx = c
+                    .get_context("2d")
+                    .unwrap()
+                    .unwrap()
+                    .dyn_into::<web_sys::CanvasRenderingContext2d>()
+                    .unwrap();
+                let _ = fctx.translate(fw as f64, 0.0);
+                let _ = fctx.scale(-1.0, 1.0);
+                let _ = fctx
+                    .draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                        img, 0.0, 0.0, fw as f64, fh as f64, 0.0, 0.0, fw as f64, fh as f64,
+                    );
+                water_rock_flipped.push((c, fw, fh));
+            }
+        }
+
         drop(loaded_ref);
         drop(guard);
 
         let mut loaded_mut = loaded.borrow_mut();
         loaded_mut.tree_textures_flipped = tree_flipped;
         loaded_mut.rock_textures_flipped = rock_flipped;
+        loaded_mut.bush_textures_flipped = bush_flipped;
+        loaded_mut.water_rock_textures_flipped = water_rock_flipped;
     }
 
     Ok(())
@@ -772,7 +863,10 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     draw_foam(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy, state.elapsed)?;
     ctx.draw_image_with_html_canvas_element(&state.terrain_canvas, 0.0, 0.0)?;
 
-    // 4. Draw overlays (player highlight, HP bars, path line, attack target)
+    // 4. Capture zone overlays (colored fill, dashed border, labels, progress bars)
+    draw_zone_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy)?;
+
+    // 5. Draw overlays (player highlight, HP bars, path line, attack target)
     draw_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy, ts, &state.animator)?;
 
     // 6. Draw foreground sprites (units, particles, projectiles, trees) — Y-sorted together
@@ -790,6 +884,9 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     )?;
 
     ctx.restore();
+
+    // Draw zone HUD pips in screen space (top-right corner)
+    draw_zone_hud(ctx, game, canvas_w, state.canvas2d.dpr)?;
 
     // Draw touch controls in screen space (after camera transform is restored)
     draw_touch_controls(ctx, input, state.canvas2d.dpr)?;
@@ -906,6 +1003,188 @@ fn render_terrain_cache(
         }
     }
 
+    // Layer 5: Bush decorations (rendered under units, on terrain)
+    if !loaded.bush_textures.is_empty() {
+        for gy in 0..h {
+            for gx in 0..w {
+                if game.grid.decoration(gx, gy) != Some(Decoration::Bush) {
+                    continue;
+                }
+                let variant_idx =
+                    (gx.wrapping_mul(41).wrapping_add(gy.wrapping_mul(23))) as usize
+                        % loaded.bush_textures.len();
+                let (tex_id, frame_w, frame_h) = loaded.bush_textures[variant_idx];
+
+                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                    let fw = frame_w as f64;
+                    let fh = frame_h as f64;
+                    let dx = (gx as f64) * ts;
+                    let dy = (gy as f64) * ts;
+
+                    if tile_flip(gx, gy) {
+                        if let Some((flipped, _, _)) = loaded.bush_textures_flipped.get(variant_idx) {
+                            ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                                flipped, 0.0, 0.0, fw, fh, dx, dy, ts, ts,
+                            )?;
+                        }
+                    } else {
+                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            img, 0.0, 0.0, fw, fh, dx, dy, ts, ts,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Draw capture zone overlays in world space (fill, dashed border, label, progress bar).
+fn draw_zone_overlays(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    min_gx: u32,
+    min_gy: u32,
+    max_gx: u32,
+    max_gy: u32,
+) -> Result<(), JsValue> {
+    let ts = TILE_SIZE as f64;
+
+    for zone in &game.zone_manager.zones {
+        // Skip zones entirely outside the visible range
+        let zone_min_gx = zone.center_gx.saturating_sub(zone.radius);
+        let zone_min_gy = zone.center_gy.saturating_sub(zone.radius);
+        let zone_max_gx = zone.center_gx + zone.radius + 1;
+        let zone_max_gy = zone.center_gy + zone.radius + 1;
+
+        if zone_max_gx < min_gx || zone_min_gx > max_gx
+            || zone_max_gy < min_gy || zone_min_gy > max_gy
+        {
+            continue;
+        }
+
+        let x = zone_min_gx as f64 * ts;
+        let y = zone_min_gy as f64 * ts;
+        let w = (zone.radius * 2 + 1) as f64 * ts;
+        let h = (zone.radius * 2 + 1) as f64 * ts;
+
+        // Fill + border color by state
+        let (fill_color, border_color) = match zone.state {
+            ZoneState::Neutral => ("rgba(200,200,200,0.06)", "rgba(200,200,200,0.25)"),
+            ZoneState::Contested => ("rgba(255,200,0,0.08)", "rgba(255,200,0,0.4)"),
+            ZoneState::Capturing(Faction::Blue) => ("rgba(60,120,255,0.08)", "rgba(60,120,255,0.4)"),
+            ZoneState::Capturing(Faction::Red) => ("rgba(255,60,60,0.08)", "rgba(255,60,60,0.4)"),
+            ZoneState::Controlled(Faction::Blue) => ("rgba(60,120,255,0.12)", "rgba(60,120,255,0.5)"),
+            ZoneState::Controlled(Faction::Red) => ("rgba(255,60,60,0.12)", "rgba(255,60,60,0.5)"),
+            _ => ("rgba(200,200,200,0.06)", "rgba(200,200,200,0.25)"),
+        };
+
+        // Semi-transparent fill
+        ctx.set_fill_style_str(fill_color);
+        ctx.fill_rect(x, y, w, h);
+
+        // Dashed border
+        ctx.set_stroke_style_str(border_color);
+        ctx.set_line_width(2.0);
+        let dash = js_sys::Array::new();
+        dash.push(&JsValue::from(8.0));
+        dash.push(&JsValue::from(4.0));
+        ctx.set_line_dash(&dash)?;
+        ctx.stroke_rect(x, y, w, h);
+        ctx.set_line_dash(&js_sys::Array::new())?;
+
+        // Zone name label (above zone)
+        let label_x = zone.center_wx as f64;
+        let label_y = y - 14.0;
+        ctx.set_font("bold 11px monospace");
+        ctx.set_text_align("center");
+        ctx.set_text_baseline("bottom");
+        ctx.set_fill_style_str("rgba(255,255,255,0.7)");
+        ctx.fill_text(zone.name, label_x, label_y)?;
+
+        // Progress bar (just below the label, above zone)
+        let bar_w = w * 0.5;
+        let bar_h = 4.0;
+        let bar_x = label_x - bar_w / 2.0;
+        let bar_y = y - 6.0;
+
+        // Bar background
+        ctx.set_fill_style_str("rgba(0,0,0,0.4)");
+        ctx.fill_rect(bar_x, bar_y, bar_w, bar_h);
+
+        // Blue fills right from center, Red fills left from center
+        let progress = zone.progress as f64;
+        if progress > 0.01 {
+            ctx.set_fill_style_str("rgba(60,120,255,0.85)");
+            let fill_w = bar_w * 0.5 * progress;
+            ctx.fill_rect(bar_x + bar_w * 0.5, bar_y, fill_w, bar_h);
+        } else if progress < -0.01 {
+            ctx.set_fill_style_str("rgba(255,60,60,0.85)");
+            let fill_w = bar_w * 0.5 * (-progress);
+            ctx.fill_rect(bar_x + bar_w * 0.5 - fill_w, bar_y, fill_w, bar_h);
+        }
+
+        // Center divider tick
+        ctx.set_fill_style_str("rgba(255,255,255,0.5)");
+        ctx.fill_rect(bar_x + bar_w * 0.5 - 0.5, bar_y - 1.0, 1.0, bar_h + 2.0);
+    }
+
+    Ok(())
+}
+
+/// Draw capture zone HUD pips in screen space (top-right corner).
+fn draw_zone_hud(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    canvas_w: f64,
+    dpr: f64,
+) -> Result<(), JsValue> {
+    let zones = &game.zone_manager.zones;
+    if zones.is_empty() {
+        return Ok(());
+    }
+
+    let pip_size = 14.0 * dpr;
+    let gap = 3.0 * dpr;
+    let margin = 10.0 * dpr;
+    let total_w = zones.len() as f64 * (pip_size + gap) - gap;
+    let start_x = canvas_w - margin - total_w;
+    let y = margin;
+
+    for (i, zone) in zones.iter().enumerate() {
+        let x = start_x + i as f64 * (pip_size + gap);
+
+        // Background pip
+        ctx.set_fill_style_str("rgba(0,0,0,0.5)");
+        ctx.fill_rect(x, y, pip_size, pip_size);
+
+        // Color and fill ratio by state
+        let (color, fill_ratio) = match zone.state {
+            ZoneState::Neutral => ("rgba(150,150,150,0.5)", 0.0),
+            ZoneState::Contested => ("rgba(255,200,0,0.7)", zone.progress.abs() as f64),
+            ZoneState::Capturing(Faction::Blue) | ZoneState::Controlled(Faction::Blue) => {
+                ("rgba(60,120,255,0.8)", zone.progress.abs() as f64)
+            }
+            ZoneState::Capturing(Faction::Red) | ZoneState::Controlled(Faction::Red) => {
+                ("rgba(255,60,60,0.8)", zone.progress.abs() as f64)
+            }
+            _ => ("rgba(150,150,150,0.5)", 0.0),
+        };
+
+        if fill_ratio > 0.01 {
+            ctx.set_fill_style_str(color);
+            let fill_h = pip_size * fill_ratio;
+            ctx.fill_rect(x, y + pip_size - fill_h, pip_size, fill_h);
+        }
+
+        // Border
+        ctx.set_stroke_style_str("rgba(255,255,255,0.35)");
+        ctx.set_line_width(1.0);
+        ctx.stroke_rect(x, y, pip_size, pip_size);
+    }
+
+    ctx.set_global_alpha(1.0);
     Ok(())
 }
 
@@ -926,7 +1205,15 @@ fn draw_water(
         if let Some((img, _, _, _)) = tm.get_image(water_tex_id) {
             for gy in min_gy..max_gy {
                 for gx in min_gx..max_gx {
-                    if game.grid.get(gx, gy).is_land() {
+                    // Draw water on water tiles AND on land tiles adjacent to water
+                    // (foam sprites are 192x192 centered on land, so they need water behind them)
+                    let is_water = !game.grid.get(gx, gy).is_land();
+                    let has_foam = game
+                        .water_adjacency
+                        .get((gy * game.grid.width + gx) as usize)
+                        .copied()
+                        .unwrap_or(false);
+                    if !is_water && !has_foam {
                         continue;
                     }
                     let dx = (gx as f64) * ts;
@@ -1137,10 +1424,11 @@ fn draw_touch_controls(
 
 /// A drawable entity for Y-sorted rendering.
 enum Drawable {
-    Unit(usize),       // index into game.units
-    Tree(u32, u32),    // (gx, gy)
-    Rock(u32, u32),    // (gx, gy)
-    Particle(usize),   // index into game.particles
+    Unit(usize),        // index into game.units
+    Tree(u32, u32),     // (gx, gy)
+    Rock(u32, u32),     // (gx, gy)
+    WaterRock(u32, u32), // (gx, gy)
+    Particle(usize),    // index into game.particles
 }
 
 fn draw_foreground(
@@ -1187,6 +1475,12 @@ fn draw_foreground(
                     drawables.push((foot_y, Drawable::Rock(gx, gy)));
                 }
                 _ => {}
+            }
+            // Decorations (bushes rendered in terrain cache, not here)
+            if game.grid.decoration(gx, gy) == Some(Decoration::WaterRock)
+                && !loaded.water_rock_textures.is_empty()
+            {
+                drawables.push((foot_y, Drawable::WaterRock(gx, gy)));
             }
         }
     }
@@ -1337,6 +1631,33 @@ fn draw_foreground(
                     } else {
                         ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
                             img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
+                        )?;
+                    }
+                }
+            }
+
+            Drawable::WaterRock(gx, gy) => {
+                let variant_idx =
+                    (gx.wrapping_mul(37).wrapping_add(gy.wrapping_mul(19))) as usize
+                        % loaded.water_rock_textures.len();
+                let (tex_id, frame_w, frame_h) = loaded.water_rock_textures[variant_idx];
+
+                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                    let fw = frame_w as f64;
+                    let fh = frame_h as f64;
+                    let dx = (*gx as f64) * ts;
+                    let dy = (*gy as f64) * ts;
+
+                    if tile_flip(*gx, *gy) {
+                        if let Some((flipped, _, _)) = loaded.water_rock_textures_flipped.get(variant_idx) {
+                            ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                                flipped, 0.0, 0.0, fw, fh, dx, dy, ts, ts,
+                            )?;
+                        }
+                    } else {
+                        // Use frame 0 only (static)
+                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            img, 0.0, 0.0, fw, fh, dx, dy, ts, ts,
                         )?;
                     }
                 }

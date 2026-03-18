@@ -7,6 +7,7 @@ use crate::mapgen;
 use crate::particle::{Particle, Projectile};
 use crate::turn::TurnState;
 use crate::unit::{Facing, Faction, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS};
+use crate::zone::ZoneManager;
 
 /// Player vision radius in tiles.
 const FOV_RADIUS: i32 = 15;
@@ -49,6 +50,8 @@ pub struct Game {
     pub blue_objective: (f32, f32),
     /// Strategic objective for Red faction (world-space coords of Blue spawn).
     pub red_objective: (f32, f32),
+    /// Capture zone manager.
+    pub zone_manager: ZoneManager,
 }
 
 impl Game {
@@ -77,6 +80,7 @@ impl Game {
             player_aim_dir: 0.0,
             blue_objective: (0.0, 0.0),
             red_objective: (0.0, 0.0),
+            zone_manager: ZoneManager::empty(),
         }
     }
 
@@ -785,7 +789,11 @@ impl Game {
     }
 
     /// Return the strategic objective for a faction (world-space coordinates).
+    /// Prioritizes capture zones; falls back to enemy spawn if all zones are controlled.
     fn faction_objective(&self, faction: Faction) -> (f32, f32) {
+        if let Some(zone) = self.zone_manager.best_target_zone(faction) {
+            return (zone.center_wx, zone.center_wy);
+        }
         match faction {
             Faction::Blue => self.blue_objective,
             _ => self.red_objective,
@@ -1334,6 +1342,70 @@ impl Game {
         !self.units.iter().any(|u| u.alive && u.faction == faction)
     }
 
+    /// Tick capture zone progress based on unit positions.
+    pub fn tick_zones(&mut self, dt: f32) {
+        self.zone_manager.count_units(&self.units);
+        self.zone_manager.tick_capture(dt);
+    }
+
+    /// Spawn reinforcement units for factions with zone control advantage.
+    pub fn tick_reinforcements(&mut self, dt: f32) {
+        use crate::zone::{MAX_REINFORCEMENTS_PER_WAVE, MAX_UNITS_PER_FACTION, REINFORCEMENT_INTERVAL};
+
+        self.zone_manager.reinforcement_timer += dt;
+        if self.zone_manager.reinforcement_timer < REINFORCEMENT_INTERVAL {
+            return;
+        }
+        self.zone_manager.reinforcement_timer = 0.0;
+
+        for &faction in &[Faction::Blue, Faction::Red] {
+            let own_zones = self.zone_manager.zones_controlled_by(faction);
+            let enemy_faction = match faction {
+                Faction::Blue => Faction::Red,
+                _ => Faction::Blue,
+            };
+            let enemy_zones = self.zone_manager.zones_controlled_by(enemy_faction);
+
+            let reinforcements = own_zones
+                .saturating_sub(enemy_zones)
+                .min(MAX_REINFORCEMENTS_PER_WAVE);
+            if reinforcements == 0 {
+                continue;
+            }
+
+            let current_count = self.units.iter().filter(|u| u.alive && u.faction == faction).count();
+            if current_count >= MAX_UNITS_PER_FACTION {
+                continue;
+            }
+
+            // Find the controlled zone closest to own deployment
+            let own_x: f32 = match faction {
+                Faction::Blue => 5.0,
+                _ => 59.0,
+            };
+            let spawn_zone = self
+                .zone_manager
+                .zones
+                .iter()
+                .filter(|z| z.state == crate::zone::ZoneState::Controlled(faction))
+                .min_by_key(|z| ((z.center_gx as f32 - own_x).abs() * 10.0) as i32);
+
+            if let Some(zone) = spawn_zone {
+                let zone_gx = zone.center_gx;
+                let zone_gy = zone.center_gy;
+                let kinds = [UnitKind::Warrior, UnitKind::Lancer, UnitKind::Archer];
+                let turn = self.turn_state.turn_number as usize;
+                for i in 0..reinforcements {
+                    let kind = kinds[(turn + i as usize) % kinds.len()];
+                    let offset = (i as i32) - (reinforcements as i32 / 2);
+                    let gy = (zone_gy as i32 + offset)
+                        .clamp(0, GRID_SIZE as i32 - 1) as u32;
+                    self.spawn_unit(kind, faction, zone_gx, gy, false);
+                }
+            }
+        }
+    }
+
     pub fn setup_demo_battle(&mut self) {
         let seed = (js_sys::Math::random() * u32::MAX as f64) as u32;
         self.setup_demo_battle_with_seed(seed);
@@ -1348,6 +1420,9 @@ impl Game {
         // Each faction's objective is the other faction's spawn zone
         self.blue_objective = grid::grid_to_world(red_x, red_y);
         self.red_objective = grid::grid_to_world(blue_x, blue_y);
+
+        // Initialize capture zones
+        self.zone_manager = ZoneManager::create_default_zones();
 
         // Blue army (player side) — 15 units
         // Front line: player warrior + 4 warriors (armored, forward)
@@ -1988,6 +2063,51 @@ mod tests {
         assert!(
             (after_x - before_x).abs() < 0.01,
             "Enemy should NOT be pushed into water, before={before_x} after={after_x}"
+        );
+    }
+
+    #[test]
+    fn tick_zones_updates_capture_progress() {
+        let mut game = Game::new(960.0, 640.0);
+        game.zone_manager = ZoneManager::create_default_zones();
+        // Place a Blue unit inside zone 0 (center_gx=16, center_gy=32)
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 16, 32, false);
+        game.tick_zones(4.0);
+        assert!(
+            game.zone_manager.zones[0].progress > 0.0,
+            "Zone progress should advance with a Blue unit inside"
+        );
+    }
+
+    #[test]
+    fn ai_targets_zone_not_spawn() {
+        let mut game = Game::new(960.0, 640.0);
+        game.zone_manager = ZoneManager::create_default_zones();
+        game.blue_objective = grid::grid_to_world(58, 32);
+        // All zones neutral — Blue should target nearest zone, not enemy spawn
+        let obj = game.faction_objective(Faction::Blue);
+        let (spawn_wx, _) = grid::grid_to_world(58, 32);
+        assert!(
+            obj.0 < spawn_wx,
+            "Blue should target a zone (x < {spawn_wx}), got x={}", obj.0
+        );
+    }
+
+    #[test]
+    fn reinforcements_spawn_on_zone_advantage() {
+        let mut game = Game::new(960.0, 640.0);
+        game.zone_manager = ZoneManager::create_default_zones();
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 32, true);
+        // Give Blue 3 zones, Red 0
+        game.zone_manager.zones[0].state = crate::zone::ZoneState::Controlled(Faction::Blue);
+        game.zone_manager.zones[1].state = crate::zone::ZoneState::Controlled(Faction::Blue);
+        game.zone_manager.zones[2].state = crate::zone::ZoneState::Controlled(Faction::Blue);
+        let count_before = game.units.iter().filter(|u| u.faction == Faction::Blue).count();
+        game.tick_reinforcements(crate::zone::REINFORCEMENT_INTERVAL + 0.1);
+        let count_after = game.units.iter().filter(|u| u.faction == Faction::Blue).count();
+        assert!(
+            count_after > count_before,
+            "Blue should have received reinforcements ({count_before} -> {count_after})"
         );
     }
 }

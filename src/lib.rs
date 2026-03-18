@@ -10,6 +10,7 @@ pub mod sprite;
 pub mod mapgen;
 pub mod turn;
 pub mod unit;
+pub mod zone;
 
 #[cfg(target_arch = "wasm32")]
 mod game_loop;

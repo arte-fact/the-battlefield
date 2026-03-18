@@ -34,10 +34,18 @@ impl TileKind {
 
 pub const GRID_SIZE: u32 = 64;
 
+/// Decorative elements that sit on top of tiles without affecting gameplay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Decoration {
+    Bush,
+    WaterRock,
+}
+
 /// The battlefield grid: a 64x64 array of tiles.
 pub struct Grid {
     tiles: Vec<TileKind>,
     elevations: Vec<u8>,
+    pub decorations: Vec<Option<Decoration>>,
     pub width: u32,
     pub height: u32,
 }
@@ -48,6 +56,7 @@ impl Grid {
         Self {
             tiles: vec![TileKind::Grass; size],
             elevations: vec![0; size],
+            decorations: vec![None; size],
             width,
             height,
         }
@@ -90,6 +99,14 @@ impl Grid {
         self.elevations[(y * self.width + x) as usize] = elev;
     }
 
+    pub fn decoration(&self, x: u32, y: u32) -> Option<Decoration> {
+        self.decorations[(y * self.width + x) as usize]
+    }
+
+    pub fn set_decoration(&mut self, x: u32, y: u32, dec: Option<Decoration>) {
+        self.decorations[(y * self.width + x) as usize] = dec;
+    }
+
     /// Combined movement cost: base tile cost + 1 per elevation level climbed.
     pub fn effective_movement_cost(&self, x: u32, y: u32) -> Option<u32> {
         self.get(x, y).movement_cost()
@@ -122,15 +139,23 @@ impl Grid {
         true
     }
 
-    /// Speed multiplier at world position (1.0 grass, 0.5 forest, 0.0 out-of-bounds).
+    /// Speed multiplier at world position (1.0 grass, 0.75 bush, 0.5 forest, 0.0 out-of-bounds).
     pub fn speed_factor_at(&self, wx: f32, wy: f32) -> f32 {
         let (gx, gy) = world_to_grid(wx, wy);
         if !self.in_bounds(gx, gy) {
             return 0.0;
         }
-        match self.get(gx as u32, gy as u32) {
+        let ux = gx as u32;
+        let uy = gy as u32;
+        match self.get(ux, uy) {
             TileKind::Forest => 0.5,
-            TileKind::Grass => 1.0,
+            TileKind::Grass => {
+                if self.decoration(ux, uy) == Some(Decoration::Bush) {
+                    0.75
+                } else {
+                    1.0
+                }
+            }
             _ => 0.0,
         }
     }
