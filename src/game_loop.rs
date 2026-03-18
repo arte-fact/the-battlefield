@@ -3,7 +3,7 @@ use crate::autotile;
 use crate::game::{Game, ATTACK_CONE_HALF_ANGLE};
 use crate::grid::{self, TileKind, TILE_SIZE};
 use crate::input::Input;
-use crate::particle::{Particle, Projectile};
+use crate::particle::Particle;
 use crate::renderer::{draw_sprite, load_image, Canvas2d, TextureId, TextureManager};
 use crate::sprite::SpriteSheet;
 use crate::unit::{Facing, Faction, UnitAnim, UnitKind, DEATH_FADE_DURATION};
@@ -290,9 +290,7 @@ pub fn run(
                     || inp.take_attack_pressed()
                     || attack_held;
                 if attack_input {
-                    if !game.tick_player_combat() {
-                        game.player_attack_swing();
-                    }
+                    game.player_attack();
                 }
 
                 // Resolve circle-circle collisions
@@ -322,9 +320,6 @@ pub fn run(
                     let anim_output = animator.update(dt as f32, &mut game.units);
                     for (kind, x, y) in anim_output.particles {
                         game.particles.push(Particle::new(kind, x, y));
-                    }
-                    for (sx, sy, tx, ty) in anim_output.projectiles {
-                        game.projectiles.push(Projectile::new(sx, sy, tx, ty));
                     }
                 }
             }
@@ -772,9 +767,10 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     let max_gx = ((vr / TILE_SIZE).ceil() as i32).min(game.grid.width as i32) as u32;
     let max_gy = ((vb / TILE_SIZE).ceil() as i32).min(game.grid.height as i32) as u32;
 
-    // 3. Blit cached terrain (single draw call) + animated foam
-    ctx.draw_image_with_html_canvas_element(&state.terrain_canvas, 0.0, 0.0)?;
+    // 3. Water → foam → cached land/elevation (foam must layer between water and grass)
+    draw_water(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy)?;
     draw_foam(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy, state.elapsed)?;
+    ctx.draw_image_with_html_canvas_element(&state.terrain_canvas, 0.0, 0.0)?;
 
     // 4. Draw overlays (player highlight, HP bars, path line, attack target)
     draw_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy, ts, &state.animator)?;
@@ -813,20 +809,8 @@ fn render_terrain_cache(
     let w = game.grid.width;
     let h = game.grid.height;
 
-    // Layer 1: Water background (full grid)
-    if let Some(water_tex_id) = loaded.water_texture {
-        if let Some((img, _, _, _)) = tm.get_image(water_tex_id) {
-            for gy in 0..h {
-                for gx in 0..w {
-                    let dx = (gx as f64) * ts;
-                    let dy = (gy as f64) * ts;
-                    ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                        img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
-                    )?;
-                }
-            }
-        }
-    }
+    // Water is NOT cached here — it's drawn per-frame so foam can layer between water and land.
+    // This canvas stays transparent where there's no land, letting water+foam show through.
 
     // Layer 3: Flat ground (auto-tiled, flips amortized since drawn once)
     if let Some(tilemap_tex_id) = loaded.tilemap_texture {
@@ -917,6 +901,39 @@ fn render_terrain_cache(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Draw water background tiles (visible range only, per-frame).
+fn draw_water(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    loaded: &LoadedTextures,
+    tm: &TextureManager,
+    min_gx: u32,
+    min_gy: u32,
+    max_gx: u32,
+    max_gy: u32,
+) -> Result<(), JsValue> {
+    let ts = TILE_SIZE as f64;
+
+    if let Some(water_tex_id) = loaded.water_texture {
+        if let Some((img, _, _, _)) = tm.get_image(water_tex_id) {
+            for gy in min_gy..max_gy {
+                for gx in min_gx..max_gx {
+                    if game.grid.get(gx, gy).is_land() {
+                        continue;
+                    }
+                    let dx = (gx as f64) * ts;
+                    let dy = (gy as f64) * ts;
+                    ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                        img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
+                    )?;
                 }
             }
         }

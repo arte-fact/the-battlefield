@@ -100,6 +100,41 @@ impl Grid {
         self.elevation(x, y) as i32
     }
 
+    /// Is a circle at (wx,wy) with given radius entirely on passable terrain?
+    /// Checks center + 4 cardinal edge points.
+    pub fn is_circle_passable(&self, wx: f32, wy: f32, radius: f32) -> bool {
+        let points = [
+            (wx, wy),
+            (wx + radius, wy),
+            (wx - radius, wy),
+            (wx, wy + radius),
+            (wx, wy - radius),
+        ];
+        for &(px, py) in &points {
+            let (gx, gy) = world_to_grid(px, py);
+            if !self.in_bounds(gx, gy) {
+                return false;
+            }
+            if !self.is_passable(gx as u32, gy as u32) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Speed multiplier at world position (1.0 grass, 0.5 forest, 0.0 out-of-bounds).
+    pub fn speed_factor_at(&self, wx: f32, wy: f32) -> f32 {
+        let (gx, gy) = world_to_grid(wx, wy);
+        if !self.in_bounds(gx, gy) {
+            return 0.0;
+        }
+        match self.get(gx as u32, gy as u32) {
+            TileKind::Forest => 0.5,
+            TileKind::Grass => 1.0,
+            _ => 0.0,
+        }
+    }
+
     /// A* pathfinding from (sx, sy) to (gx, gy).
     /// Returns the path as a list of grid positions excluding the start, or None if unreachable.
     /// `occupied` is called to check if a tile is blocked by a unit (not checked for the goal).
@@ -441,6 +476,30 @@ mod tests {
             }
             prev = (px, py);
         }
+    }
+
+    #[test]
+    fn circle_passable_on_grass() {
+        let grid = Grid::new_grass(16, 16);
+        let (wx, wy) = grid_to_world(5, 5);
+        assert!(grid.is_circle_passable(wx, wy, 22.0));
+    }
+
+    #[test]
+    fn circle_not_passable_on_water() {
+        let mut grid = Grid::new_grass(16, 16);
+        grid.set(5, 5, TileKind::Water);
+        let (wx, wy) = grid_to_world(5, 5);
+        assert!(!grid.is_circle_passable(wx, wy, 22.0));
+    }
+
+    #[test]
+    fn speed_factor_grass_and_forest() {
+        let mut grid = Grid::new_grass(16, 16);
+        let (wx, wy) = grid_to_world(5, 5);
+        assert!((grid.speed_factor_at(wx, wy) - 1.0).abs() < f32::EPSILON);
+        grid.set(5, 5, TileKind::Forest);
+        assert!((grid.speed_factor_at(wx, wy) - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]

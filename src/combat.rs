@@ -1,5 +1,5 @@
-use crate::grid::Grid;
-use crate::unit::{Facing, Unit, UnitAnim};
+use crate::grid::{Grid, TILE_SIZE};
+use crate::unit::{Unit, UnitAnim, MELEE_RANGE};
 
 /// Result of a combat action.
 #[derive(Debug, PartialEq, Eq)]
@@ -10,48 +10,42 @@ pub struct CombatResult {
 
 /// Calculate melee damage: max(1, ATK - DEF + terrain_bonus).
 pub fn calc_melee_damage(attacker: &Unit, defender: &Unit, grid: &Grid) -> i32 {
-    let terrain_def = grid.get(defender.grid_x, defender.grid_y).defense_bonus();
+    let (dx, dy) = defender.grid_cell();
+    let terrain_def = grid.get(dx, dy).defense_bonus();
     (attacker.stats.atk - defender.stats.def - terrain_def).max(1)
 }
 
 /// Calculate ranged damage: max(1, ATK - DEF + terrain_bonus).
 pub fn calc_ranged_damage(attacker: &Unit, defender: &Unit, grid: &Grid) -> i32 {
-    let terrain_def = grid.get(defender.grid_x, defender.grid_y).defense_bonus();
+    let (dx, dy) = defender.grid_cell();
+    let terrain_def = grid.get(dx, dy).defense_bonus();
     (attacker.stats.atk - defender.stats.def - terrain_def).max(1)
 }
 
-/// Check if attacker can melee the defender (adjacent, range 1).
+/// Check if attacker can melee the defender (within MELEE_RANGE).
 pub fn can_melee(attacker: &Unit, defender: &Unit) -> bool {
     attacker.alive
         && defender.alive
-        && !attacker.has_attacked
+        && attacker.attack_cooldown <= 0.0
         && attacker.faction != defender.faction
-        && attacker.distance_to(defender.grid_x, defender.grid_y) <= 1
+        && attacker.distance_to_unit(defender) <= MELEE_RANGE
 }
 
-/// Check if attacker can shoot the defender (within range, for units with range > 1).
+/// Check if attacker can shoot the defender (within range * TILE_SIZE).
 pub fn can_ranged_attack(attacker: &Unit, defender: &Unit) -> bool {
     attacker.alive
         && defender.alive
-        && !attacker.has_attacked
+        && attacker.attack_cooldown <= 0.0
         && attacker.faction != defender.faction
         && attacker.stats.range > 1
-        && attacker.distance_to(defender.grid_x, defender.grid_y) <= attacker.stats.range
+        && attacker.distance_to_unit(defender) <= attacker.stats.range as f32 * TILE_SIZE
 }
 
 /// Execute a melee attack. Mutates both units. Returns combat result.
 pub fn execute_melee(attacker: &mut Unit, defender: &mut Unit, grid: &Grid) -> CombatResult {
     let damage = calc_melee_damage(attacker, defender, grid);
     defender.take_damage(damage);
-    attacker.has_attacked = true;
-
-    // Face the defender
-    if defender.grid_x > attacker.grid_x {
-        attacker.facing = Facing::Right;
-    } else if defender.grid_x < attacker.grid_x {
-        attacker.facing = Facing::Left;
-    }
-
+    attacker.start_attack_cooldown();
     attacker.set_anim(UnitAnim::Attack);
 
     CombatResult {
@@ -64,14 +58,7 @@ pub fn execute_melee(attacker: &mut Unit, defender: &mut Unit, grid: &Grid) -> C
 pub fn execute_ranged(attacker: &mut Unit, defender: &mut Unit, grid: &Grid) -> CombatResult {
     let damage = calc_ranged_damage(attacker, defender, grid);
     defender.take_damage(damage);
-    attacker.has_attacked = true;
-
-    if defender.grid_x > attacker.grid_x {
-        attacker.facing = Facing::Right;
-    } else if defender.grid_x < attacker.grid_x {
-        attacker.facing = Facing::Left;
-    }
-
+    attacker.start_attack_cooldown();
     attacker.set_anim(UnitAnim::Attack);
 
     CombatResult {
@@ -84,7 +71,7 @@ pub fn execute_ranged(attacker: &mut Unit, defender: &mut Unit, grid: &Grid) -> 
 pub fn execute_heal(healer: &mut Unit, target: &mut Unit) -> i32 {
     let heal_amount = 3.min(target.stats.max_hp - target.hp);
     target.hp += heal_amount;
-    healer.has_attacked = true;
+    healer.start_attack_cooldown();
     healer.set_anim(UnitAnim::Attack);
     heal_amount
 }
@@ -135,6 +122,7 @@ mod tests {
     fn can_melee_adjacent() {
         let a = make_warrior(1, Faction::Blue, 5, 5);
         let b = make_warrior(2, Faction::Red, 6, 5);
+        // 1 tile = 64px apart, MELEE_RANGE = 96px
         assert!(can_melee(&a, &b));
     }
 
@@ -149,6 +137,7 @@ mod tests {
     fn cannot_melee_distant() {
         let a = make_warrior(1, Faction::Blue, 5, 5);
         let b = make_warrior(2, Faction::Red, 8, 5);
+        // 3 tiles = 192px, MELEE_RANGE = 96px
         assert!(!can_melee(&a, &b));
     }
 
@@ -166,14 +155,16 @@ mod tests {
     #[test]
     fn can_ranged_attack_in_range() {
         let a = make_archer(1, Faction::Blue, 5, 5);
-        let b = make_warrior(2, Faction::Red, 10, 5);
+        let b = make_warrior(2, Faction::Red, 12, 5);
+        // 7 tiles = 448px, range 7 * 64 = 448px
         assert!(can_ranged_attack(&a, &b));
     }
 
     #[test]
     fn cannot_ranged_attack_out_of_range() {
         let a = make_archer(1, Faction::Blue, 5, 5);
-        let b = make_warrior(2, Faction::Red, 11, 5);
+        let b = make_warrior(2, Faction::Red, 13, 5);
+        // 8 tiles = 512px, range 7 * 64 = 448px
         assert!(!can_ranged_attack(&a, &b));
     }
 

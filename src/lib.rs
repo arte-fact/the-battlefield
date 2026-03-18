@@ -46,7 +46,7 @@ pub async fn start() -> Result<(), JsValue> {
     canvas.set_width(canvas_w);
     canvas.set_height(canvas_h);
 
-    let canvas2d = renderer::Canvas2d::new(&canvas)?;
+    let canvas2d = renderer::Canvas2d::new(&canvas, dpr as f64)?;
 
     let mut game_state = game::Game::new(canvas_w as f32, canvas_h as f32);
     game_state.setup_demo_battle();

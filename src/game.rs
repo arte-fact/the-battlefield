@@ -121,6 +121,26 @@ impl Game {
         self.units.iter().find(|u| u.id == id)
     }
 
+    /// Find the closest alive enemy unit near a world position (for arrow impact).
+    /// Returns the index of the closest enemy of the opposing faction within hit radius.
+    fn find_unit_near(&self, x: f32, y: f32, attacker_faction: Faction) -> Option<usize> {
+        let hit_radius = TILE_SIZE * 0.75;
+        self.units
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| u.alive && u.faction != attacker_faction)
+            .filter_map(|(i, u)| {
+                let dist = u.distance_to_pos(x, y);
+                if dist <= hit_radius {
+                    Some((i, dist))
+                } else {
+                    None
+                }
+            })
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+    }
+
     /// Find nearest enemy unit within range of a world position.
     pub fn enemy_in_range(&self, x: f32, y: f32, faction: Faction, range: f32) -> Option<UnitId> {
         self.units
@@ -324,10 +344,8 @@ impl Game {
             self.units[idx].y = new_y;
         }
 
-        // Update facing (skip for player during attack — allows retreating while swinging)
-        let lock_facing = self.units[idx].is_player
-            && self.units[idx].current_anim == UnitAnim::Attack;
-        if !lock_facing {
+        // Update facing from movement (player facing is managed by the game loop)
+        if !self.units[idx].is_player {
             if vx > 0.01 {
                 self.units[idx].facing = Facing::Right;
             } else if vx < -0.01 {
@@ -337,6 +355,7 @@ impl Game {
     }
 
     /// Resolve circle-circle collisions between all alive units.
+    /// Only pushes a unit if the destination is passable terrain.
     pub fn resolve_collisions(&mut self) {
         let min_dist = UNIT_RADIUS * 2.0;
 
@@ -355,10 +374,35 @@ impl Game {
                     let overlap = (min_dist - dist) / 2.0;
                     let nx = dx / dist;
                     let ny = dy / dist;
-                    self.units[i].x -= nx * overlap;
-                    self.units[i].y -= ny * overlap;
-                    self.units[j].x += nx * overlap;
-                    self.units[j].y += ny * overlap;
+                    let new_ix = self.units[i].x - nx * overlap;
+                    let new_iy = self.units[i].y - ny * overlap;
+                    let new_jx = self.units[j].x + nx * overlap;
+                    let new_jy = self.units[j].y + ny * overlap;
+                    let i_ok = self.grid.is_circle_passable(new_ix, new_iy, UNIT_RADIUS);
+                    let j_ok = self.grid.is_circle_passable(new_jx, new_jy, UNIT_RADIUS);
+                    if i_ok && j_ok {
+                        self.units[i].x = new_ix;
+                        self.units[i].y = new_iy;
+                        self.units[j].x = new_jx;
+                        self.units[j].y = new_jy;
+                    } else if i_ok {
+                        // Only push i (j is against terrain)
+                        let dbl_ix = self.units[i].x - nx * overlap * 2.0;
+                        let dbl_iy = self.units[i].y - ny * overlap * 2.0;
+                        if self.grid.is_circle_passable(dbl_ix, dbl_iy, UNIT_RADIUS) {
+                            self.units[i].x = dbl_ix;
+                            self.units[i].y = dbl_iy;
+                        }
+                    } else if j_ok {
+                        // Only push j (i is against terrain)
+                        let dbl_jx = self.units[j].x + nx * overlap * 2.0;
+                        let dbl_jy = self.units[j].y + ny * overlap * 2.0;
+                        if self.grid.is_circle_passable(dbl_jx, dbl_jy, UNIT_RADIUS) {
+                            self.units[j].x = dbl_jx;
+                            self.units[j].y = dbl_jy;
+                        }
+                    }
+                    // If neither is passable, don't move either
                 }
             }
         }
@@ -408,14 +452,15 @@ impl Game {
 
     /// Try to attack the nearest enemy in range. Returns true if an attack was executed.
     /// Called explicitly from attack key/button — never auto-attacks.
-    pub fn tick_player_combat(&mut self) -> bool {
+    /// Player attack: hit enemies in cone if any, otherwise whiff swing.
+    pub fn player_attack(&mut self) {
         let player_idx = match self.units.iter().position(|u| u.is_player && u.alive) {
             Some(i) => i,
-            None => return false,
+            None => return,
         };
 
         if !self.units[player_idx].can_act() {
-            return false;
+            return;
         }
 
         let player_id = self.units[player_idx].id;
@@ -437,32 +482,20 @@ impl Game {
             self.player_aim_dir,
             ATTACK_CONE_HALF_ANGLE,
         );
+
         if targets.is_empty() {
-            return false;
-        }
-        for enemy_id in targets {
-            self.execute_attack(player_id, enemy_id, None);
-            if let Some(idx) = self.units.iter().position(|u| u.id == enemy_id) {
-                self.apply_knockback(idx, px, py);
+            // Whiff: play attack anim with half cooldown
+            self.units[player_idx].set_anim(UnitAnim::Attack);
+            self.units[player_idx].attack_cooldown =
+                self.units[player_idx].kind.base_attack_cooldown() * 0.5;
+        } else {
+            for enemy_id in targets {
+                self.execute_attack(player_id, enemy_id, None);
+                if let Some(idx) = self.units.iter().position(|u| u.id == enemy_id) {
+                    self.apply_knockback(idx, px, py);
+                }
             }
         }
-        true
-    }
-
-    /// Play attack animation on the player even with no target (whiff swing).
-    /// Starts a shorter cooldown so it feels responsive but doesn't lock the player.
-    pub fn player_attack_swing(&mut self) {
-        let player_idx = match self.units.iter().position(|u| u.is_player && u.alive) {
-            Some(i) => i,
-            None => return,
-        };
-        if !self.units[player_idx].can_act() {
-            return;
-        }
-        self.units[player_idx].set_anim(UnitAnim::Attack);
-        // Half the normal cooldown for a whiff — feels snappy
-        self.units[player_idx].attack_cooldown =
-            self.units[player_idx].kind.base_attack_cooldown() * 0.5;
     }
 
     /// Real-time AI tick: each AI unit acts independently with continuous movement.
@@ -489,7 +522,7 @@ impl Game {
         match kind {
             UnitKind::Monk => self.ai_monk_tick(ai_idx, dt),
             UnitKind::Archer => self.ai_archer_tick(ai_idx, dt),
-            UnitKind::Warrior | UnitKind::Pawn | UnitKind::Lancer => {
+            UnitKind::Warrior | UnitKind::Lancer => {
                 self.ai_melee_tick(ai_idx, dt)
             }
         }
@@ -509,7 +542,9 @@ impl Game {
         };
         let (ex, ey, enemy_id, dist) = enemy;
 
-        if self.units[ai_idx].can_act() && dist <= MELEE_RANGE {
+        let melee_reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
+        let melee_reach = melee_reach.max(MELEE_RANGE);
+        if self.units[ai_idx].can_act() && dist <= melee_reach {
             self.execute_attack(ai_id, enemy_id, None);
         } else {
             self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
@@ -557,21 +592,22 @@ impl Game {
     }
 
     /// Real-time monk AI: heal nearby wounded ally if can_act, flee from enemies,
-    /// then move toward wounded allies or follow friendlies — only if safe.
+    /// approach wounded allies to heal them, or follow friendlies at standoff distance.
     fn ai_monk_tick(&mut self, ai_idx: usize, dt: f32) {
         let faction = self.units[ai_idx].faction;
         let ax = self.units[ai_idx].x;
         let ay = self.units[ai_idx].y;
         let ai_id = self.units[ai_idx].id;
+        let heal_range = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
 
-        // Find nearby ally below 60% HP within melee range
+        // Find nearby wounded ally within heal range
         let heal_target = self
             .units
             .iter()
             .filter(|u| u.alive && u.faction == faction && u.id != ai_id)
             .filter(|u| {
                 let dist = u.distance_to_pos(ax, ay);
-                dist <= MELEE_RANGE && (u.hp as f32) < (u.stats.max_hp as f32 * 0.6)
+                dist <= heal_range && u.hp < u.stats.max_hp
             })
             .min_by_key(|u| u.hp)
             .map(|u| u.id);
@@ -586,7 +622,6 @@ impl Game {
         // Flee if an enemy is too close
         let enemy_dist = self.nearest_enemy_dist(ax, ay, faction);
         if enemy_dist < MONK_SAFE_DIST {
-            // Find nearest enemy position and move away from it
             if let Some(enemy) = self.find_nearest_enemy(ai_idx) {
                 let (ex, ey, _, _) = enemy;
                 let flee_x = ax + (ax - ex);
@@ -596,9 +631,9 @@ impl Game {
             }
         }
 
-        // Move toward lowest-HP wounded ally — only if safe, target a point behind the ally
+        // Move directly toward wounded ally to get in heal range (no standoff)
         let vision_range = Self::AI_VISION_RADIUS as f32 * TILE_SIZE;
-        let move_target = self
+        let wounded_target = self
             .units
             .iter()
             .filter(|u| u.alive && u.faction == faction && u.id != ai_id)
@@ -608,9 +643,8 @@ impl Game {
             .min_by_key(|u| u.hp)
             .map(|u| (u.x, u.y));
 
-        if let Some((tx, ty)) = move_target {
-            let (sx, sy) = Self::monk_standoff_point(ax, ay, tx, ty);
-            self.ai_move_toward_continuous(ai_idx, sx, sy, dt);
+        if let Some((tx, ty)) = wounded_target {
+            self.ai_move_toward_continuous(ai_idx, tx, ty, dt);
             return;
         }
 
@@ -948,46 +982,40 @@ impl Game {
             ((ax - bx) * (ax - bx) + (ay - by) * (ay - by)).sqrt()
         };
 
-        let is_ranged = self.units[attacker_idx].stats.range > 1 && dist > MELEE_RANGE;
+        let is_ranged = self.units[attacker_idx].kind == UnitKind::Archer && dist > MELEE_RANGE;
 
         if is_ranged {
             let def_x = self.units[defender_idx].x;
             let def_y = self.units[defender_idx].y;
             let (snap_x, snap_y) = target_snapshot_pos.unwrap_or((def_x, def_y));
-            let target_moved = {
-                let ddx = def_x - snap_x;
-                let ddy = def_y - snap_y;
-                (ddx * ddx + ddy * ddy).sqrt() > TILE_SIZE * 0.5
-            };
 
-            if target_moved {
-                // Miss: arrow hits empty ground
-                self.turn_events.push(TurnEvent::RangedAttack {
-                    attacker_id,
-                    defender_id,
-                    damage: 0,
-                    killed: false,
-                    target_pos: (snap_x, snap_y),
-                    missed: true,
-                });
-            } else {
-                let (attacker, defender) = if attacker_idx < defender_idx {
-                    let (left, right) = self.units.split_at_mut(defender_idx);
-                    (&mut left[attacker_idx], &mut right[0])
-                } else {
-                    let (left, right) = self.units.split_at_mut(attacker_idx);
-                    (&mut right[0], &mut left[defender_idx])
-                };
-                let result = combat::execute_ranged(attacker, defender, &self.grid);
-                self.turn_events.push(TurnEvent::RangedAttack {
-                    attacker_id,
-                    defender_id,
-                    damage: result.damage,
-                    killed: result.target_killed,
-                    target_pos: (snap_x, snap_y),
-                    missed: false,
-                });
-            }
+            // Calculate damage but defer application to projectile impact
+            let damage = combat::calc_ranged_damage(
+                &self.units[attacker_idx],
+                &self.units[defender_idx],
+                &self.grid,
+            );
+            let faction = self.units[attacker_idx].faction;
+            let ax = self.units[attacker_idx].x;
+            let ay = self.units[attacker_idx].y;
+
+            // Start cooldown + attack anim on attacker
+            self.units[attacker_idx].start_attack_cooldown();
+            self.units[attacker_idx].set_anim(UnitAnim::Attack);
+
+            // Spawn ballistic projectile — damage applied on landing
+            self.projectiles.push(Projectile::new(
+                ax, ay, snap_x, snap_y, damage, faction,
+            ));
+
+            self.turn_events.push(TurnEvent::RangedAttack {
+                attacker_id,
+                defender_id,
+                damage: 0, // deferred to impact
+                killed: false,
+                target_pos: (snap_x, snap_y),
+                missed: false,
+            });
         } else {
             let (attacker, defender) = if attacker_idx < defender_idx {
                 let (left, right) = self.units.split_at_mut(defender_idx);
@@ -1003,6 +1031,16 @@ impl Game {
                 damage: result.damage,
                 killed: result.target_killed,
             });
+        }
+
+        // Face the defender (AI only — player facing is controlled by aim-direction lock)
+        if !self.units[attacker_idx].is_player {
+            let dx = self.units[defender_idx].x - self.units[attacker_idx].x;
+            if dx > 0.0 {
+                self.units[attacker_idx].facing = Facing::Right;
+            } else if dx < 0.0 {
+                self.units[attacker_idx].facing = Facing::Left;
+            }
         }
     }
 
@@ -1066,7 +1104,7 @@ impl Game {
         match kind {
             UnitKind::Monk => self.ai_monk_action(ai_idx),
             UnitKind::Archer => self.ai_archer_action(ai_idx, position_snapshot),
-            UnitKind::Warrior | UnitKind::Pawn | UnitKind::Lancer => {
+            UnitKind::Warrior | UnitKind::Lancer => {
                 self.ai_melee_action(ai_idx, position_snapshot)
             }
         }
@@ -1082,7 +1120,9 @@ impl Game {
         };
         let (ex, ey, enemy_id, dist) = enemy;
 
-        if !has_attacked && dist <= MELEE_RANGE {
+        let melee_reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
+        let melee_reach = melee_reach.max(MELEE_RANGE);
+        if !has_attacked && dist <= melee_reach {
             let snap_pos = position_snapshot
                 .iter()
                 .find(|(id, _, _)| *id == enemy_id)
@@ -1130,6 +1170,7 @@ impl Game {
         let ay = self.units[ai_idx].y;
         let ai_id = self.units[ai_idx].id;
         let has_attacked = self.units[ai_idx].has_attacked;
+        let heal_range = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
 
         let heal_target = self
             .units
@@ -1137,7 +1178,7 @@ impl Game {
             .filter(|u| u.alive && u.faction == faction && u.id != ai_id)
             .filter(|u| {
                 let dist = u.distance_to_pos(ax, ay);
-                dist <= MELEE_RANGE && (u.hp as f32) < (u.stats.max_hp as f32 * 0.6)
+                dist <= heal_range && u.hp < u.stats.max_hp
             })
             .min_by_key(|u| u.hp)
             .map(|u| u.id);
@@ -1163,9 +1204,9 @@ impl Game {
             }
         }
 
-        // Move toward lowest-HP wounded ally within vision — only if safe, keep standoff
+        // Move directly toward wounded ally to get in heal range (no standoff)
         let vision_range = Self::AI_VISION_RADIUS as f32 * TILE_SIZE;
-        let move_target = self
+        let wounded_target = self
             .units
             .iter()
             .filter(|u| u.alive && u.faction == faction && u.id != ai_id)
@@ -1173,12 +1214,13 @@ impl Game {
             .filter(|u| u.distance_to_pos(ax, ay) <= vision_range)
             .filter(|u| self.nearest_enemy_dist(u.x, u.y, faction) >= MONK_SAFE_DIST)
             .min_by_key(|u| u.hp)
-            .map(|u| (u.x, u.y));
+            .map(|u| {
+                let (gx, gy) = u.grid_cell();
+                (gx, gy)
+            });
 
-        if let Some((tx, ty)) = move_target {
-            let (sx, sy) = Self::monk_standoff_point(ax, ay, tx, ty);
-            let (gx, gy) = grid::world_to_grid(sx, sy);
-            self.ai_move_toward(ai_idx, gx.max(0) as u32, gy.max(0) as u32);
+        if let Some((tx, ty)) = wounded_target {
+            self.ai_move_toward(ai_idx, tx, ty);
         }
     }
 
@@ -1263,6 +1305,16 @@ impl Game {
         for proj in &mut self.projectiles {
             proj.update(dt as f32);
         }
+
+        // Apply damage on arrow impact
+        for proj in &self.projectiles {
+            if proj.finished && proj.damage > 0 {
+                if let Some(idx) = self.find_unit_near(proj.target_x, proj.target_y, proj.faction)
+                {
+                    self.units[idx].take_damage(proj.damage);
+                }
+            }
+        }
         self.projectiles.retain(|p| !p.finished);
 
         // Camera smoothly follows player's world position
@@ -1283,7 +1335,8 @@ impl Game {
     }
 
     pub fn setup_demo_battle(&mut self) {
-        self.setup_demo_battle_with_seed(42);
+        let seed = (js_sys::Math::random() * u32::MAX as f64) as u32;
+        self.setup_demo_battle_with_seed(seed);
     }
 
     pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
@@ -1296,117 +1349,51 @@ impl Game {
         self.blue_objective = grid::grid_to_world(red_x, red_y);
         self.red_objective = grid::grid_to_world(blue_x, blue_y);
 
-        // Blue army (player side)
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y, true);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x, blue_y + 2, false);
-        self.spawn_unit(
-            UnitKind::Warrior,
-            Faction::Blue,
-            blue_x,
-            blue_y.saturating_sub(2),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Blue,
-            blue_x.saturating_sub(2),
-            blue_y + 1,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Blue,
-            blue_x.saturating_sub(2),
-            blue_y.saturating_sub(1),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Lancer,
-            Faction::Blue,
-            blue_x + 1,
-            blue_y + 4,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Pawn,
-            Faction::Blue,
-            blue_x + 1,
-            blue_y.saturating_sub(4),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Pawn,
-            Faction::Blue,
-            blue_x + 1,
-            blue_y.saturating_sub(3),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Monk,
-            Faction::Blue,
-            blue_x.saturating_sub(1),
-            blue_y + 3,
-            false,
-        );
+        // Blue army (player side) — 15 units
+        // Front line: player warrior + 4 warriors (armored, forward)
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x + 1, blue_y, true);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x + 1, blue_y + 1, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x + 1, blue_y.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x + 1, blue_y + 2, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_x + 1, blue_y.saturating_sub(2), false);
+        // Lancers: second line (poke over warriors with range 2)
+        for i in 0..3u32 {
+            self.spawn_unit(UnitKind::Lancer, Faction::Blue, blue_x, blue_y + i, false);
+            self.spawn_unit(UnitKind::Lancer, Faction::Blue, blue_x, blue_y.saturating_sub(1 + i), false);
+        }
+        // Archers: third line
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y + 1, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_x.saturating_sub(2), blue_y, false);
+        // Monks: rear
+        self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_x.saturating_sub(3), blue_y + 1, false);
+        self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_x.saturating_sub(3), blue_y.saturating_sub(1), false);
 
-        // Red army (enemy side)
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x, red_y + 2, false);
-        self.spawn_unit(
-            UnitKind::Warrior,
-            Faction::Red,
-            red_x,
-            red_y.saturating_sub(2),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Red,
-            red_x + 2,
-            red_y + 1,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Red,
-            red_x + 2,
-            red_y.saturating_sub(1),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Lancer,
-            Faction::Red,
-            red_x.saturating_sub(1),
-            red_y + 4,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Pawn,
-            Faction::Red,
-            red_x.saturating_sub(1),
-            red_y.saturating_sub(4),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Pawn,
-            Faction::Red,
-            red_x.saturating_sub(1),
-            red_y.saturating_sub(3),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Monk,
-            Faction::Red,
-            red_x + 1,
-            red_y + 3,
-            false,
-        );
+        // Red army (enemy side) — 15 units
+        // Front line: 5 warriors (armored, forward)
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x.saturating_sub(1), red_y, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x.saturating_sub(1), red_y + 1, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x.saturating_sub(1), red_y.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x.saturating_sub(1), red_y + 2, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_x.saturating_sub(1), red_y.saturating_sub(2), false);
+        // Lancers: second line
+        for i in 0..3u32 {
+            self.spawn_unit(UnitKind::Lancer, Faction::Red, red_x, red_y + i, false);
+            self.spawn_unit(UnitKind::Lancer, Faction::Red, red_x, red_y.saturating_sub(1 + i), false);
+        }
+        // Archers: third line
+        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y + 1, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, red_x + 2, red_y, false);
+        // Monks: rear
+        self.spawn_unit(UnitKind::Monk, Faction::Red, red_x + 3, red_y + 1, false);
+        self.spawn_unit(UnitKind::Monk, Faction::Red, red_x + 3, red_y.saturating_sub(1), false);
 
         // Camera starts centered on player
         let (cx, cy) = grid::grid_to_world(blue_x, blue_y);
         self.camera.x = cx;
         self.camera.y = cy;
-        self.camera.zoom = 1.5;
+        self.camera.zoom = 1.0;
 
         // Pre-compute caches
         self.compute_water_adjacency();
@@ -1728,25 +1715,31 @@ mod tests {
     // ---- Real-time tests ----
 
     #[test]
-    fn tick_player_combat_attacks_in_range() {
+    fn player_attack_hits_in_range() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
         let enemy_id = game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 5, false);
         // Adjacent = 64px, within MELEE_RANGE = 96px
-        game.tick_player_combat();
+        game.player_attack();
         let enemy = game.find_unit(enemy_id).unwrap();
         assert!(enemy.hp < 10, "Enemy should have taken damage from auto-attack");
     }
 
     #[test]
-    fn tick_player_combat_ranged_attack() {
+    fn player_attack_ranged() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Archer, Faction::Blue, 5, 5, true);
         let enemy_id = game.spawn_unit(UnitKind::Warrior, Faction::Red, 9, 5, false);
-        // 4 tiles = 256px, Archer range = 5 * 64 = 320px
-        game.tick_player_combat();
+        // 4 tiles = 256px, Archer range = 7 * 64 = 448px
+        game.player_attack();
+        // Arrow spawned — damage is deferred until projectile lands
+        assert!(!game.projectiles.is_empty(), "Arrow projectile should be spawned");
+        // Advance time until arrow lands (distance ~256px / 600px/s ≈ 0.43s)
+        for _ in 0..40 {
+            game.update(0.016);
+        }
         let enemy = game.find_unit(enemy_id).unwrap();
-        assert!(enemy.hp < 10, "Enemy should have taken ranged damage");
+        assert!(enemy.hp < 10, "Enemy should have taken ranged damage on arrow impact");
     }
 
     #[test]
@@ -1768,7 +1761,7 @@ mod tests {
     fn tick_ai_archer_holds_in_range() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        // Archer at distance 3 tiles, within range 5 tiles
+        // Archer at distance 3 tiles, within range 7 tiles
         game.spawn_unit(UnitKind::Archer, Faction::Red, 8, 5, false);
         let start_x = game.units[1].x;
         game.units[1].attack_cooldown = 0.5;
@@ -1959,7 +1952,7 @@ mod tests {
         let e1 = game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 5, false);
         let e2 = game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 4, false);
         game.player_aim_dir = 0.0; // aim right
-        game.tick_player_combat();
+        game.player_attack();
         let enemy1 = game.find_unit(e1).unwrap();
         let enemy2 = game.find_unit(e2).unwrap();
         assert!(enemy1.hp < enemy1.stats.max_hp, "First enemy should be damaged");
@@ -1973,7 +1966,7 @@ mod tests {
         let enemy_id = game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 5, false);
         let before_x = game.find_unit(enemy_id).unwrap().x;
         game.player_aim_dir = 0.0;
-        game.tick_player_combat();
+        game.player_attack();
         let after_x = game.find_unit(enemy_id).unwrap().x;
         assert!(
             after_x > before_x,
@@ -1990,7 +1983,7 @@ mod tests {
         game.grid.set(7, 5, TileKind::Water);
         let before_x = game.find_unit(enemy_id).unwrap().x;
         game.player_aim_dir = 0.0;
-        game.tick_player_combat();
+        game.player_attack();
         let after_x = game.find_unit(enemy_id).unwrap().x;
         assert!(
             (after_x - before_x).abs() < 0.01,

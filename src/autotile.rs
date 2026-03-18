@@ -237,7 +237,7 @@ mod tests {
         // row 1 stays at elevation 0
         let cliff = cliff_src(&grid, 1, 0, 2);
         assert!(cliff.is_some());
-        let (col, row) = cliff.unwrap();
+        let (_col, row) = cliff.unwrap();
         assert_eq!(row, 4); // land-facing cliff row
     }
 

@@ -34,8 +34,11 @@ impl Camera {
     }
 
     /// Zoom in/out by delta (positive = zoom in).
+    /// Snaps to nearest 1/64 step so TILE_SIZE * zoom is always integer (pixel-clean).
     pub fn zoom_by(&mut self, delta: f32) {
-        self.zoom = (self.zoom * (1.0 + delta * 0.1)).clamp(MIN_ZOOM, MAX_ZOOM);
+        let raw = self.zoom * (1.0 + delta * 0.1);
+        let snapped = (raw * 64.0).round() / 64.0;
+        self.zoom = snapped.clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
     /// Visible world-space rectangle: (left, top, right, bottom).
