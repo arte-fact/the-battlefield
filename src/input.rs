@@ -241,6 +241,11 @@ pub struct Input {
     pub attack_pressed: bool,
     /// Keyboard attack key (space) was pressed this frame (consumed on read).
     attack_key_pressed: bool,
+    /// Order keys pressed this frame (consumed on read).
+    order_hold_pressed: bool,
+    order_go_pressed: bool,
+    order_retreat_pressed: bool,
+    order_follow_pressed: bool,
 }
 
 impl Default for Input {
@@ -264,6 +269,10 @@ impl Input {
             is_touch_device: false,
             attack_pressed: false,
             attack_key_pressed: false,
+            order_hold_pressed: false,
+            order_go_pressed: false,
+            order_retreat_pressed: false,
+            order_follow_pressed: false,
         }
     }
 
@@ -286,6 +295,18 @@ impl Input {
         };
         if key == " " && !self.keys_down.contains(" ") {
             self.attack_key_pressed = true;
+        }
+        if key == "h" && !self.keys_down.contains("h") {
+            self.order_hold_pressed = true;
+        }
+        if key == "g" && !self.keys_down.contains("g") {
+            self.order_go_pressed = true;
+        }
+        if key == "r" && !self.keys_down.contains("r") {
+            self.order_retreat_pressed = true;
+        }
+        if key == "f" && !self.keys_down.contains("f") {
+            self.order_follow_pressed = true;
         }
         self.keys_down.insert(key);
     }
@@ -345,6 +366,34 @@ impl Input {
     pub fn take_attack_key(&mut self) -> bool {
         let r = self.attack_key_pressed;
         self.attack_key_pressed = false;
+        r
+    }
+
+    /// Consume Hold order key press (H).
+    pub fn take_order_hold(&mut self) -> bool {
+        let r = self.order_hold_pressed;
+        self.order_hold_pressed = false;
+        r
+    }
+
+    /// Consume Go order key press (G).
+    pub fn take_order_go(&mut self) -> bool {
+        let r = self.order_go_pressed;
+        self.order_go_pressed = false;
+        r
+    }
+
+    /// Consume Retreat order key press (R).
+    pub fn take_order_retreat(&mut self) -> bool {
+        let r = self.order_retreat_pressed;
+        self.order_retreat_pressed = false;
+        r
+    }
+
+    /// Consume Follow order key press (F).
+    pub fn take_order_follow(&mut self) -> bool {
+        let r = self.order_follow_pressed;
+        self.order_follow_pressed = false;
         r
     }
 

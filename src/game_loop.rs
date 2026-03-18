@@ -1,13 +1,13 @@
 use crate::animation::TurnAnimator;
 use crate::autotile;
 use crate::building::BuildingKind;
-use crate::game::{Game, ATTACK_CONE_HALF_ANGLE};
+use crate::game::{Game, ATTACK_CONE_HALF_ANGLE, ORDER_FLASH_DURATION};
 use crate::grid::{self, Decoration, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::input::Input;
 use crate::particle::Particle;
 use crate::renderer::{draw_sprite, load_image, Canvas2d, TextureId, TextureManager};
 use crate::sprite::SpriteSheet;
-use crate::unit::{Facing, Faction, UnitAnim, UnitKind, DEATH_FADE_DURATION};
+use crate::unit::{Facing, Faction, OrderKind, UnitAnim, UnitKind, DEATH_FADE_DURATION};
 use crate::zone::ZoneState;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -324,6 +324,20 @@ pub fn run(
                         || attack_held;
                     if attack_input {
                         game.player_attack();
+                    }
+
+                    // Player orders: H=Hold, G=Go, R=Retreat
+                    if inp.take_order_hold() {
+                        game.issue_order("hold");
+                    }
+                    if inp.take_order_go() {
+                        game.issue_order("go");
+                    }
+                    if inp.take_order_retreat() {
+                        game.issue_order("retreat");
+                    }
+                    if inp.take_order_follow() {
+                        game.issue_order("follow");
                     }
 
                     // Resolve circle-circle collisions
@@ -1418,6 +1432,37 @@ fn draw_overlays(
 
         ctx.set_global_alpha(1.0);
     }
+
+    // Order word indicators ("HOLD", "GO", "RETREAT") above units
+    for unit in &game.units {
+        if !unit.alive || unit.order_flash <= 0.0 {
+            continue;
+        }
+        let label = match unit.order {
+            Some(OrderKind::Hold { .. }) => "HOLD",
+            Some(OrderKind::Go { .. }) => "GO",
+            Some(OrderKind::Retreat { .. }) => "RETREAT",
+            Some(OrderKind::Follow) => "FOLLOW",
+            None => continue,
+        };
+
+        let alpha = (unit.order_flash / ORDER_FLASH_DURATION) as f64;
+        let wx = unit.x as f64;
+        let wy = unit.y as f64 - (TILE_SIZE as f64) * 0.65;
+
+        ctx.set_global_alpha(alpha);
+        ctx.set_font("bold 14px sans-serif");
+        ctx.set_text_align("center");
+        ctx.set_text_baseline("bottom");
+        // Black stroke
+        ctx.set_stroke_style_str("rgba(0,0,0,0.9)");
+        ctx.set_line_width(3.0);
+        ctx.stroke_text(label, wx, wy)?;
+        // Gold fill
+        ctx.set_fill_style_str("rgb(255,215,0)");
+        ctx.fill_text(label, wx, wy)?;
+    }
+    ctx.set_global_alpha(1.0);
 
     Ok(())
 }

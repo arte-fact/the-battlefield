@@ -137,6 +137,14 @@ pub enum UnitAnim {
     Attack,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OrderKind {
+    Hold { target_x: f32, target_y: f32 },
+    Go { target_x: f32, target_y: f32 },
+    Retreat { target_x: f32, target_y: f32 },
+    Follow,
+}
+
 /// Duration of the death fade-out animation in seconds.
 pub const DEATH_FADE_DURATION: f32 = 0.3;
 
@@ -175,6 +183,10 @@ pub struct Unit {
     pub rallying: bool,
     /// Rally destination in world-space (only meaningful when rallying=true).
     pub rally_target: (f32, f32),
+    /// Active player order (None = default AI behavior).
+    pub order: Option<OrderKind>,
+    /// Seconds remaining for order flash indicator.
+    pub order_flash: f32,
 }
 
 impl Unit {
@@ -210,6 +222,8 @@ impl Unit {
             hit_flash: 0.0,
             rallying: false,
             rally_target: (0.0, 0.0),
+            order: None,
+            order_flash: 0.0,
         }
     }
 
@@ -250,6 +264,7 @@ impl Unit {
     pub fn tick_cooldowns(&mut self, dt: f32) {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         self.hit_flash = (self.hit_flash - dt).max(0.0);
+        self.order_flash = (self.order_flash - dt).max(0.0);
     }
 
     /// Start attack cooldown.
