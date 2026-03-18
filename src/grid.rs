@@ -48,6 +48,8 @@ pub struct Grid {
     tiles: Vec<TileKind>,
     elevations: Vec<u8>,
     pub decorations: Vec<Option<Decoration>>,
+    /// Tiles occupied by buildings (impassable).
+    building_occupied: Vec<bool>,
     pub width: u32,
     pub height: u32,
 }
@@ -59,6 +61,7 @@ impl Grid {
             tiles: vec![TileKind::Grass; size],
             elevations: vec![0; size],
             decorations: vec![None; size],
+            building_occupied: vec![false; size],
             width,
             height,
         }
@@ -77,7 +80,14 @@ impl Grid {
     }
 
     pub fn is_passable(&self, x: u32, y: u32) -> bool {
-        self.get(x, y).movement_cost().is_some() && self.elevation(x, y) <= 1
+        self.get(x, y).movement_cost().is_some()
+            && self.elevation(x, y) <= 1
+            && !self.building_occupied[(y * self.width + x) as usize]
+    }
+
+    /// Mark a tile as occupied by a building (impassable).
+    pub fn mark_building(&mut self, x: u32, y: u32) {
+        self.building_occupied[(y * self.width + x) as usize] = true;
     }
 
     /// Check if diagonal movement from (fx, fy) by (dx, dy) is allowed.

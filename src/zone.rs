@@ -121,7 +121,7 @@ impl ZoneManager {
             zone.red_count = 0;
         }
         for unit in units {
-            if !unit.alive {
+            if !unit.alive || unit.rallying {
                 continue;
             }
             for zone in &mut self.zones {
@@ -273,6 +273,35 @@ impl ZoneManager {
         } else {
             0.0
         }
+    }
+
+    /// Return the most advanced (frontline) zone controlled by a faction.
+    /// For Blue: the controlled zone farthest from Blue base (highest index).
+    /// For Red: the controlled zone farthest from Red base (lowest index).
+    pub fn most_advanced_zone(&self, faction: Faction) -> Option<&CaptureZone> {
+        let controlled: Vec<&CaptureZone> = self
+            .zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(faction))
+            .collect();
+        if controlled.is_empty() {
+            return None;
+        }
+        let (own_x, own_y): (f32, f32) = match faction {
+            Faction::Blue => (BORDER_SIZE as f32, BORDER_SIZE as f32),
+            _ => (
+                (BORDER_SIZE + PLAYABLE_SIZE) as f32,
+                (BORDER_SIZE + PLAYABLE_SIZE) as f32,
+            ),
+        };
+        // Pick the controlled zone farthest from own base
+        controlled
+            .into_iter()
+            .max_by_key(|z| {
+                let dx = z.center_gx as f32 - own_x;
+                let dy = z.center_gy as f32 - own_y;
+                (dx * dx + dy * dy) as i32
+            })
     }
 
     /// Return the zone positions (grid coordinates) for mapgen clearing.

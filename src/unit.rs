@@ -43,28 +43,28 @@ impl UnitKind {
                 max_hp: 10,
                 atk: 3,
                 def: 3,
-                mov: 3,
+                mov: 5,
                 range: 1,
             },
             UnitKind::Archer => UnitStats {
                 max_hp: 6,
                 atk: 2,
                 def: 1,
-                mov: 3,
+                mov: 4,
                 range: 7,
             },
             UnitKind::Lancer => UnitStats {
                 max_hp: 10,
                 atk: 4,
                 def: 1,
-                mov: 3,
+                mov: 4,
                 range: 2,
             },
             UnitKind::Monk => UnitStats {
                 max_hp: 5,
                 atk: 1,
                 def: 1,
-                mov: 2,
+                mov: 3,
                 range: 2,
             },
         }
@@ -171,6 +171,10 @@ pub struct Unit {
     pub ai_path_cooldown: f32,
     /// Remaining seconds of hit flash blink effect (0.0 = not flashing).
     pub hit_flash: f32,
+    /// Whether this unit is rallying (walking to rally point / waiting for group).
+    pub rallying: bool,
+    /// Rally destination in world-space (only meaningful when rallying=true).
+    pub rally_target: (f32, f32),
 }
 
 impl Unit {
@@ -204,6 +208,8 @@ impl Unit {
             ai_waypoint_idx: 0,
             ai_path_cooldown: 0.0,
             hit_flash: 0.0,
+            rallying: false,
+            rally_target: (0.0, 0.0),
         }
     }
 
@@ -285,7 +291,7 @@ mod tests {
         assert_eq!(stats.max_hp, 10);
         assert_eq!(stats.atk, 3);
         assert_eq!(stats.def, 3);
-        assert_eq!(stats.mov, 3);
+        assert_eq!(stats.mov, 5);
         assert_eq!(stats.range, 1);
     }
 
@@ -346,12 +352,12 @@ mod tests {
 
     #[test]
     fn move_speed_values() {
-        // Warrior (mov 3): 64 * 3 / 0.90 ≈ 213
+        // Warrior (mov 5): 64 * 5 / 0.90 ≈ 355.6
         let warrior = Unit::new(1, UnitKind::Warrior, Faction::Blue, 0, 0, false);
-        assert!((warrior.move_speed() - 213.33).abs() < 1.0);
-        // Lancer (mov 3): same speed as warrior
+        assert!((warrior.move_speed() - 355.56).abs() < 1.0);
+        // Lancer (mov 4): 64 * 4 / 0.90 ≈ 284.4
         let lancer = Unit::new(2, UnitKind::Lancer, Faction::Blue, 0, 0, false);
-        assert!((lancer.move_speed() - 213.33).abs() < 1.0);
+        assert!((lancer.move_speed() - 284.44).abs() < 1.0);
     }
 
     #[test]

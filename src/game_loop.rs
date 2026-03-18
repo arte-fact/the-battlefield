@@ -911,6 +911,9 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     draw_foam(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy, state.elapsed)?;
     ctx.draw_image_with_html_canvas_element(&state.terrain_canvas, 0.0, 0.0)?;
 
+    // 3b. Base buildings drawn as background layer (behind all units/trees)
+    draw_base_buildings(ctx, game, loaded, tm)?;
+
     // 4. Capture zone overlays (colored fill, dashed border, labels, progress bars)
     draw_zone_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy)?;
 
@@ -1593,6 +1596,50 @@ fn draw_touch_controls(
     Ok(())
 }
 
+/// Draw base buildings as a background layer (behind all Y-sorted sprites).
+fn draw_base_buildings(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    loaded: &LoadedTextures,
+    tm: &TextureManager,
+) -> Result<(), JsValue> {
+    if loaded.building_textures.is_empty() {
+        return Ok(());
+    }
+    let ts = TILE_SIZE as f64;
+    for base in &game.bases {
+        for building in &base.buildings {
+            let kind_index = match building.kind {
+                BuildingKind::Barracks => 0,
+                BuildingKind::Archery => 1,
+                BuildingKind::Monastery => 2,
+            };
+            let faction_index = match base.faction {
+                Faction::Blue => 0,
+                _ => 1,
+            };
+            let tex_idx = kind_index * 2 + faction_index;
+
+            if tex_idx < loaded.building_textures.len() {
+                let (tex_id, sprite_w, sprite_h) = loaded.building_textures[tex_idx];
+                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                    let sw = sprite_w as f64;
+                    let sh = sprite_h as f64;
+                    let draw_w = ts * 3.0;
+                    let draw_h = draw_w * (sh / sw);
+                    let dx = (building.grid_x as f64) * ts + ts / 2.0 - draw_w / 2.0;
+                    let dy = (building.grid_y as f64) * ts + ts - draw_h;
+
+                    ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                        img, 0.0, 0.0, sw, sh, dx, dy, draw_w, draw_h,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A drawable entity for Y-sorted rendering.
 enum Drawable {
     Unit(usize),            // index into game.units
@@ -1600,7 +1647,6 @@ enum Drawable {
     Rock(u32, u32),         // (gx, gy)
     WaterRock(u32, u32),    // (gx, gy)
     Building(u8),           // zone index (tower)
-    BaseBuilding(usize, usize), // (base_index, building_index)
     Particle(usize),        // index into game.particles
 }
 
@@ -1662,14 +1708,6 @@ fn draw_foreground(
     for (i, zone) in game.zone_manager.zones.iter().enumerate() {
         let foot_y = (zone.center_gy as f64 + 1.0) * ts;
         drawables.push((foot_y, Drawable::Building(i as u8)));
-    }
-
-    // Base buildings
-    for (bi, base) in game.bases.iter().enumerate() {
-        for (bj, building) in base.buildings.iter().enumerate() {
-            let foot_y = (building.grid_y as f64 + 1.0) * ts;
-            drawables.push((foot_y, Drawable::BaseBuilding(bi, bj)));
-        }
     }
 
     // Particles
@@ -1890,42 +1928,6 @@ fn draw_foreground(
 
                     if (alpha - 1.0).abs() > 0.001 {
                         ctx.set_global_alpha(1.0);
-                    }
-                }
-            }
-
-            Drawable::BaseBuilding(base_idx, building_idx) => {
-                if loaded.building_textures.is_empty() {
-                    continue;
-                }
-                let base = &game.bases[*base_idx];
-                let building = &base.buildings[*building_idx];
-
-                // Texture index: kind_index * 2 + faction_index
-                let kind_index = match building.kind {
-                    BuildingKind::Barracks => 0,
-                    BuildingKind::Archery => 1,
-                    BuildingKind::Monastery => 2,
-                };
-                let faction_index = match base.faction {
-                    Faction::Blue => 0,
-                    _ => 1,
-                };
-                let tex_idx = kind_index * 2 + faction_index;
-
-                if tex_idx < loaded.building_textures.len() {
-                    let (tex_id, sprite_w, sprite_h) = loaded.building_textures[tex_idx];
-                    if let Some((img, _, _, _)) = tm.get_image(tex_id) {
-                        let sw = sprite_w as f64;
-                        let sh = sprite_h as f64;
-                        let draw_w = ts * 3.0;
-                        let draw_h = draw_w * (sh / sw);
-                        let dx = (building.grid_x as f64) * ts + ts / 2.0 - draw_w / 2.0;
-                        let dy = (building.grid_y as f64) * ts + ts - draw_h;
-
-                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                            img, 0.0, 0.0, sw, sh, dx, dy, draw_w, draw_h,
-                        )?;
                     }
                 }
             }

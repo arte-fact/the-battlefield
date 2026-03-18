@@ -31,6 +31,25 @@ impl BuildingKind {
         }
     }
 
+    /// Grid footprint offsets (dx, dy) relative to the building's anchor tile.
+    /// The sprite is 3 tiles wide (centered) and extends upward; these offsets
+    /// cover the solid base of the building that should block movement.
+    pub fn footprint_offsets(self) -> &'static [(i32, i32)] {
+        match self {
+            // 3 wide × 2 tall base
+            BuildingKind::Barracks | BuildingKind::Archery => &[
+                (-1, -1), (0, -1), (1, -1),
+                (-1,  0), (0,  0), (1,  0),
+            ],
+            // 3 wide × 3 tall base (taller building)
+            BuildingKind::Monastery => &[
+                (-1, -2), (0, -2), (1, -2),
+                (-1, -1), (0, -1), (1, -1),
+                (-1,  0), (0,  0), (1,  0),
+            ],
+        }
+    }
+
     /// Asset filename for this building kind.
     pub fn asset_filename(self) -> &'static str {
         match self {
@@ -117,7 +136,7 @@ impl ProductionBuilding {
     }
 }
 
-/// A faction's base with production buildings and unit staging area.
+/// A faction's base with production buildings.
 #[derive(Clone, Debug)]
 pub struct FactionBase {
     pub faction: Faction,
@@ -126,11 +145,8 @@ pub struct FactionBase {
     pub rally_gy: u32,
     pub rally_wx: f32,
     pub rally_wy: f32,
-    staged_warriors: u32,
-    staged_lancers: u32,
-    staged_archers: u32,
-    staged_monks: u32,
-    staging_timer: f32,
+    /// Timer tracking how long rallying units have existed (for force-dispatch).
+    pub staging_timer: f32,
 }
 
 impl FactionBase {
@@ -143,10 +159,6 @@ impl FactionBase {
             rally_gy,
             rally_wx,
             rally_wy,
-            staged_warriors: 0,
-            staged_lancers: 0,
-            staged_archers: 0,
-            staged_monks: 0,
             staging_timer: 0.0,
         }
     }
@@ -174,61 +186,6 @@ impl FactionBase {
             ProductionBuilding::new(BuildingKind::Monastery, f, b + p - 6, b + p - 8),
         ];
         Self::new(f, buildings, b + p - 6, b + p - 11)
-    }
-
-    /// Accept a produced unit into the staging area.
-    pub fn receive_unit(&mut self, kind: UnitKind) {
-        if self.total_staged() == 0 {
-            self.staging_timer = 0.0;
-        }
-        match kind {
-            UnitKind::Warrior => self.staged_warriors += 1,
-            UnitKind::Lancer => self.staged_lancers += 1,
-            UnitKind::Archer => self.staged_archers += 1,
-            UnitKind::Monk => self.staged_monks += 1,
-        }
-    }
-
-    /// Total units currently staged.
-    pub fn total_staged(&self) -> u32 {
-        self.staged_warriors + self.staged_lancers + self.staged_archers + self.staged_monks
-    }
-
-    /// Whether a full group composition is ready.
-    pub fn group_ready(&self) -> bool {
-        self.staged_warriors >= GROUP_WARRIORS
-            && self.staged_lancers >= GROUP_LANCERS
-            && self.staged_archers >= GROUP_ARCHERS
-            && self.staged_monks >= GROUP_MONKS
-    }
-
-    /// Whether the staging timer has exceeded the partial dispatch timeout.
-    pub fn should_force_dispatch(&self) -> bool {
-        self.total_staged() > 0 && self.staging_timer > PARTIAL_DISPATCH_TIMEOUT
-    }
-
-    /// Consume staged units and return the composition to spawn.
-    /// Returns (warriors, lancers, archers, monks).
-    pub fn dispatch_group(&mut self) -> (u32, u32, u32, u32) {
-        let result = (
-            self.staged_warriors,
-            self.staged_lancers,
-            self.staged_archers,
-            self.staged_monks,
-        );
-        self.staged_warriors = 0;
-        self.staged_lancers = 0;
-        self.staged_archers = 0;
-        self.staged_monks = 0;
-        self.staging_timer = 0.0;
-        result
-    }
-
-    /// Advance the staging timer.
-    pub fn tick_staging(&mut self, dt: f32) {
-        if self.total_staged() > 0 {
-            self.staging_timer += dt;
-        }
     }
 
     /// Return building grid positions for mapgen clearing.
@@ -281,48 +238,6 @@ mod tests {
     }
 
     #[test]
-    fn group_ready_when_composition_met() {
-        let mut base = FactionBase::create_blue_base();
-        assert!(!base.group_ready());
-
-        for _ in 0..GROUP_WARRIORS {
-            base.receive_unit(UnitKind::Warrior);
-        }
-        for _ in 0..GROUP_LANCERS {
-            base.receive_unit(UnitKind::Lancer);
-        }
-        for _ in 0..GROUP_ARCHERS {
-            base.receive_unit(UnitKind::Archer);
-        }
-        assert!(!base.group_ready()); // Still missing monks
-
-        for _ in 0..GROUP_MONKS {
-            base.receive_unit(UnitKind::Monk);
-        }
-        assert!(base.group_ready());
-    }
-
-    #[test]
-    fn partial_dispatch_after_timeout() {
-        let mut base = FactionBase::create_blue_base();
-        base.receive_unit(UnitKind::Warrior);
-        base.receive_unit(UnitKind::Archer);
-
-        assert!(!base.should_force_dispatch());
-
-        // Simulate time passing
-        base.tick_staging(PARTIAL_DISPATCH_TIMEOUT + 1.0);
-        assert!(base.should_force_dispatch());
-
-        let (w, l, a, m) = base.dispatch_group();
-        assert_eq!(w, 1);
-        assert_eq!(l, 0);
-        assert_eq!(a, 1);
-        assert_eq!(m, 0);
-        assert_eq!(base.total_staged(), 0);
-    }
-
-    #[test]
     fn production_queue_lengths_match_group() {
         // Barracks should produce exactly GROUP_WARRIORS + GROUP_LANCERS per cycle
         assert_eq!(BARRACKS_QUEUE.len() as u32, GROUP_WARRIORS + GROUP_LANCERS);
@@ -338,29 +253,4 @@ mod tests {
         assert_eq!(MONASTERY_QUEUE.len() as u32, GROUP_MONKS);
     }
 
-    #[test]
-    fn dispatch_resets_staging() {
-        let mut base = FactionBase::create_blue_base();
-        for _ in 0..GROUP_WARRIORS {
-            base.receive_unit(UnitKind::Warrior);
-        }
-        for _ in 0..GROUP_LANCERS {
-            base.receive_unit(UnitKind::Lancer);
-        }
-        for _ in 0..GROUP_ARCHERS {
-            base.receive_unit(UnitKind::Archer);
-        }
-        for _ in 0..GROUP_MONKS {
-            base.receive_unit(UnitKind::Monk);
-        }
-        assert!(base.group_ready());
-
-        let (w, l, a, m) = base.dispatch_group();
-        assert_eq!(w, GROUP_WARRIORS);
-        assert_eq!(l, GROUP_LANCERS);
-        assert_eq!(a, GROUP_ARCHERS);
-        assert_eq!(m, GROUP_MONKS);
-        assert_eq!(base.total_staged(), 0);
-        assert!(!base.group_ready());
-    }
 }
