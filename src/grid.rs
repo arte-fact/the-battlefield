@@ -1,5 +1,5 @@
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
 /// Tile types for the battlefield grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -225,8 +225,14 @@ impl Grid {
         // 8-directional: cardinal + diagonal
         // cost_mult: cardinal = 2, diagonal = 3 (approximates √2 ratio)
         const DIRS: [(i32, i32, u32); 8] = [
-            (0, -1, 2), (1, 0, 2), (0, 1, 2), (-1, 0, 2),
-            (1, -1, 3), (1, 1, 3), (-1, 1, 3), (-1, -1, 3),
+            (0, -1, 2),
+            (1, 0, 2),
+            (0, 1, 2),
+            (-1, 0, 2),
+            (1, -1, 3),
+            (1, 1, 3),
+            (-1, 1, 3),
+            (-1, -1, 3),
         ];
 
         while let Some(node) = open.pop() {

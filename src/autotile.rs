@@ -180,11 +180,20 @@ mod tests {
 
     #[test]
     fn isolated_grass_tile() {
-        let grid = make_grid(3, 3, &[
-            (0, 0, TileKind::Water), (1, 0, TileKind::Water), (2, 0, TileKind::Water),
-            (0, 1, TileKind::Water), /* (1,1) Grass */        (2, 1, TileKind::Water),
-            (0, 2, TileKind::Water), (1, 2, TileKind::Water), (2, 2, TileKind::Water),
-        ]);
+        let grid = make_grid(
+            3,
+            3,
+            &[
+                (0, 0, TileKind::Water),
+                (1, 0, TileKind::Water),
+                (2, 0, TileKind::Water),
+                (0, 1, TileKind::Water),
+                /* (1,1) Grass */ (2, 1, TileKind::Water),
+                (0, 2, TileKind::Water),
+                (1, 2, TileKind::Water),
+                (2, 2, TileKind::Water),
+            ],
+        );
         let (col, row) = flat_ground_src(&grid, 1, 1);
         assert_eq!((col, row), (3, 3)); // isolated tile
     }
@@ -208,9 +217,15 @@ mod tests {
     #[test]
     fn top_edge() {
         // Water above, land on all other sides
-        let grid = make_grid(3, 3, &[
-            (0, 0, TileKind::Water), (1, 0, TileKind::Water), (2, 0, TileKind::Water),
-        ]);
+        let grid = make_grid(
+            3,
+            3,
+            &[
+                (0, 0, TileKind::Water),
+                (1, 0, TileKind::Water),
+                (2, 0, TileKind::Water),
+            ],
+        );
         // (1,1): N=water, E=grass, S=grass, W=grass → mask = E+S+W = 14 → top edge
         let (col, row) = flat_ground_src(&grid, 1, 1);
         assert_eq!((col, row), (1, 0));
@@ -218,11 +233,17 @@ mod tests {
 
     #[test]
     fn tl_corner() {
-        let grid = make_grid(3, 3, &[
-            (0, 0, TileKind::Water), (1, 0, TileKind::Water), (2, 0, TileKind::Water),
-            (0, 1, TileKind::Water),
-            (0, 2, TileKind::Water),
-        ]);
+        let grid = make_grid(
+            3,
+            3,
+            &[
+                (0, 0, TileKind::Water),
+                (1, 0, TileKind::Water),
+                (2, 0, TileKind::Water),
+                (0, 1, TileKind::Water),
+                (0, 2, TileKind::Water),
+            ],
+        );
         // (1,1): N=water, E=grass, S=grass, W=water → mask = E+S = 6 → TL corner
         let (col, row) = flat_ground_src(&grid, 1, 1);
         assert_eq!((col, row), (0, 0));
@@ -230,12 +251,22 @@ mod tests {
 
     #[test]
     fn horizontal_strip() {
-        let grid = make_grid(5, 3, &[
-            (0, 0, TileKind::Water), (1, 0, TileKind::Water), (2, 0, TileKind::Water),
-            (3, 0, TileKind::Water), (4, 0, TileKind::Water),
-            (0, 2, TileKind::Water), (1, 2, TileKind::Water), (2, 2, TileKind::Water),
-            (3, 2, TileKind::Water), (4, 2, TileKind::Water),
-        ]);
+        let grid = make_grid(
+            5,
+            3,
+            &[
+                (0, 0, TileKind::Water),
+                (1, 0, TileKind::Water),
+                (2, 0, TileKind::Water),
+                (3, 0, TileKind::Water),
+                (4, 0, TileKind::Water),
+                (0, 2, TileKind::Water),
+                (1, 2, TileKind::Water),
+                (2, 2, TileKind::Water),
+                (3, 2, TileKind::Water),
+                (4, 2, TileKind::Water),
+            ],
+        );
         // (2,1): N=water, E=grass, S=water, W=grass → mask = E+W = 10 → H-mid
         let (col, row) = flat_ground_src(&grid, 2, 1);
         assert_eq!((col, row), (1, 3));
@@ -277,9 +308,15 @@ mod tests {
     #[test]
     fn grass_next_to_road_gets_edge() {
         // Road to the east of a grass tile → grass should get a right edge
-        let grid = make_grid(3, 3, &[
-            (2, 0, TileKind::Road), (2, 1, TileKind::Road), (2, 2, TileKind::Road),
-        ]);
+        let grid = make_grid(
+            3,
+            3,
+            &[
+                (2, 0, TileKind::Road),
+                (2, 1, TileKind::Road),
+                (2, 2, TileKind::Road),
+            ],
+        );
         // (1,1): N=grass, E=road, S=grass, W=grass → mask = N+S+W = 13 → Right edge
         let (col, row) = flat_ground_src(&grid, 1, 1);
         assert_eq!((col, row), (2, 1)); // Right edge
@@ -288,9 +325,15 @@ mod tests {
     #[test]
     fn road_tile_autotile() {
         // Vertical road strip: road tiles see other road tiles as "same"
-        let grid = make_grid(3, 3, &[
-            (1, 0, TileKind::Road), (1, 1, TileKind::Road), (1, 2, TileKind::Road),
-        ]);
+        let grid = make_grid(
+            3,
+            3,
+            &[
+                (1, 0, TileKind::Road),
+                (1, 1, TileKind::Road),
+                (1, 2, TileKind::Road),
+            ],
+        );
         // (1,1): N=road, E=grass(not same), S=road, W=grass(not same) → mask = N+S = 5 → V-mid
         let (col, row) = flat_ground_src(&grid, 1, 1);
         assert_eq!((col, row), (3, 1)); // V-mid
@@ -299,9 +342,7 @@ mod tests {
     #[test]
     fn road_does_not_count_as_same_for_grass() {
         // A grass tile surrounded by grass on 3 sides and road on 1 should NOT be center fill
-        let grid = make_grid(3, 3, &[
-            (1, 0, TileKind::Road),
-        ]);
+        let grid = make_grid(3, 3, &[(1, 0, TileKind::Road)]);
         // (1,1): N=road(not same), E=grass, S=grass, W=grass → mask = E+S+W = 14 → Top edge
         let (col, row) = flat_ground_src(&grid, 1, 1);
         assert_eq!((col, row), (1, 0)); // Top edge

@@ -201,7 +201,11 @@ mod tests {
         // duration = 600/600 = 1.0s, advance to midpoint
         proj.update(0.5);
         // At midpoint, arrow should be above the ground plane (negative Y in screen space)
-        assert!(proj.current_y < -10.0, "Arrow should arc above ground at midpoint, got y={}", proj.current_y);
+        assert!(
+            proj.current_y < -10.0,
+            "Arrow should arc above ground at midpoint, got y={}",
+            proj.current_y
+        );
         // X should be roughly at midpoint
         assert!((proj.current_x - 300.0).abs() < 5.0);
     }
@@ -210,11 +214,19 @@ mod tests {
     fn projectile_angle_tilts_up_then_down() {
         let mut proj = Projectile::new(0.0, 0.0, 600.0, 0.0, 2, Faction::Blue);
         // At launch, angle should be negative (tilted upward in screen space)
-        assert!(proj.angle < 0.0, "Arrow should tilt upward at launch, got angle={}", proj.angle);
+        assert!(
+            proj.angle < 0.0,
+            "Arrow should tilt upward at launch, got angle={}",
+            proj.angle
+        );
 
         // Advance past midpoint
         proj.update(0.75);
         // After midpoint, angle should be positive (tilted downward)
-        assert!(proj.angle > 0.0, "Arrow should tilt downward after midpoint, got angle={}", proj.angle);
+        assert!(
+            proj.angle > 0.0,
+            "Arrow should tilt downward after midpoint, got angle={}",
+            proj.angle
+        );
     }
 }

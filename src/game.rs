@@ -4,13 +4,15 @@ use crate::camera::Camera;
 use crate::combat;
 use crate::flowfield::FactionFlowState;
 use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
-use std::collections::HashSet;
 use crate::input::SwipeDir;
 use crate::mapgen;
 use crate::particle::{Particle, Projectile};
 use crate::turn::TurnState;
-use crate::unit::{Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS};
+use crate::unit::{
+    Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS,
+};
 use crate::zone::{ZoneManager, MAX_UNITS_PER_FACTION};
+use std::collections::HashSet;
 
 /// Player vision radius in tiles.
 const FOV_RADIUS: i32 = 15;
@@ -69,10 +71,8 @@ pub struct Game {
     pub zone_manager: ZoneManager,
     /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
     pub winner: Option<Faction>,
-    /// Reinforcement timers per faction [Blue, Red].
+    /// Reinforcement wave timers per faction [Blue, Red].
     reinforce_timer: [f32; 2],
-    /// Current index into REINFORCE_QUEUE per faction [Blue, Red].
-    reinforce_index: [usize; 2],
     /// Pre-computed occupied grid cells for AI pathfinding (rebuilt each frame).
     ai_occupied_cache: HashSet<(u32, u32)>,
     /// Flow field for Blue faction objective marching.
@@ -111,7 +111,6 @@ impl Game {
             zone_manager: ZoneManager::empty(),
             winner: None,
             reinforce_timer: [0.0; 2],
-            reinforce_index: [0; 2],
             ai_occupied_cache: HashSet::new(),
             blue_flow: FactionFlowState::new(),
             red_flow: FactionFlowState::new(),
@@ -388,7 +387,9 @@ impl Game {
     /// Move a unit continuously in a direction with split-axis terrain collision.
     fn move_unit(&mut self, idx: usize, dir_x: f32, dir_y: f32, dt: f32) {
         let speed = self.units[idx].move_speed()
-            * self.grid.speed_factor_at(self.units[idx].x, self.units[idx].y);
+            * self
+                .grid
+                .speed_factor_at(self.units[idx].x, self.units[idx].y);
         let vx = dir_x * speed * dt;
         let vy = dir_y * speed * dt;
 
@@ -595,10 +596,8 @@ impl Game {
     /// Dispatch real-time AI action based on unit type.
     fn ai_unit_tick(&mut self, ai_idx: usize, dt: f32) {
         // Monks always try to heal nearby wounded allies, even when under orders
-        if self.units[ai_idx].kind == UnitKind::Monk {
-            if self.try_monk_heal(ai_idx) {
-                return;
-            }
+        if self.units[ai_idx].kind == UnitKind::Monk && self.try_monk_heal(ai_idx) {
+            return;
         }
 
         // Player orders take priority (orders cancel rally state)
@@ -624,9 +623,7 @@ impl Game {
         match kind {
             UnitKind::Monk => self.ai_monk_tick(ai_idx, dt),
             UnitKind::Archer => self.ai_archer_tick(ai_idx, dt),
-            UnitKind::Warrior | UnitKind::Lancer => {
-                self.ai_melee_tick(ai_idx, dt)
-            }
+            UnitKind::Warrior | UnitKind::Lancer => self.ai_melee_tick(ai_idx, dt),
         }
     }
 
@@ -760,7 +757,8 @@ impl Game {
             // Chase enemies within leash of the hold point
             let enemy_hold_dx = ex - hold_x;
             let enemy_hold_dy = ey - hold_y;
-            let enemy_hold_dist = (enemy_hold_dx * enemy_hold_dx + enemy_hold_dy * enemy_hold_dy).sqrt();
+            let enemy_hold_dist =
+                (enemy_hold_dx * enemy_hold_dx + enemy_hold_dy * enemy_hold_dy).sqrt();
 
             if enemy_hold_dist <= leash {
                 self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
@@ -821,10 +819,7 @@ impl Game {
         let dist = self.units[ai_idx].distance_to_pos(target_x, target_y);
         if dist < TILE_SIZE * 2.0 {
             // Arrived — switch to Hold
-            self.units[ai_idx].order = Some(OrderKind::Hold {
-                target_x,
-                target_y,
-            });
+            self.units[ai_idx].order = Some(OrderKind::Hold { target_x, target_y });
         } else {
             self.ai_move_toward_continuous(ai_idx, target_x, target_y, dt);
         }
@@ -903,9 +898,7 @@ impl Game {
         };
         let (ex, ey, enemy_id, dist) = enemy;
 
-        if self.units[ai_idx].can_act() && dist > MELEE_RANGE && dist <= range_world {
-            self.execute_attack(ai_id, enemy_id, None);
-        } else if self.units[ai_idx].can_act() && dist <= MELEE_RANGE {
+        if self.units[ai_idx].can_act() && dist <= range_world {
             self.execute_attack(ai_id, enemy_id, None);
         } else if dist <= range_world {
             // In range but on cooldown — hold position
@@ -970,7 +963,9 @@ impl Game {
         let follow_target = self
             .units
             .iter()
-            .filter(|u| u.alive && u.faction == faction && u.id != ai_id && u.kind != UnitKind::Monk)
+            .filter(|u| {
+                u.alive && u.faction == faction && u.id != ai_id && u.kind != UnitKind::Monk
+            })
             .min_by(|a, b| {
                 let da = a.distance_to_pos(ax, ay);
                 let db = b.distance_to_pos(ax, ay);
@@ -989,16 +984,9 @@ impl Game {
 
     /// Move AI unit continuously toward target using waypoint-following with A*.
     /// Pathfinding is rate-limited by ai_path_cooldown (one repath per 0.5s per unit).
-    fn ai_move_toward_continuous(
-        &mut self,
-        ai_idx: usize,
-        target_x: f32,
-        target_y: f32,
-        dt: f32,
-    ) {
+    fn ai_move_toward_continuous(&mut self, ai_idx: usize, target_x: f32, target_y: f32, dt: f32) {
         // Tick path cooldown
-        self.units[ai_idx].ai_path_cooldown =
-            (self.units[ai_idx].ai_path_cooldown - dt).max(0.0);
+        self.units[ai_idx].ai_path_cooldown = (self.units[ai_idx].ai_path_cooldown - dt).max(0.0);
 
         // Re-path if cooldown expired or path exhausted
         let needs_repath = self.units[ai_idx].ai_path_cooldown <= 0.0
@@ -1250,9 +1238,7 @@ impl Game {
         match tile {
             TileKind::Water => false,
             TileKind::Forest => true,
-            _ => {
-                self.grid.elevation(x, y) >= 2
-            }
+            _ => self.grid.elevation(x, y) >= 2,
         }
     }
 
@@ -1330,17 +1316,7 @@ impl Game {
                     }
                 } else if is_blocking && j < radius {
                     blocked = true;
-                    self.cast_light(
-                        ox,
-                        oy,
-                        radius,
-                        j + 1,
-                        start_slope,
-                        l_slope,
-                        octant,
-                        w,
-                        h,
-                    );
+                    self.cast_light(ox, oy, radius, j + 1, start_slope, l_slope, octant, w, h);
                     next_start_slope = r_slope;
                 }
             }
@@ -1415,9 +1391,8 @@ impl Game {
             self.units[attacker_idx].set_anim(UnitAnim::Attack);
 
             // Spawn ballistic projectile — damage applied on landing
-            self.projectiles.push(Projectile::new(
-                ax, ay, snap_x, snap_y, damage, faction,
-            ));
+            self.projectiles
+                .push(Projectile::new(ax, ay, snap_x, snap_y, damage, faction));
 
             self.turn_events.push(TurnEvent::RangedAttack {
                 attacker_id,
@@ -1515,9 +1490,7 @@ impl Game {
         match kind {
             UnitKind::Monk => self.ai_monk_action(ai_idx),
             UnitKind::Archer => self.ai_archer_action(ai_idx, position_snapshot),
-            UnitKind::Warrior | UnitKind::Lancer => {
-                self.ai_melee_action(ai_idx, position_snapshot)
-            }
+            UnitKind::Warrior | UnitKind::Lancer => self.ai_melee_action(ai_idx, position_snapshot),
         }
     }
 
@@ -1713,8 +1686,7 @@ impl Game {
         // Apply damage on arrow impact
         for proj in &self.projectiles {
             if proj.finished && proj.damage > 0 {
-                if let Some(idx) = self.find_unit_near(proj.target_x, proj.target_y, proj.faction)
-                {
+                if let Some(idx) = self.find_unit_near(proj.target_x, proj.target_y, proj.faction) {
                     self.units[idx].take_damage(proj.damage);
                 }
             }
@@ -1758,20 +1730,20 @@ impl Game {
         }
     }
 
-    /// Reinforcement unit queue (cycles through).
-    const REINFORCE_QUEUE: &'static [UnitKind] = &[
-        UnitKind::Warrior, UnitKind::Lancer, UnitKind::Lancer,
-        UnitKind::Warrior, UnitKind::Lancer, UnitKind::Warrior,
-        UnitKind::Lancer, UnitKind::Lancer, UnitKind::Archer,
-        UnitKind::Archer, UnitKind::Archer, UnitKind::Monk,
-        UnitKind::Warrior, UnitKind::Lancer, UnitKind::Monk,
+    /// Reinforcement wave composition — spawned all at once per wave.
+    const REINFORCE_WAVE: &'static [UnitKind] = &[
         UnitKind::Warrior,
+        UnitKind::Warrior,
+        UnitKind::Lancer,
+        UnitKind::Lancer,
+        UnitKind::Archer,
+        UnitKind::Monk,
     ];
 
-    /// Seconds between reinforcement spawns.
-    const REINFORCE_INTERVAL: f32 = 3.5;
+    /// Seconds between reinforcement waves.
+    const REINFORCE_INTERVAL: f32 = 20.0;
 
-    /// Spawn reinforcements at base when under unit cap.
+    /// Spawn a full wave of reinforcements at base when under unit cap.
     pub fn tick_production(&mut self, dt: f32) {
         let factions = [(0usize, Faction::Blue), (1, Faction::Red)];
         for &(fi, faction) in &factions {
@@ -1788,38 +1760,44 @@ impl Game {
             if self.reinforce_timer[fi] >= Self::REINFORCE_INTERVAL {
                 self.reinforce_timer[fi] -= Self::REINFORCE_INTERVAL;
 
-                let kind = Self::REINFORCE_QUEUE[self.reinforce_index[fi] % Self::REINFORCE_QUEUE.len()];
-                self.reinforce_index[fi] += 1;
+                let slots = MAX_UNITS_PER_FACTION.saturating_sub(alive_count);
+                let wave_size = slots.min(Self::REINFORCE_WAVE.len());
 
-                let target_bk = building::building_for_unit(kind);
-                let (sx, sy) = self.buildings.iter()
-                    .find(|b| b.faction == faction && b.kind == target_bk)
-                    .map(|b| {
-                        // Spawn 3 tiles toward the battlefield from the building
-                        let candidate = match faction {
-                            Faction::Blue => (b.grid_x, b.grid_y + 3),
-                            _ => (b.grid_x, b.grid_y.saturating_sub(3)),
-                        };
-                        // Verify passability, try offsets if blocked
-                        if self.grid.is_passable(candidate.0, candidate.1) {
-                            candidate
-                        } else if self.grid.is_passable(candidate.0 + 1, candidate.1) {
-                            (candidate.0 + 1, candidate.1)
-                        } else if self.grid.is_passable(candidate.0.saturating_sub(1), candidate.1) {
-                            (candidate.0.saturating_sub(1), candidate.1)
-                        } else {
-                            // Last resort: use faction base
-                            match faction {
-                                Faction::Blue => self.zone_manager.blue_base,
-                                _ => self.zone_manager.red_base,
+                for i in 0..wave_size {
+                    let kind = Self::REINFORCE_WAVE[i];
+                    let target_bk = building::building_for_unit(kind);
+                    let (sx, sy) = self
+                        .buildings
+                        .iter()
+                        .find(|b| b.faction == faction && b.kind == target_bk)
+                        .map(|b| {
+                            // Spawn 3 tiles toward the battlefield from the building
+                            let candidate = match faction {
+                                Faction::Blue => (b.grid_x, b.grid_y + 3),
+                                _ => (b.grid_x, b.grid_y.saturating_sub(3)),
+                            };
+                            if self.grid.is_passable(candidate.0, candidate.1) {
+                                candidate
+                            } else if self.grid.is_passable(candidate.0 + 1, candidate.1) {
+                                (candidate.0 + 1, candidate.1)
+                            } else if self
+                                .grid
+                                .is_passable(candidate.0.saturating_sub(1), candidate.1)
+                            {
+                                (candidate.0.saturating_sub(1), candidate.1)
+                            } else {
+                                match faction {
+                                    Faction::Blue => self.zone_manager.blue_base,
+                                    _ => self.zone_manager.red_base,
+                                }
                             }
-                        }
-                    })
-                    .unwrap_or_else(|| match faction {
-                        Faction::Blue => self.zone_manager.blue_base,
-                        _ => self.zone_manager.red_base,
-                    });
-                self.spawn_unit(kind, faction, sx, sy, false);
+                        })
+                        .unwrap_or_else(|| match faction {
+                            Faction::Blue => self.zone_manager.blue_base,
+                            _ => self.zone_manager.red_base,
+                        });
+                    self.spawn_unit(kind, faction, sx, sy, false);
+                }
             }
         }
     }
@@ -1862,36 +1840,132 @@ impl Game {
         let by = blue_cy + 5;
         self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by, true);
         self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by + 1, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by.saturating_sub(1), false);
+        self.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Blue,
+            bx + 1,
+            by.saturating_sub(1),
+            false,
+        );
         self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by + 2, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by.saturating_sub(2), false);
+        self.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Blue,
+            bx + 1,
+            by.saturating_sub(2),
+            false,
+        );
         for i in 0..3u32 {
             self.spawn_unit(UnitKind::Lancer, Faction::Blue, bx, by + i, false);
-            self.spawn_unit(UnitKind::Lancer, Faction::Blue, bx, by.saturating_sub(1 + i), false);
+            self.spawn_unit(
+                UnitKind::Lancer,
+                Faction::Blue,
+                bx,
+                by.saturating_sub(1 + i),
+                false,
+            );
         }
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, bx.saturating_sub(1), by + 1, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, bx.saturating_sub(1), by.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, bx.saturating_sub(1), by, false);
-        self.spawn_unit(UnitKind::Monk, Faction::Blue, bx.saturating_sub(2), by + 1, false);
-        self.spawn_unit(UnitKind::Monk, Faction::Blue, bx.saturating_sub(2), by.saturating_sub(1), false);
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Blue,
+            bx.saturating_sub(1),
+            by + 1,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Blue,
+            bx.saturating_sub(1),
+            by.saturating_sub(1),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Blue,
+            bx.saturating_sub(1),
+            by,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Monk,
+            Faction::Blue,
+            bx.saturating_sub(2),
+            by + 1,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Monk,
+            Faction::Blue,
+            bx.saturating_sub(2),
+            by.saturating_sub(1),
+            false,
+        );
 
         // Red army — spawn in front of base (toward center)
         let rx = red_cx;
         let ry = red_cy.saturating_sub(5);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, rx.saturating_sub(1), ry, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, rx.saturating_sub(1), ry + 1, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, rx.saturating_sub(1), ry.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, rx.saturating_sub(1), ry + 2, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, rx.saturating_sub(1), ry.saturating_sub(2), false);
+        self.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Red,
+            rx.saturating_sub(1),
+            ry,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Red,
+            rx.saturating_sub(1),
+            ry + 1,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Red,
+            rx.saturating_sub(1),
+            ry.saturating_sub(1),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Red,
+            rx.saturating_sub(1),
+            ry + 2,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Red,
+            rx.saturating_sub(1),
+            ry.saturating_sub(2),
+            false,
+        );
         for i in 0..3u32 {
             self.spawn_unit(UnitKind::Lancer, Faction::Red, rx, ry + i, false);
-            self.spawn_unit(UnitKind::Lancer, Faction::Red, rx, ry.saturating_sub(1 + i), false);
+            self.spawn_unit(
+                UnitKind::Lancer,
+                Faction::Red,
+                rx,
+                ry.saturating_sub(1 + i),
+                false,
+            );
         }
         self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 1, ry + 1, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 1, ry.saturating_sub(1), false);
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Red,
+            rx + 1,
+            ry.saturating_sub(1),
+            false,
+        );
         self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 1, ry, false);
         self.spawn_unit(UnitKind::Monk, Faction::Red, rx + 2, ry + 1, false);
-        self.spawn_unit(UnitKind::Monk, Faction::Red, rx + 2, ry.saturating_sub(1), false);
+        self.spawn_unit(
+            UnitKind::Monk,
+            Faction::Red,
+            rx + 2,
+            ry.saturating_sub(1),
+            false,
+        );
 
         // Camera starts centered on player
         let (cx, cy) = grid::grid_to_world(bx, by);
@@ -1974,11 +2048,7 @@ mod tests {
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
         game.spawn_unit(UnitKind::Warrior, Faction::Red, 10, 5, false);
         game.player_step(SwipeDir::E);
-        let enemy = game
-            .units
-            .iter()
-            .find(|u| !u.is_player && u.alive)
-            .unwrap();
+        let enemy = game.units.iter().find(|u| !u.is_player && u.alive).unwrap();
         let (egx, _) = enemy.grid_cell();
         assert!(egx < 10, "AI should have moved toward player");
     }
@@ -1991,10 +2061,7 @@ mod tests {
         game.player_step(SwipeDir::S);
         let player = game.player_unit().unwrap();
         let (_, pgy) = player.grid_cell();
-        assert!(
-            player.hp < 10 || pgy == 6,
-            "AI should have pursued"
-        );
+        assert!(player.hp < 10 || pgy == 6, "AI should have pursued");
     }
 
     #[test]
@@ -2030,9 +2097,10 @@ mod tests {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
         game.player_step(SwipeDir::E);
-        let has_player_move = game.turn_events.iter().any(|e| {
-            matches!(e, TurnEvent::Move { unit_id: 1, .. })
-        });
+        let has_player_move = game
+            .turn_events
+            .iter()
+            .any(|e| matches!(e, TurnEvent::Move { unit_id: 1, .. }));
         assert!(
             has_player_move,
             "Expected Move event for player, got: {:?}",
@@ -2142,12 +2210,13 @@ mod tests {
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
         game.spawn_unit(UnitKind::Archer, Faction::Red, 8, 5, false);
         game.player_step(SwipeDir::S);
-        let archer = game.units.iter().find(|u| u.kind == UnitKind::Archer).unwrap();
+        let archer = game
+            .units
+            .iter()
+            .find(|u| u.kind == UnitKind::Archer)
+            .unwrap();
         let (agx, _) = archer.grid_cell();
-        assert_eq!(
-            agx, 8,
-            "Archer should hold position when already in range"
-        );
+        assert_eq!(agx, 8, "Archer should hold position when already in range");
     }
 
     #[test]
@@ -2157,7 +2226,11 @@ mod tests {
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
         let warrior_id = game.spawn_unit(UnitKind::Warrior, Faction::Red, 30, 30, false);
         game.spawn_unit(UnitKind::Monk, Faction::Red, 31, 30, false);
-        game.units.iter_mut().find(|u| u.id == warrior_id).unwrap().hp = 3;
+        game.units
+            .iter_mut()
+            .find(|u| u.id == warrior_id)
+            .unwrap()
+            .hp = 3;
         game.player_step(SwipeDir::E);
         let has_heal = game
             .turn_events
@@ -2229,7 +2302,10 @@ mod tests {
         // Adjacent = 64px, within MELEE_RANGE = 96px
         game.player_attack();
         let enemy = game.find_unit(enemy_id).unwrap();
-        assert!(enemy.hp < 10, "Enemy should have taken damage from auto-attack");
+        assert!(
+            enemy.hp < 10,
+            "Enemy should have taken damage from auto-attack"
+        );
     }
 
     #[test]
@@ -2240,13 +2316,19 @@ mod tests {
         // 4 tiles = 256px, Archer range = 7 * 64 = 448px
         game.player_attack();
         // Arrow spawned — damage is deferred until projectile lands
-        assert!(!game.projectiles.is_empty(), "Arrow projectile should be spawned");
+        assert!(
+            !game.projectiles.is_empty(),
+            "Arrow projectile should be spawned"
+        );
         // Advance time until arrow lands (distance ~256px / 600px/s ≈ 0.43s)
         for _ in 0..40 {
             game.update(0.016);
         }
         let enemy = game.find_unit(enemy_id).unwrap();
-        assert!(enemy.hp < 10, "Enemy should have taken ranged damage on arrow impact");
+        assert!(
+            enemy.hp < 10,
+            "Enemy should have taken ranged damage on arrow impact"
+        );
     }
 
     #[test]
@@ -2261,7 +2343,10 @@ mod tests {
             game.tick_ai(0.016);
         }
         let enemy = game.units.iter().find(|u| !u.is_player && u.alive).unwrap();
-        assert!(enemy.x < start_x, "AI melee should have moved toward player");
+        assert!(
+            enemy.x < start_x,
+            "AI melee should have moved toward player"
+        );
     }
 
     #[test]
@@ -2273,7 +2358,11 @@ mod tests {
         let start_x = game.units[1].x;
         game.units[1].attack_cooldown = 0.5;
         game.tick_ai(0.016);
-        let archer = game.units.iter().find(|u| u.kind == UnitKind::Archer).unwrap();
+        let archer = game
+            .units
+            .iter()
+            .find(|u| u.kind == UnitKind::Archer)
+            .unwrap();
         assert!(
             (archer.x - start_x).abs() < 1.0,
             "Archer should hold position when in range"
@@ -2332,7 +2421,14 @@ mod tests {
         let px = game.units[0].x;
         let py = game.units[0].y;
         // Aim right (0 rad), enemy is to the right
-        let result = game.enemy_in_cone(px, py, Faction::Blue, MELEE_RANGE, 0.0, ATTACK_CONE_HALF_ANGLE);
+        let result = game.enemy_in_cone(
+            px,
+            py,
+            Faction::Blue,
+            MELEE_RANGE,
+            0.0,
+            ATTACK_CONE_HALF_ANGLE,
+        );
         assert_eq!(result, Some(2), "Should hit enemy directly ahead");
     }
 
@@ -2344,7 +2440,14 @@ mod tests {
         let px = game.units[0].x;
         let py = game.units[0].y;
         // Aim right (0 rad), enemy is to the left (behind)
-        let result = game.enemy_in_cone(px, py, Faction::Blue, MELEE_RANGE, 0.0, ATTACK_CONE_HALF_ANGLE);
+        let result = game.enemy_in_cone(
+            px,
+            py,
+            Faction::Blue,
+            MELEE_RANGE,
+            0.0,
+            ATTACK_CONE_HALF_ANGLE,
+        );
         assert_eq!(result, None, "Should miss enemy behind");
     }
 
@@ -2357,7 +2460,14 @@ mod tests {
         let py = game.units[0].y;
         // Aim SE (PI/4 rad)
         let aim_se = std::f32::consts::FRAC_PI_4;
-        let result = game.enemy_in_cone(px, py, Faction::Blue, MELEE_RANGE * 2.0, aim_se, ATTACK_CONE_HALF_ANGLE);
+        let result = game.enemy_in_cone(
+            px,
+            py,
+            Faction::Blue,
+            MELEE_RANGE * 2.0,
+            aim_se,
+            ATTACK_CONE_HALF_ANGLE,
+        );
         assert_eq!(result, Some(2), "Should hit enemy in SE when aiming SE");
     }
 
@@ -2370,8 +2480,19 @@ mod tests {
         let py = game.units[0].y;
         // Aim left (PI rad) — tests wrap-around at -PI/PI boundary
         let aim_left = std::f32::consts::PI;
-        let result = game.enemy_in_cone(px, py, Faction::Blue, MELEE_RANGE, aim_left, ATTACK_CONE_HALF_ANGLE);
-        assert_eq!(result, Some(2), "Should hit enemy to the left when aiming left");
+        let result = game.enemy_in_cone(
+            px,
+            py,
+            Faction::Blue,
+            MELEE_RANGE,
+            aim_left,
+            ATTACK_CONE_HALF_ANGLE,
+        );
+        assert_eq!(
+            result,
+            Some(2),
+            "Should hit enemy to the left when aiming left"
+        );
     }
 
     // ---- Line-of-sight tests ----
@@ -2381,7 +2502,10 @@ mod tests {
         let game = Game::new(960.0, 640.0);
         let (x1, y1) = grid::grid_to_world(5, 5);
         let (x2, y2) = grid::grid_to_world(10, 5);
-        assert!(game.has_line_of_sight(x1, y1, x2, y2), "Open grass should not block LOS");
+        assert!(
+            game.has_line_of_sight(x1, y1, x2, y2),
+            "Open grass should not block LOS"
+        );
     }
 
     #[test]
@@ -2390,7 +2514,10 @@ mod tests {
         game.grid.set(7, 5, TileKind::Forest);
         let (x1, y1) = grid::grid_to_world(5, 5);
         let (x2, y2) = grid::grid_to_world(10, 5);
-        assert!(!game.has_line_of_sight(x1, y1, x2, y2), "Forest should block LOS");
+        assert!(
+            !game.has_line_of_sight(x1, y1, x2, y2),
+            "Forest should block LOS"
+        );
     }
 
     #[test]
@@ -2404,7 +2531,10 @@ mod tests {
         game.spawn_unit(UnitKind::Warrior, Faction::Red, 9, 5, false);
         // Enemy is within AI_VISION_RADIUS (10 tiles) but behind forest
         let result = game.find_nearest_enemy(0);
-        assert!(result.is_none(), "Enemy behind forest should not be visible");
+        assert!(
+            result.is_none(),
+            "Enemy behind forest should not be visible"
+        );
     }
 
     #[test]
@@ -2435,8 +2565,20 @@ mod tests {
         game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 6, false);
         let px = game.units[0].x;
         let py = game.units[0].y;
-        let result = game.enemies_in_cone(px, py, Faction::Blue, MELEE_RANGE * 2.0, 0.0, ATTACK_CONE_HALF_ANGLE);
-        assert_eq!(result.len(), 3, "Should find all 3 enemies in cone, got {:?}", result);
+        let result = game.enemies_in_cone(
+            px,
+            py,
+            Faction::Blue,
+            MELEE_RANGE * 2.0,
+            0.0,
+            ATTACK_CONE_HALF_ANGLE,
+        );
+        assert_eq!(
+            result.len(),
+            3,
+            "Should find all 3 enemies in cone, got {:?}",
+            result
+        );
     }
 
     #[test]
@@ -2447,7 +2589,14 @@ mod tests {
         game.spawn_unit(UnitKind::Warrior, Faction::Red, 4, 5, false); // behind (left)
         let px = game.units[0].x;
         let py = game.units[0].y;
-        let result = game.enemies_in_cone(px, py, Faction::Blue, MELEE_RANGE * 2.0, 0.0, ATTACK_CONE_HALF_ANGLE);
+        let result = game.enemies_in_cone(
+            px,
+            py,
+            Faction::Blue,
+            MELEE_RANGE * 2.0,
+            0.0,
+            ATTACK_CONE_HALF_ANGLE,
+        );
         assert_eq!(result.len(), 1, "Should only find the enemy ahead");
         assert_eq!(result[0], 2, "Should be the enemy to the right");
     }
@@ -2462,8 +2611,14 @@ mod tests {
         game.player_attack();
         let enemy1 = game.find_unit(e1).unwrap();
         let enemy2 = game.find_unit(e2).unwrap();
-        assert!(enemy1.hp < enemy1.stats.max_hp, "First enemy should be damaged");
-        assert!(enemy2.hp < enemy2.stats.max_hp, "Second enemy should be damaged");
+        assert!(
+            enemy1.hp < enemy1.stats.max_hp,
+            "First enemy should be damaged"
+        );
+        assert!(
+            enemy2.hp < enemy2.stats.max_hp,
+            "Second enemy should be damaged"
+        );
     }
 
     #[test]
@@ -2533,7 +2688,8 @@ mod tests {
         let (base_wx, _) = grid::grid_to_world(138, 138);
         assert!(
             obj.0 < base_wx,
-            "Blue should target a zone (x < {base_wx}), got x={}", obj.0
+            "Blue should target a zone (x < {base_wx}), got x={}",
+            obj.0
         );
     }
 
@@ -2542,8 +2698,8 @@ mod tests {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
 
-        // Tick production for ~5s to spawn at least one unit
-        for _ in 0..50 {
+        // Tick production for ~25s to trigger a reinforcement wave (interval=20s)
+        for _ in 0..250 {
             game.tick_production(0.1);
         }
 
@@ -2554,7 +2710,7 @@ mod tests {
             .count();
         assert!(
             blue_units > 1,
-            "Should have spawned reinforcement units, got {blue_units}"
+            "Should have spawned reinforcement wave, got {blue_units}"
         );
     }
 }

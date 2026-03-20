@@ -111,7 +111,11 @@ impl TurnAnimator {
 
         for event in events {
             match event {
-                TurnEvent::Move { unit_id: _, from, to: _ } => {
+                TurnEvent::Move {
+                    unit_id: _,
+                    from,
+                    to: _,
+                } => {
                     output.particles.push((ParticleKind::Dust, from.0, from.1));
                 }
                 TurnEvent::MeleeAttack {
@@ -213,11 +217,9 @@ impl TurnAnimator {
                     if !*particle_spawned && anim.elapsed >= duration * 0.6 {
                         *particle_spawned = true;
                         if let Some(defender) = units.iter().find(|u| u.id == defender_id) {
-                            output.particles.push((
-                                ParticleKind::Dust,
-                                defender.x,
-                                defender.y,
-                            ));
+                            output
+                                .particles
+                                .push((ParticleKind::Dust, defender.x, defender.y));
                         }
                     }
 
@@ -307,10 +309,19 @@ impl TurnAnimator {
             if done {
                 // Track kills for visual_alive in finished anims
                 match &anim.phase {
-                    AnimPhase::MeleeAttack { defender_id, killed: true, .. } => {
+                    AnimPhase::MeleeAttack {
+                        defender_id,
+                        killed: true,
+                        ..
+                    } => {
                         self.visual_alive.remove(defender_id);
                     }
-                    AnimPhase::RangedAttack { defender_id, killed: true, missed: false, .. } => {
+                    AnimPhase::RangedAttack {
+                        defender_id,
+                        killed: true,
+                        missed: false,
+                        ..
+                    } => {
                         self.visual_alive.remove(defender_id);
                     }
                     _ => {}
@@ -349,11 +360,7 @@ mod tests {
             to: (416.0, 352.0),
         };
         match event {
-            TurnEvent::Move {
-                unit_id,
-                from,
-                to,
-            } => {
+            TurnEvent::Move { unit_id, from, to } => {
                 assert_eq!(unit_id, 1);
                 assert!((from.0 - 352.0).abs() < f32::EPSILON);
                 assert!((to.0 - 416.0).abs() < f32::EPSILON);

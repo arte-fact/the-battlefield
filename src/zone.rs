@@ -100,7 +100,10 @@ impl ZoneManager {
             victory_timer: 0.0,
             victory_candidate: None,
             blue_base: (BORDER_SIZE + 5, BORDER_SIZE + 5),
-            red_base: (BORDER_SIZE + PLAYABLE_SIZE - 6, BORDER_SIZE + PLAYABLE_SIZE - 6),
+            red_base: (
+                BORDER_SIZE + PLAYABLE_SIZE - 6,
+                BORDER_SIZE + PLAYABLE_SIZE - 6,
+            ),
         }
     }
 
@@ -108,9 +111,8 @@ impl ZoneManager {
     pub fn create_from_layout(layout: &MapLayout) -> Self {
         // Zone names cycle through letters
         const NAMES: &[&str] = &[
-            "Zone A", "Zone B", "Zone C", "Zone D", "Zone E",
-            "Zone F", "Zone G", "Zone H", "Zone I", "Zone J",
-            "Zone K", "Zone L", "Zone M", "Zone N",
+            "Zone A", "Zone B", "Zone C", "Zone D", "Zone E", "Zone F", "Zone G", "Zone H",
+            "Zone I", "Zone J", "Zone K", "Zone L", "Zone M", "Zone N",
         ];
         let zones = layout
             .zone_centers
@@ -308,32 +310,33 @@ impl ZoneManager {
             _ => (self.red_base.0 as f32, self.red_base.1 as f32),
         };
         // Pick the controlled zone farthest from own base
-        controlled
-            .into_iter()
-            .max_by_key(|z| {
-                let dx = z.center_gx as f32 - own_x;
-                let dy = z.center_gy as f32 - own_y;
-                (dx * dx + dy * dy) as i32
-            })
+        controlled.into_iter().max_by_key(|z| {
+            let dx = z.center_gx as f32 - own_x;
+            let dy = z.center_gy as f32 - own_y;
+            (dx * dx + dy * dy) as i32
+        })
     }
 
     /// Return the zone whose center is closest to the given world position.
     pub fn nearest_zone(&self, wx: f32, wy: f32) -> Option<&CaptureZone> {
-        self.zones
-            .iter()
-            .min_by(|a, b| {
-                let da = (a.center_wx - wx) * (a.center_wx - wx)
-                    + (a.center_wy - wy) * (a.center_wy - wy);
-                let db = (b.center_wx - wx) * (b.center_wx - wx)
-                    + (b.center_wy - wy) * (b.center_wy - wy);
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            })
+        self.zones.iter().min_by(|a, b| {
+            let da =
+                (a.center_wx - wx) * (a.center_wx - wx) + (a.center_wy - wy) * (a.center_wy - wy);
+            let db =
+                (b.center_wx - wx) * (b.center_wx - wx) + (b.center_wy - wy) * (b.center_wy - wy);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
     }
 
     /// Return the best retreat zone for a faction: a controlled zone that is
     /// closer to own base than the unit ("behind" it), picking the most advanced
     /// (farthest from base) among those. Falls back to nearest controlled zone.
-    pub fn retreat_zone(&self, faction: Faction, unit_wx: f32, unit_wy: f32) -> Option<&CaptureZone> {
+    pub fn retreat_zone(
+        &self,
+        faction: Faction,
+        unit_wx: f32,
+        unit_wy: f32,
+    ) -> Option<&CaptureZone> {
         let (base_x, base_y): (f32, f32) = match faction {
             Faction::Blue => (
                 self.blue_base.0 as f32 * TILE_SIZE,
@@ -345,8 +348,8 @@ impl ZoneManager {
             ),
         };
 
-        let unit_dist_sq = (unit_wx - base_x) * (unit_wx - base_x)
-            + (unit_wy - base_y) * (unit_wy - base_y);
+        let unit_dist_sq =
+            (unit_wx - base_x) * (unit_wx - base_x) + (unit_wy - base_y) * (unit_wy - base_y);
 
         let controlled: Vec<&CaptureZone> = self
             .zones
@@ -371,29 +374,24 @@ impl ZoneManager {
 
         if !behind.is_empty() {
             // Pick the most advanced rear zone (farthest from base among behind zones)
-            return behind
-                .into_iter()
-                .max_by(|a, b| {
-                    let da = (a.center_wx - base_x) * (a.center_wx - base_x)
-                        + (a.center_wy - base_y) * (a.center_wy - base_y);
-                    let db = (b.center_wx - base_x) * (b.center_wx - base_x)
-                        + (b.center_wy - base_y) * (b.center_wy - base_y);
-                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-                });
+            return behind.into_iter().max_by(|a, b| {
+                let da = (a.center_wx - base_x) * (a.center_wx - base_x)
+                    + (a.center_wy - base_y) * (a.center_wy - base_y);
+                let db = (b.center_wx - base_x) * (b.center_wx - base_x)
+                    + (b.center_wy - base_y) * (b.center_wy - base_y);
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
 
         // Fallback: nearest controlled zone
-        controlled
-            .into_iter()
-            .min_by(|a, b| {
-                let da = (a.center_wx - unit_wx) * (a.center_wx - unit_wx)
-                    + (a.center_wy - unit_wy) * (a.center_wy - unit_wy);
-                let db = (b.center_wx - unit_wx) * (b.center_wx - unit_wx)
-                    + (b.center_wy - unit_wy) * (b.center_wy - unit_wy);
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            })
+        controlled.into_iter().min_by(|a, b| {
+            let da = (a.center_wx - unit_wx) * (a.center_wx - unit_wx)
+                + (a.center_wy - unit_wy) * (a.center_wy - unit_wy);
+            let db = (b.center_wx - unit_wx) * (b.center_wx - unit_wx)
+                + (b.center_wy - unit_wy) * (b.center_wy - unit_wy);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
     }
-
 }
 
 #[cfg(test)]
@@ -408,11 +406,11 @@ mod tests {
             blue_base: (b + 5, b + 5),
             red_base: (b + PLAYABLE_SIZE - 6, b + PLAYABLE_SIZE - 6),
             zone_centers: vec![
-                (b + 35, b + 35),   // diagonal 25%
-                (b + 64, b + 64),   // diagonal 50% (center)
-                (b + 93, b + 93),   // diagonal 75%
-                (b + 35, b + 93),   // flank
-                (b + 93, b + 35),   // flank
+                (b + 35, b + 35), // diagonal 25%
+                (b + 64, b + 64), // diagonal 50% (center)
+                (b + 93, b + 93), // diagonal 75%
+                (b + 35, b + 93), // flank
+                (b + 93, b + 35), // flank
             ],
         }
     }
@@ -649,7 +647,10 @@ mod tests {
         }
         mgr.tick_victory(60.0);
         let progress = mgr.victory_progress();
-        assert!((progress - 0.5).abs() < 0.01, "Expected ~0.5, got {progress}");
+        assert!(
+            (progress - 0.5).abs() < 0.01,
+            "Expected ~0.5, got {progress}"
+        );
     }
 
     #[test]

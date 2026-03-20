@@ -33,7 +33,9 @@ impl Simplex {
         // Fisher-Yates shuffle with LCG
         let mut s = seed.wrapping_add(1);
         for i in (1..256).rev() {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let j = (s >> 33) as usize % (i + 1);
             perm_base.swap(i, j);
         }
@@ -130,10 +132,7 @@ mod tests {
             let x = (i as f64) * 0.13 - 50.0;
             let y = (i as f64) * 0.17 - 50.0;
             let v = s.get(x, y);
-            assert!(
-                (-1.5..=1.5).contains(&v),
-                "out of range: {v} at ({x}, {y})"
-            );
+            assert!((-1.5..=1.5).contains(&v), "out of range: {v} at ({x}, {y})");
         }
     }
 

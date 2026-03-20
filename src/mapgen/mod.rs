@@ -47,8 +47,18 @@ fn bsp_split(rng: &mut Rng, rect: Rect, depth: u32, max_depth: u32, min_size: u3
         // Split position: 40-60% of height
         let range = rect.h - 2 * min_size;
         let split_offset = min_size + (rng.next() % (range + 1));
-        let top = Rect { x: rect.x, y: rect.y, w: rect.w, h: split_offset };
-        let bottom = Rect { x: rect.x, y: rect.y + split_offset, w: rect.w, h: rect.h - split_offset };
+        let top = Rect {
+            x: rect.x,
+            y: rect.y,
+            w: rect.w,
+            h: split_offset,
+        };
+        let bottom = Rect {
+            x: rect.x,
+            y: rect.y + split_offset,
+            w: rect.w,
+            h: rect.h - split_offset,
+        };
         let mut leaves = bsp_split(rng, top, depth + 1, max_depth, min_size);
         leaves.extend(bsp_split(rng, bottom, depth + 1, max_depth, min_size));
         leaves
@@ -58,8 +68,18 @@ fn bsp_split(rng: &mut Rng, rect: Rect, depth: u32, max_depth: u32, min_size: u3
         }
         let range = rect.w - 2 * min_size;
         let split_offset = min_size + (rng.next() % (range + 1));
-        let left = Rect { x: rect.x, y: rect.y, w: split_offset, h: rect.h };
-        let right = Rect { x: rect.x + split_offset, y: rect.y, w: rect.w - split_offset, h: rect.h };
+        let left = Rect {
+            x: rect.x,
+            y: rect.y,
+            w: split_offset,
+            h: rect.h,
+        };
+        let right = Rect {
+            x: rect.x + split_offset,
+            y: rect.y,
+            w: rect.w - split_offset,
+            h: rect.h,
+        };
         let mut leaves = bsp_split(rng, left, depth + 1, max_depth, min_size);
         leaves.extend(bsp_split(rng, right, depth + 1, max_depth, min_size));
         leaves
@@ -145,10 +165,7 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
 }
 
 /// Generate a battlefield with custom configuration.
-pub fn generate_battlefield_with_config(
-    seed: u32,
-    config: &TerrainConfig,
-) -> (Grid, MapLayout) {
+pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> (Grid, MapLayout) {
     let mut rng = Rng::new(seed);
     let w = GRID_SIZE;
     let h = GRID_SIZE;
@@ -251,7 +268,12 @@ pub fn generate_battlefield_with_config(
     let p = PLAYABLE_SIZE;
 
     // Run BSP on playable area
-    let playable_rect = Rect { x: b, y: b, w: p, h: p };
+    let playable_rect = Rect {
+        x: b,
+        y: b,
+        w: p,
+        h: p,
+    };
     let mut bsp_rng = Rng::new(seed.wrapping_add(0xBEEF));
     let leaves = bsp_split(&mut bsp_rng, playable_rect, 0, 4, 20);
 
@@ -279,9 +301,7 @@ pub fn generate_battlefield_with_config(
     // 3 diagonal zones at 25%, 50%, 75% between bases
     let diag: Vec<(u32, u32)> = [0.25_f32, 0.50, 0.75]
         .iter()
-        .map(|&t| {
-            ((bx + dx * t) as u32, (by + dy * t) as u32)
-        })
+        .map(|&t| ((bx + dx * t) as u32, (by + dy * t) as u32))
         .collect();
     // 2 flanks: perpendicular offset from midpoint
     let perp_x = -dy * 0.25;
@@ -441,7 +461,10 @@ pub fn blue_spawn_area() -> (u32, u32) {
 
 /// Fallback enemy spawn area center (Red base).
 pub fn red_spawn_area() -> (u32, u32) {
-    (BORDER_SIZE + PLAYABLE_SIZE - 6, BORDER_SIZE + PLAYABLE_SIZE - 6)
+    (
+        BORDER_SIZE + PLAYABLE_SIZE - 6,
+        BORDER_SIZE + PLAYABLE_SIZE - 6,
+    )
 }
 
 #[cfg(test)]
@@ -610,14 +633,15 @@ mod tests {
             for x in 0..GRID_SIZE {
                 if grid.get(x, y) == TileKind::Forest {
                     total_forest += 1;
-                    let has_neighbor = [(-1i32, 0), (1, 0), (0, -1), (0, 1)]
-                        .iter()
-                        .any(|&(dx, dy)| {
-                            let nx = x as i32 + dx;
-                            let ny = y as i32 + dy;
-                            grid.in_bounds(nx, ny)
-                                && grid.get(nx as u32, ny as u32) == TileKind::Forest
-                        });
+                    let has_neighbor =
+                        [(-1i32, 0), (1, 0), (0, -1), (0, 1)]
+                            .iter()
+                            .any(|&(dx, dy)| {
+                                let nx = x as i32 + dx;
+                                let ny = y as i32 + dy;
+                                grid.in_bounds(nx, ny)
+                                    && grid.get(nx as u32, ny as u32) == TileKind::Forest
+                            });
                     if has_neighbor {
                         clustered += 1;
                     }
@@ -644,10 +668,23 @@ mod tests {
     #[test]
     fn bsp_produces_leaves() {
         let mut rng = Rng::new(42);
-        let rect = Rect { x: 16, y: 16, w: 128, h: 128 };
+        let rect = Rect {
+            x: 16,
+            y: 16,
+            w: 128,
+            h: 128,
+        };
         let leaves = bsp_split(&mut rng, rect, 0, 4, 20);
-        assert!(leaves.len() >= 4, "BSP should produce at least 4 leaves, got {}", leaves.len());
-        assert!(leaves.len() <= 16, "BSP should produce at most 16 leaves, got {}", leaves.len());
+        assert!(
+            leaves.len() >= 4,
+            "BSP should produce at least 4 leaves, got {}",
+            leaves.len()
+        );
+        assert!(
+            leaves.len() <= 16,
+            "BSP should produce at most 16 leaves, got {}",
+            leaves.len()
+        );
     }
 
     #[test]
@@ -657,17 +694,37 @@ mod tests {
         let p = PLAYABLE_SIZE;
         let mid = b + p / 2;
         // Blue base should be in top-left quadrant
-        assert!(layout.blue_base.0 < mid, "Blue base x={} should be < {mid}", layout.blue_base.0);
-        assert!(layout.blue_base.1 < mid, "Blue base y={} should be < {mid}", layout.blue_base.1);
+        assert!(
+            layout.blue_base.0 < mid,
+            "Blue base x={} should be < {mid}",
+            layout.blue_base.0
+        );
+        assert!(
+            layout.blue_base.1 < mid,
+            "Blue base y={} should be < {mid}",
+            layout.blue_base.1
+        );
         // Red base should be in bottom-right quadrant
-        assert!(layout.red_base.0 > mid, "Red base x={} should be > {mid}", layout.red_base.0);
-        assert!(layout.red_base.1 > mid, "Red base y={} should be > {mid}", layout.red_base.1);
+        assert!(
+            layout.red_base.0 > mid,
+            "Red base x={} should be > {mid}",
+            layout.red_base.0
+        );
+        assert!(
+            layout.red_base.1 > mid,
+            "Red base y={} should be > {mid}",
+            layout.red_base.1
+        );
     }
 
     #[test]
     fn layout_has_five_zones() {
         let (_, layout) = generate_battlefield(42);
-        assert_eq!(layout.zone_centers.len(), 5, "Should have exactly 5 zones (3 diagonal + 2 flanks)");
+        assert_eq!(
+            layout.zone_centers.len(),
+            5,
+            "Should have exactly 5 zones (3 diagonal + 2 flanks)"
+        );
     }
 
     #[test]

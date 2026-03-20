@@ -328,10 +328,10 @@ impl Input {
         let ord_base_y = self.attack_button.center_y - atk_radius - ord_gap - ord_radius;
 
         let order_btns = [
-            &mut self.order_follow_btn,   // bottom of stack (closest to ATK)
+            &mut self.order_follow_btn, // bottom of stack (closest to ATK)
             &mut self.order_retreat_btn,
             &mut self.order_go_btn,
-            &mut self.order_hold_btn,     // top of stack
+            &mut self.order_hold_btn, // top of stack
         ];
         for (i, btn) in order_btns.into_iter().enumerate() {
             btn.center_x = ord_x;
@@ -484,7 +484,14 @@ impl Input {
     }
 
     /// Called on touchstart. Routes to joystick, attack button, or order buttons.
-    pub fn on_touch_start(&mut self, touch_id: i32, x: f32, y: f32, total_touches: u32, canvas_width: f32) {
+    pub fn on_touch_start(
+        &mut self,
+        touch_id: i32,
+        x: f32,
+        y: f32,
+        total_touches: u32,
+        canvas_width: f32,
+    ) {
         self.is_touch_device = true;
 
         if total_touches >= 2 {
@@ -537,9 +544,12 @@ impl Input {
 
     /// Returns true if any touch control (joystick, attack, order, or camera drag) is currently active.
     pub fn has_active_control(&self) -> bool {
-        self.joystick.active || self.attack_button.pressed
-            || self.order_hold_btn.pressed || self.order_go_btn.pressed
-            || self.order_retreat_btn.pressed || self.order_follow_btn.pressed
+        self.joystick.active
+            || self.attack_button.pressed
+            || self.order_hold_btn.pressed
+            || self.order_go_btn.pressed
+            || self.order_retreat_btn.pressed
+            || self.order_follow_btn.pressed
             || self.camera_drag_id.is_some()
     }
 
@@ -724,10 +734,7 @@ mod tests {
             SwipeDir::from_delta(100.0, -100.0, 30.0),
             Some(SwipeDir::NE)
         );
-        assert_eq!(
-            SwipeDir::from_delta(100.0, 100.0, 30.0),
-            Some(SwipeDir::SE)
-        );
+        assert_eq!(SwipeDir::from_delta(100.0, 100.0, 30.0), Some(SwipeDir::SE));
         assert_eq!(
             SwipeDir::from_delta(-100.0, 100.0, 30.0),
             Some(SwipeDir::SW)
@@ -786,7 +793,7 @@ mod tests {
         joy.activate(1, 100.0, 100.0);
         joy.update(1, 200.0, 100.0); // 100px right, beyond 60px max_radius
         assert!((joy.dx - 1.0).abs() < 0.01); // clamped to 1.0
-        // Stick should be clamped to max_radius from center
+                                              // Stick should be clamped to max_radius from center
         assert!((joy.stick_x - 160.0).abs() < 0.01);
     }
 

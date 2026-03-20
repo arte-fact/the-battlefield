@@ -20,14 +20,19 @@ impl BuildingKind {
     /// Grid footprint offsets (dx, dy) relative to the building's anchor tile.
     pub fn footprint_offsets(self) -> &'static [(i32, i32)] {
         match self {
-            BuildingKind::Barracks | BuildingKind::Archery => &[
-                (-1, -1), (0, -1), (1, -1),
-                (-1,  0), (0,  0), (1,  0),
-            ],
+            BuildingKind::Barracks | BuildingKind::Archery => {
+                &[(-1, -1), (0, -1), (1, -1), (-1, 0), (0, 0), (1, 0)]
+            }
             BuildingKind::Monastery => &[
-                (-1, -2), (0, -2), (1, -2),
-                (-1, -1), (0, -1), (1, -1),
-                (-1,  0), (0,  0), (1,  0),
+                (-1, -2),
+                (0, -2),
+                (1, -2),
+                (-1, -1),
+                (0, -1),
+                (1, -1),
+                (-1, 0),
+                (0, 0),
+                (1, 0),
             ],
         }
     }
@@ -66,14 +71,44 @@ pub fn building_for_unit(kind: UnitKind) -> BuildingKind {
 pub fn base_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBuilding> {
     match faction {
         Faction::Blue => vec![
-            BaseBuilding { kind: BuildingKind::Barracks, faction, grid_x: cx.saturating_sub(3), grid_y: cy.saturating_sub(4) },
-            BaseBuilding { kind: BuildingKind::Archery, faction, grid_x: cx + 3, grid_y: cy.saturating_sub(4) },
-            BaseBuilding { kind: BuildingKind::Monastery, faction, grid_x: cx, grid_y: cy.saturating_sub(6) },
+            BaseBuilding {
+                kind: BuildingKind::Barracks,
+                faction,
+                grid_x: cx.saturating_sub(3),
+                grid_y: cy.saturating_sub(4),
+            },
+            BaseBuilding {
+                kind: BuildingKind::Archery,
+                faction,
+                grid_x: cx + 3,
+                grid_y: cy.saturating_sub(4),
+            },
+            BaseBuilding {
+                kind: BuildingKind::Monastery,
+                faction,
+                grid_x: cx,
+                grid_y: cy.saturating_sub(6),
+            },
         ],
         _ => vec![
-            BaseBuilding { kind: BuildingKind::Barracks, faction, grid_x: cx + 3, grid_y: cy + 4 },
-            BaseBuilding { kind: BuildingKind::Archery, faction, grid_x: cx.saturating_sub(3), grid_y: cy + 4 },
-            BaseBuilding { kind: BuildingKind::Monastery, faction, grid_x: cx, grid_y: cy + 6 },
+            BaseBuilding {
+                kind: BuildingKind::Barracks,
+                faction,
+                grid_x: cx + 3,
+                grid_y: cy + 4,
+            },
+            BaseBuilding {
+                kind: BuildingKind::Archery,
+                faction,
+                grid_x: cx.saturating_sub(3),
+                grid_y: cy + 4,
+            },
+            BaseBuilding {
+                kind: BuildingKind::Monastery,
+                faction,
+                grid_x: cx,
+                grid_y: cy + 6,
+            },
         ],
     }
 }
@@ -103,10 +138,20 @@ mod tests {
             .iter()
             .chain(base_buildings(Faction::Red, cx_red, cy_red).iter())
         {
-            assert!(building.grid_x >= b && building.grid_x < b + p,
-                "grid_x {} out of playable area [{}, {})", building.grid_x, b, b + p);
-            assert!(building.grid_y >= b && building.grid_y < b + p,
-                "grid_y {} out of playable area [{}, {})", building.grid_y, b, b + p);
+            assert!(
+                building.grid_x >= b && building.grid_x < b + p,
+                "grid_x {} out of playable area [{}, {})",
+                building.grid_x,
+                b,
+                b + p
+            );
+            assert!(
+                building.grid_y >= b && building.grid_y < b + p,
+                "grid_y {} out of playable area [{}, {})",
+                building.grid_y,
+                b,
+                b + p
+            );
         }
     }
 

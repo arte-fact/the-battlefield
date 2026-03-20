@@ -1,6 +1,6 @@
 use crate::grid::Grid;
-use std::collections::BinaryHeap;
 use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 /// Flow field: a grid of direction vectors pointing toward a goal.
 /// Generated via Dijkstra from the goal outward.
@@ -42,7 +42,14 @@ impl FlowField {
         let mut directions = vec![(0i8, 0i8); size];
 
         if !grid.in_bounds(goal_gx as i32, goal_gy as i32) || !grid.is_passable(goal_gx, goal_gy) {
-            return Self { directions, integration, goal_gx, goal_gy, width: w, height: h };
+            return Self {
+                directions,
+                integration,
+                goal_gx,
+                goal_gy,
+                width: w,
+                height: h,
+            };
         }
 
         // Dijkstra from goal
@@ -109,7 +116,14 @@ impl FlowField {
             }
         }
 
-        Self { directions, integration, goal_gx, goal_gy, width: w, height: h }
+        Self {
+            directions,
+            integration,
+            goal_gx,
+            goal_gy,
+            width: w,
+            height: h,
+        }
     }
 
     /// O(1) direction lookup at grid cell (gx, gy).
@@ -136,12 +150,18 @@ pub struct FactionFlowState {
     pub cached_goal: (f32, f32),
 }
 
-impl FactionFlowState {
-    pub fn new() -> Self {
+impl Default for FactionFlowState {
+    fn default() -> Self {
         Self {
             field: None,
             cached_goal: (0.0, 0.0),
         }
+    }
+}
+
+impl FactionFlowState {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
