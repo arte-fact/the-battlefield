@@ -1,17 +1,16 @@
 use crate::animation::TurnEvent;
-use crate::building::{
-    FactionBase, GROUP_ARCHERS, GROUP_LANCERS, GROUP_MONKS, GROUP_WARRIORS,
-    PARTIAL_DISPATCH_TIMEOUT,
-};
+use crate::building::{self, BaseBuilding};
 use crate::camera::Camera;
 use crate::combat;
+use crate::flowfield::FactionFlowState;
 use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
+use std::collections::HashSet;
 use crate::input::SwipeDir;
 use crate::mapgen;
 use crate::particle::{Particle, Projectile};
 use crate::turn::TurnState;
 use crate::unit::{Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS};
-use crate::zone::ZoneManager;
+use crate::zone::{ZoneManager, MAX_UNITS_PER_FACTION};
 
 /// Player vision radius in tiles.
 const FOV_RADIUS: i32 = 15;
@@ -64,12 +63,22 @@ pub struct Game {
     pub blue_objective: (f32, f32),
     /// Strategic objective for Red faction (world-space coords of Blue spawn).
     pub red_objective: (f32, f32),
+    /// Production buildings at faction bases.
+    pub buildings: Vec<BaseBuilding>,
     /// Capture zone manager.
     pub zone_manager: ZoneManager,
-    /// Faction bases with production buildings.
-    pub bases: Vec<FactionBase>,
     /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
     pub winner: Option<Faction>,
+    /// Reinforcement timers per faction [Blue, Red].
+    reinforce_timer: [f32; 2],
+    /// Current index into REINFORCE_QUEUE per faction [Blue, Red].
+    reinforce_index: [usize; 2],
+    /// Pre-computed occupied grid cells for AI pathfinding (rebuilt each frame).
+    ai_occupied_cache: HashSet<(u32, u32)>,
+    /// Flow field for Blue faction objective marching.
+    blue_flow: FactionFlowState,
+    /// Flow field for Red faction objective marching.
+    red_flow: FactionFlowState,
 }
 
 impl Game {
@@ -90,7 +99,7 @@ impl Game {
             projectiles: Vec::new(),
             next_unit_id: 1,
             visible: vec![false; size],
-            revealed: vec![false; size],
+            revealed: vec![true; size],
             fog_dirty: true,
             water_adjacency: vec![false; size],
             turn_events: Vec::new(),
@@ -98,9 +107,14 @@ impl Game {
             player_aim_dir: 0.0,
             blue_objective: (0.0, 0.0),
             red_objective: (0.0, 0.0),
+            buildings: Vec::new(),
             zone_manager: ZoneManager::empty(),
-            bases: Vec::new(),
             winner: None,
+            reinforce_timer: [0.0; 2],
+            reinforce_index: [0; 2],
+            ai_occupied_cache: HashSet::new(),
+            blue_flow: FactionFlowState::new(),
+            red_flow: FactionFlowState::new(),
         }
     }
 
@@ -116,15 +130,41 @@ impl Game {
         y: u32,
         is_player: bool,
     ) -> UnitId {
+        // Find nearest passable tile via spiral search if requested tile is blocked
+        let (sx, sy) = if self.grid.in_bounds(x as i32, y as i32) && self.grid.is_passable(x, y) {
+            (x, y)
+        } else {
+            self.find_nearest_passable(x, y).unwrap_or((x, y))
+        };
+
         let id = self.next_unit_id;
         self.next_unit_id += 1;
-        let mut unit = Unit::new(id, kind, faction, x, y, is_player);
+        let mut unit = Unit::new(id, kind, faction, sx, sy, is_player);
         // Stagger AI initial attack cooldowns to prevent all acting on the same frame
         if !is_player {
             unit.attack_cooldown = (id as f32 * 0.05) % 0.3;
         }
         self.units.push(unit);
         id
+    }
+
+    /// Spiral search for the nearest passable tile around (cx, cy).
+    fn find_nearest_passable(&self, cx: u32, cy: u32) -> Option<(u32, u32)> {
+        for radius in 1..16i32 {
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    if dx.abs() != radius && dy.abs() != radius {
+                        continue; // only check the ring perimeter
+                    }
+                    let nx = cx as i32 + dx;
+                    let ny = cy as i32 + dy;
+                    if self.grid.in_bounds(nx, ny) && self.grid.is_passable(nx as u32, ny as u32) {
+                        return Some((nx as u32, ny as u32));
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn player_unit(&self) -> Option<&Unit> {
@@ -152,7 +192,7 @@ impl Game {
         self.units
             .iter()
             .enumerate()
-            .filter(|(_, u)| u.alive && !u.rallying && u.faction != attacker_faction)
+            .filter(|(_, u)| u.alive && u.faction != attacker_faction)
             .filter_map(|(i, u)| {
                 let dist = u.distance_to_pos(x, y);
                 if dist <= hit_radius {
@@ -169,7 +209,7 @@ impl Game {
     pub fn enemy_in_range(&self, x: f32, y: f32, faction: Faction, range: f32) -> Option<UnitId> {
         self.units
             .iter()
-            .filter(|u| u.alive && !u.rallying && u.faction != faction)
+            .filter(|u| u.alive && u.faction != faction)
             .filter_map(|u| {
                 let dist = u.distance_to_pos(x, y);
                 if dist <= range {
@@ -194,7 +234,7 @@ impl Game {
     ) -> Option<UnitId> {
         self.units
             .iter()
-            .filter(|u| u.alive && !u.rallying && u.faction != faction)
+            .filter(|u| u.alive && u.faction != faction)
             .filter_map(|u| {
                 let dist = u.distance_to_pos(x, y);
                 if dist > range {
@@ -227,7 +267,7 @@ impl Game {
     ) -> Vec<UnitId> {
         self.units
             .iter()
-            .filter(|u| u.alive && !u.rallying && u.faction != faction)
+            .filter(|u| u.alive && u.faction != faction)
             .filter_map(|u| {
                 let dist = u.distance_to_pos(x, y);
                 if dist > range {
@@ -522,8 +562,20 @@ impl Game {
         }
     }
 
-    /// Real-time AI tick: each AI unit acts independently with continuous movement.
+    /// Real-time AI tick: all units get decisions every frame, pathfinding is rate-limited.
     pub fn tick_ai(&mut self, dt: f32) {
+        // Build occupied set once per frame (shared across all pathfinding calls)
+        self.ai_occupied_cache = self
+            .units
+            .iter()
+            .filter(|u| u.alive)
+            .map(|u| u.grid_cell())
+            .collect();
+
+        // Update flow fields for both factions before unit loop
+        self.update_flow_field_if_needed(Faction::Blue);
+        self.update_flow_field_if_needed(Faction::Red);
+
         let ai_indices: Vec<usize> = self
             .units
             .iter()
@@ -542,6 +594,13 @@ impl Game {
 
     /// Dispatch real-time AI action based on unit type.
     fn ai_unit_tick(&mut self, ai_idx: usize, dt: f32) {
+        // Monks always try to heal nearby wounded allies, even when under orders
+        if self.units[ai_idx].kind == UnitKind::Monk {
+            if self.try_monk_heal(ai_idx) {
+                return;
+            }
+        }
+
         // Player orders take priority (orders cancel rally state)
         if let Some(order) = self.units[ai_idx].order {
             match order {
@@ -561,12 +620,6 @@ impl Game {
             return;
         }
 
-        // Rallying units walk to rally point, then idle
-        if self.units[ai_idx].rallying {
-            self.ai_rally_tick(ai_idx, dt);
-            return;
-        }
-
         let kind = self.units[ai_idx].kind;
         match kind {
             UnitKind::Monk => self.ai_monk_tick(ai_idx, dt),
@@ -577,35 +630,33 @@ impl Game {
         }
     }
 
-    /// Rallying AI: defend if enemy nearby, otherwise walk to rally point and idle.
-    fn ai_rally_tick(&mut self, ai_idx: usize, dt: f32) {
+    /// Try to heal a nearby wounded ally. Returns true if a heal was performed.
+    fn try_monk_heal(&mut self, ai_idx: usize) -> bool {
+        if !self.units[ai_idx].can_act() {
+            return false;
+        }
+        let faction = self.units[ai_idx].faction;
+        let ax = self.units[ai_idx].x;
+        let ay = self.units[ai_idx].y;
         let ai_id = self.units[ai_idx].id;
+        let heal_range = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
 
-        // Check for nearby enemies — rallying units fight back defensively
-        if let Some((ex, ey, enemy_id, dist)) = self.find_nearest_enemy(ai_idx) {
-            let melee_reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
-            let melee_reach = melee_reach.max(MELEE_RANGE);
-            if dist <= melee_reach && self.units[ai_idx].can_act() {
-                self.execute_attack(ai_id, enemy_id, None);
-                return;
-            } else if dist < TILE_SIZE * 4.0 {
-                // Chase nearby enemy
-                self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
-                return;
-            }
+        let heal_target = self
+            .units
+            .iter()
+            .filter(|u| u.alive && u.faction == faction && u.id != ai_id)
+            .filter(|u| {
+                let dist = u.distance_to_pos(ax, ay);
+                dist <= heal_range && u.hp < u.stats.max_hp
+            })
+            .min_by_key(|u| u.hp)
+            .map(|u| u.id);
+
+        if let Some(target_id) = heal_target {
+            self.execute_heal(ai_idx, target_id);
+            return true;
         }
-
-        let (tx, ty) = self.units[ai_idx].rally_target;
-        let dist = self.units[ai_idx].distance_to_pos(tx, ty);
-
-        if dist < TILE_SIZE * 1.5 {
-            // Close enough — idle at rally point
-            self.units[ai_idx].set_anim(UnitAnim::Idle);
-            return;
-        }
-
-        // Walk toward rally point
-        self.ai_move_toward_continuous(ai_idx, tx, ty, dt);
+        false
     }
 
     /// Issue a player order to nearby friendly units.
@@ -640,27 +691,15 @@ impl Game {
                 continue;
             }
 
-            // Cancel rally state if rallying
-            if self.units[idx].rallying {
-                self.units[idx].rallying = false;
-            }
-
             let unit_x = self.units[idx].x;
             let unit_y = self.units[idx].y;
             let faction = self.units[idx].faction;
 
             let order = match order_type {
-                "hold" => {
-                    let (tx, ty) = self
-                        .zone_manager
-                        .nearest_zone(unit_x, unit_y)
-                        .map(|z| (z.center_wx, z.center_wy))
-                        .unwrap_or((unit_x, unit_y));
-                    OrderKind::Hold {
-                        target_x: tx,
-                        target_y: ty,
-                    }
-                }
+                "hold" => OrderKind::Hold {
+                    target_x: unit_x,
+                    target_y: unit_y,
+                },
                 "go" => {
                     let (tx, ty) = self
                         .zone_manager
@@ -678,12 +717,12 @@ impl Game {
                         .retreat_zone(faction, unit_x, unit_y)
                         .map(|z| (z.center_wx, z.center_wy))
                         .unwrap_or_else(|| {
-                            // Fallback: base rally point
-                            self.bases
-                                .iter()
-                                .find(|b| b.faction == faction)
-                                .map(|b| (b.rally_wx, b.rally_wy))
-                                .unwrap_or((unit_x, unit_y))
+                            // Fallback: base spawn point
+                            let (sx, sy) = match faction {
+                                Faction::Blue => self.zone_manager.blue_base,
+                                _ => self.zone_manager.red_base,
+                            };
+                            grid::grid_to_world(sx, sy)
                         });
                     OrderKind::Retreat {
                         target_x: tx,
@@ -703,25 +742,27 @@ impl Game {
         }
     }
 
-    /// Hold order AI: defend nearest zone center, fight enemies within leash.
+    /// Hold order AI: defend current position, fight enemies within leash.
     fn ai_order_hold_tick(&mut self, ai_idx: usize, hold_x: f32, hold_y: f32, dt: f32) {
         let ai_id = self.units[ai_idx].id;
         let leash = TILE_SIZE * 5.0;
 
         if let Some((ex, ey, enemy_id, dist)) = self.find_nearest_enemy(ai_idx) {
-            // Check if enemy is within leash of the hold point
+            let melee_reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
+            let melee_reach = melee_reach.max(MELEE_RANGE);
+
+            // Always fight enemies within attack range (self-defense)
+            if self.units[ai_idx].can_act() && dist <= melee_reach {
+                self.execute_attack(ai_id, enemy_id, None);
+                return;
+            }
+
+            // Chase enemies within leash of the hold point
             let enemy_hold_dx = ex - hold_x;
             let enemy_hold_dy = ey - hold_y;
             let enemy_hold_dist = (enemy_hold_dx * enemy_hold_dx + enemy_hold_dy * enemy_hold_dy).sqrt();
 
             if enemy_hold_dist <= leash {
-                let melee_reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
-                let melee_reach = melee_reach.max(MELEE_RANGE);
-                if self.units[ai_idx].can_act() && dist <= melee_reach {
-                    self.execute_attack(ai_id, enemy_id, None);
-                    return;
-                }
-                // Chase within leash
                 self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
                 return;
             }
@@ -833,8 +874,7 @@ impl Game {
         let enemy = match self.find_nearest_enemy(ai_idx) {
             Some(e) => e,
             None => {
-                let objective = self.faction_objective(self.units[ai_idx].faction);
-                self.ai_move_toward_continuous(ai_idx, objective.0, objective.1, dt);
+                self.ai_move_via_flowfield(ai_idx, dt);
                 return;
             }
         };
@@ -857,8 +897,7 @@ impl Game {
         let enemy = match self.find_nearest_enemy(ai_idx) {
             Some(e) => e,
             None => {
-                let objective = self.faction_objective(self.units[ai_idx].faction);
-                self.ai_move_toward_continuous(ai_idx, objective.0, objective.1, dt);
+                self.ai_move_via_flowfield(ai_idx, dt);
                 return;
             }
         };
@@ -896,26 +935,8 @@ impl Game {
         let ax = self.units[ai_idx].x;
         let ay = self.units[ai_idx].y;
         let ai_id = self.units[ai_idx].id;
-        let heal_range = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
 
-        // Find nearby wounded ally within heal range
-        let heal_target = self
-            .units
-            .iter()
-            .filter(|u| u.alive && u.faction == faction && u.id != ai_id)
-            .filter(|u| {
-                let dist = u.distance_to_pos(ax, ay);
-                dist <= heal_range && u.hp < u.stats.max_hp
-            })
-            .min_by_key(|u| u.hp)
-            .map(|u| u.id);
-
-        if let Some(target_id) = heal_target {
-            if self.units[ai_idx].can_act() {
-                self.execute_heal(ai_idx, target_id);
-                return;
-            }
-        }
+        // Healing is handled by try_monk_heal in ai_unit_tick (before orders)
 
         // Flee if an enemy is too close
         let enemy_dist = self.nearest_enemy_dist(ax, ay, faction);
@@ -929,7 +950,7 @@ impl Game {
             }
         }
 
-        // Move directly toward wounded ally to get in heal range (no standoff)
+        // Move directly toward wounded ally to get in heal range
         let vision_range = Self::AI_VISION_RADIUS as f32 * TILE_SIZE;
         let wounded_target = self
             .units
@@ -937,7 +958,6 @@ impl Game {
             .filter(|u| u.alive && u.faction == faction && u.id != ai_id)
             .filter(|u| u.hp < u.stats.max_hp)
             .filter(|u| u.distance_to_pos(ax, ay) <= vision_range)
-            .filter(|u| self.nearest_enemy_dist(u.x, u.y, faction) >= MONK_SAFE_DIST)
             .min_by_key(|u| u.hp)
             .map(|u| (u.x, u.y));
 
@@ -946,12 +966,11 @@ impl Game {
             return;
         }
 
-        // Fallback: follow nearest friendly combatant — only if safe, keep standoff distance
+        // Follow nearest friendly combatant at standoff distance
         let follow_target = self
             .units
             .iter()
             .filter(|u| u.alive && u.faction == faction && u.id != ai_id && u.kind != UnitKind::Monk)
-            .filter(|u| self.nearest_enemy_dist(u.x, u.y, faction) >= MONK_SAFE_DIST)
             .min_by(|a, b| {
                 let da = a.distance_to_pos(ax, ay);
                 let db = b.distance_to_pos(ax, ay);
@@ -961,10 +980,15 @@ impl Game {
         if let Some((tx, ty)) = follow_target {
             let (sx, sy) = Self::monk_standoff_point(ax, ay, tx, ty);
             self.ai_move_toward_continuous(ai_idx, sx, sy, dt);
+            return;
         }
+
+        // No allies nearby — advance via flowfield toward objective
+        self.ai_move_via_flowfield(ai_idx, dt);
     }
 
     /// Move AI unit continuously toward target using waypoint-following with A*.
+    /// Pathfinding is rate-limited by ai_path_cooldown (one repath per 0.5s per unit).
     fn ai_move_toward_continuous(
         &mut self,
         ai_idx: usize,
@@ -972,8 +996,6 @@ impl Game {
         target_y: f32,
         dt: f32,
     ) {
-        let ai_id = self.units[ai_idx].id;
-
         // Tick path cooldown
         self.units[ai_idx].ai_path_cooldown =
             (self.units[ai_idx].ai_path_cooldown - dt).max(0.0);
@@ -988,15 +1010,8 @@ impl Game {
             let gx = gx.max(0) as u32;
             let gy = gy.max(0) as u32;
 
-            let occupied: Vec<(u32, u32)> = self
-                .units
-                .iter()
-                .filter(|u| u.alive && u.id != ai_id)
-                .map(|u| u.grid_cell())
-                .collect();
-
-            let path = self.grid.find_path(ax, ay, gx, gy, 60, |x, y| {
-                occupied.iter().any(|&(ox, oy)| ox == x && oy == y)
+            let path = self.grid.find_path(ax, ay, gx, gy, 40, |x, y| {
+                self.ai_occupied_cache.contains(&(x, y))
             });
 
             if let Some(steps) = path {
@@ -1042,22 +1057,25 @@ impl Game {
             *v = false;
         }
 
-        let player = match self.player_unit() {
-            Some(p) => {
-                let (gx, gy) = p.grid_cell();
+        // Collect grid positions of all alive friendly (Blue) units
+        let friendly_positions: Vec<(i32, i32)> = self
+            .units
+            .iter()
+            .filter(|u| u.alive && u.faction == Faction::Blue)
+            .map(|u| {
+                let (gx, gy) = u.grid_cell();
                 (gx as i32, gy as i32)
+            })
+            .collect();
+
+        // Compute vision from each friendly unit
+        for (ox, oy) in &friendly_positions {
+            let idx = (*oy as u32 * w + *ox as u32) as usize;
+            self.visible[idx] = true;
+
+            for octant in 0..8 {
+                self.cast_light(*ox, *oy, FOV_RADIUS, 1, 1.0, 0.0, octant, w, h);
             }
-            None => return,
-        };
-
-        // Player's own tile is always visible
-        let idx = (player.1 as u32 * w + player.0 as u32) as usize;
-        self.visible[idx] = true;
-        self.revealed[idx] = true;
-
-        // Run shadowcasting for all 8 octants
-        for octant in 0..8 {
-            self.cast_light(player.0, player.1, FOV_RADIUS, 1, 1.0, 0.0, octant, w, h);
         }
 
         self.fog_dirty = true;
@@ -1091,6 +1109,98 @@ impl Game {
         match faction {
             Faction::Blue => self.blue_objective,
             _ => self.red_objective,
+        }
+    }
+
+    /// Update a faction's flow field if the objective has moved significantly.
+    fn update_flow_field_if_needed(&mut self, faction: Faction) {
+        let objective = self.faction_objective(faction);
+        let flow_state = match faction {
+            Faction::Blue => &self.blue_flow,
+            _ => &self.red_flow,
+        };
+        let dx = objective.0 - flow_state.cached_goal.0;
+        let dy = objective.1 - flow_state.cached_goal.1;
+        let dist_sq = dx * dx + dy * dy;
+        let half_tile = TILE_SIZE * 0.5;
+        if flow_state.field.is_some() && dist_sq < half_tile * half_tile {
+            return; // goal hasn't moved enough
+        }
+        let (gx, gy) = grid::world_to_grid(objective.0, objective.1);
+        let gx = gx.max(0) as u32;
+        let gy = gy.max(0) as u32;
+        let field = crate::flowfield::FlowField::generate(&self.grid, gx, gy);
+        let state = match faction {
+            Faction::Blue => &mut self.blue_flow,
+            _ => &mut self.red_flow,
+        };
+        state.field = Some(field);
+        state.cached_goal = objective;
+    }
+
+    /// Move AI unit via flow field toward faction objective.
+    /// Blends 80% flow direction + 20% separation steering.
+    /// Falls back to A* if flow field is absent or cell is unreachable.
+    fn ai_move_via_flowfield(&mut self, ai_idx: usize, dt: f32) {
+        let faction = self.units[ai_idx].faction;
+        let flow_state = match faction {
+            Faction::Blue => &self.blue_flow,
+            _ => &self.red_flow,
+        };
+
+        if let Some(ref field) = flow_state.field {
+            let (gx, gy) = self.units[ai_idx].grid_cell();
+            let dir = field.direction_at(gx, gy);
+            if dir != (0, 0) {
+                let (sep_x, sep_y) = self.compute_separation(ai_idx);
+                let flow_x = dir.0 as f32;
+                let flow_y = dir.1 as f32;
+                let bx = flow_x * 0.8 + sep_x * 0.2;
+                let by = flow_y * 0.8 + sep_y * 0.2;
+                let len = (bx * bx + by * by).sqrt();
+                if len > 0.01 {
+                    self.move_unit(ai_idx, bx / len, by / len, dt);
+                }
+                return;
+            }
+        }
+
+        // Fallback: use A* toward objective
+        let objective = self.faction_objective(faction);
+        self.ai_move_toward_continuous(ai_idx, objective.0, objective.1, dt);
+    }
+
+    /// Compute separation steering: repulsion from nearby same-faction units.
+    fn compute_separation(&self, ai_idx: usize) -> (f32, f32) {
+        let ax = self.units[ai_idx].x;
+        let ay = self.units[ai_idx].y;
+        let faction = self.units[ai_idx].faction;
+        let sep_radius = UNIT_RADIUS * 3.0;
+        let sep_radius_sq = sep_radius * sep_radius;
+
+        let mut rx = 0.0f32;
+        let mut ry = 0.0f32;
+
+        for (i, u) in self.units.iter().enumerate() {
+            if i == ai_idx || !u.alive || u.faction != faction {
+                continue;
+            }
+            let dx = ax - u.x;
+            let dy = ay - u.y;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq < sep_radius_sq && dist_sq > 0.01 {
+                let dist = dist_sq.sqrt();
+                let weight = 1.0 - dist / sep_radius;
+                rx += (dx / dist) * weight;
+                ry += (dy / dist) * weight;
+            }
+        }
+
+        let len = (rx * rx + ry * ry).sqrt();
+        if len > 0.01 {
+            (rx / len, ry / len)
+        } else {
+            (0.0, 0.0)
         }
     }
 
@@ -1205,7 +1315,6 @@ impl Game {
                 if dist_sq <= radius * radius {
                     let idx = (map_y as u32 * w + map_x as u32) as usize;
                     self.visible[idx] = true;
-                    self.revealed[idx] = true;
                 }
 
                 let ux = map_x as u32;
@@ -1354,7 +1463,7 @@ impl Game {
     fn nearest_enemy_dist(&self, x: f32, y: f32, faction: Faction) -> f32 {
         self.units
             .iter()
-            .filter(|u| u.alive && !u.rallying && u.faction != faction)
+            .filter(|u| u.alive && u.faction != faction)
             .map(|u| u.distance_to_pos(x, y))
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap_or(f32::MAX)
@@ -1369,7 +1478,7 @@ impl Game {
 
         self.units
             .iter()
-            .filter(|u| u.alive && !u.rallying && u.faction != faction)
+            .filter(|u| u.alive && u.faction != faction)
             .filter_map(|u| {
                 let dist = u.distance_to_pos(ax, ay);
                 if dist <= vision_range && self.has_line_of_sight(ax, ay, u.x, u.y) {
@@ -1555,15 +1664,8 @@ impl Game {
         let ai_id = self.units[ai_idx].id;
         let (ax, ay) = self.units[ai_idx].grid_cell();
 
-        let occupied: Vec<(u32, u32)> = self
-            .units
-            .iter()
-            .filter(|u| u.alive && u.id != ai_id)
-            .map(|u| u.grid_cell())
-            .collect();
-
         let path = self.grid.find_path(ax, ay, target_x, target_y, 30, |x, y| {
-            occupied.iter().any(|&(ox, oy)| ox == x && oy == y)
+            self.ai_occupied_cache.contains(&(x, y))
         });
 
         if let Some(steps) = path {
@@ -1619,6 +1721,10 @@ impl Game {
         }
         self.projectiles.retain(|p| !p.finished);
 
+        // Remove dead units whose death fade has completed (keep player corpse)
+        self.units
+            .retain(|u| u.alive || u.death_fade > 0.0 || u.is_player);
+
         // Camera smoothly follows player's world position
         if let Some(player) = self.player_unit() {
             let (pvx, pvy) = (player.x, player.y);
@@ -1628,6 +1734,9 @@ impl Game {
         }
         let world_size = GRID_SIZE as f32 * TILE_SIZE;
         self.camera.clamp_to_world(world_size, world_size);
+
+        // Recompute FOV every frame (friendly units move continuously)
+        self.compute_fov();
     }
 
     pub fn is_player_alive(&self) -> bool {
@@ -1649,124 +1758,68 @@ impl Game {
         }
     }
 
-    /// Tick production buildings: spawn units at building positions with rallying=true.
+    /// Reinforcement unit queue (cycles through).
+    const REINFORCE_QUEUE: &'static [UnitKind] = &[
+        UnitKind::Warrior, UnitKind::Lancer, UnitKind::Lancer,
+        UnitKind::Warrior, UnitKind::Lancer, UnitKind::Warrior,
+        UnitKind::Lancer, UnitKind::Lancer, UnitKind::Archer,
+        UnitKind::Archer, UnitKind::Archer, UnitKind::Monk,
+        UnitKind::Warrior, UnitKind::Lancer, UnitKind::Monk,
+        UnitKind::Warrior,
+    ];
+
+    /// Seconds between reinforcement spawns.
+    const REINFORCE_INTERVAL: f32 = 3.5;
+
+    /// Spawn reinforcements at base when under unit cap.
     pub fn tick_production(&mut self, dt: f32) {
-        use crate::zone::MAX_UNITS_PER_FACTION;
-
-        for base_idx in 0..self.bases.len() {
-            let faction = self.bases[base_idx].faction;
-
-            // Count alive units for faction cap check (rallying units are real, counted here)
+        let factions = [(0usize, Faction::Blue), (1, Faction::Red)];
+        for &(fi, faction) in &factions {
             let alive_count = self
                 .units
                 .iter()
                 .filter(|u| u.alive && u.faction == faction)
                 .count();
-            let at_cap = alive_count >= MAX_UNITS_PER_FACTION;
-
-            // Tick production buildings (only if under cap)
-            if !at_cap {
-                // Rally to most advanced captured zone, or fall back to base rally point
-                let (rally_wx, rally_wy) = self
-                    .zone_manager
-                    .most_advanced_zone(faction)
-                    .map(|z| (z.center_wx, z.center_wy))
-                    .unwrap_or((self.bases[base_idx].rally_wx, self.bases[base_idx].rally_wy));
-
-                let mut produced: Vec<(UnitKind, u32, u32)> = Vec::new();
-                for building in &mut self.bases[base_idx].buildings {
-                    if let Some(kind) = building.tick(dt) {
-                        produced.push((kind, building.grid_x, building.grid_y));
-                    }
-                }
-                for (kind, bx, by) in produced {
-                    // Spawn 2 tiles below building to clear the footprint
-                    let sy = (by + 2).min(GRID_SIZE - 1);
-                    let (spawn_x, spawn_y) = if self.grid.is_passable(bx, sy) {
-                        (bx, sy)
-                    } else if self.grid.is_passable(bx, (by + 1).min(GRID_SIZE - 1)) {
-                        (bx, (by + 1).min(GRID_SIZE - 1))
-                    } else {
-                        (bx, by)
-                    };
-                    let uid = self.spawn_unit(kind, faction, spawn_x, spawn_y, false);
-                    if let Some(unit) = self.units.iter_mut().find(|u| u.id == uid) {
-                        unit.rallying = true;
-                        // Spread rally targets around the rally point to avoid contention
-                        let offset_x = ((uid % 5) as f32 - 2.0) * TILE_SIZE * 0.7;
-                        let offset_y = ((uid / 5 % 4) as f32 - 1.5) * TILE_SIZE * 0.7;
-                        unit.rally_target = (rally_wx + offset_x, rally_wy + offset_y);
-                    }
-                }
+            if alive_count >= MAX_UNITS_PER_FACTION {
+                continue;
             }
 
-            // Update staging timer based on whether any rallying units exist
-            let any_rallying = self
-                .units
-                .iter()
-                .any(|u| u.alive && u.rallying && u.faction == faction);
-            if any_rallying {
-                self.bases[base_idx].staging_timer += dt;
-            } else {
-                self.bases[base_idx].staging_timer = 0.0;
-            }
-        }
+            self.reinforce_timer[fi] += dt;
+            if self.reinforce_timer[fi] >= Self::REINFORCE_INTERVAL {
+                self.reinforce_timer[fi] -= Self::REINFORCE_INTERVAL;
 
-        // Check for group completion and dispatch
-        self.tick_rally_dispatch();
-    }
+                let kind = Self::REINFORCE_QUEUE[self.reinforce_index[fi] % Self::REINFORCE_QUEUE.len()];
+                self.reinforce_index[fi] += 1;
 
-    /// Check if rallying units at rally points form a complete group; if so, dispatch them.
-    fn tick_rally_dispatch(&mut self) {
-        let arrival_radius = TILE_SIZE * 2.5;
-
-        for base_idx in 0..self.bases.len() {
-            let faction = self.bases[base_idx].faction;
-            // Use same dynamic rally point as tick_production
-            let (rally_wx, rally_wy) = self
-                .zone_manager
-                .most_advanced_zone(faction)
-                .map(|z| (z.center_wx, z.center_wy))
-                .unwrap_or((self.bases[base_idx].rally_wx, self.bases[base_idx].rally_wy));
-
-            // Count rallying units that have arrived at rally point, by kind
-            let mut warriors = 0u32;
-            let mut lancers = 0u32;
-            let mut archers = 0u32;
-            let mut monks = 0u32;
-            let mut any_rallying = false;
-
-            for unit in &self.units {
-                if !unit.alive || !unit.rallying || unit.faction != faction {
-                    continue;
-                }
-                any_rallying = true;
-                if unit.distance_to_pos(rally_wx, rally_wy) < arrival_radius {
-                    match unit.kind {
-                        UnitKind::Warrior => warriors += 1,
-                        UnitKind::Lancer => lancers += 1,
-                        UnitKind::Archer => archers += 1,
-                        UnitKind::Monk => monks += 1,
-                    }
-                }
-            }
-
-            let group_ready = warriors >= GROUP_WARRIORS
-                && lancers >= GROUP_LANCERS
-                && archers >= GROUP_ARCHERS
-                && monks >= GROUP_MONKS;
-
-            let force = any_rallying
-                && self.bases[base_idx].staging_timer > PARTIAL_DISPATCH_TIMEOUT;
-
-            if group_ready || force {
-                // Flip all rallying units of this faction to combat mode
-                for unit in &mut self.units {
-                    if unit.alive && unit.rallying && unit.faction == faction {
-                        unit.rallying = false;
-                    }
-                }
-                self.bases[base_idx].staging_timer = 0.0;
+                let target_bk = building::building_for_unit(kind);
+                let (sx, sy) = self.buildings.iter()
+                    .find(|b| b.faction == faction && b.kind == target_bk)
+                    .map(|b| {
+                        // Spawn 3 tiles toward the battlefield from the building
+                        let candidate = match faction {
+                            Faction::Blue => (b.grid_x, b.grid_y + 3),
+                            _ => (b.grid_x, b.grid_y.saturating_sub(3)),
+                        };
+                        // Verify passability, try offsets if blocked
+                        if self.grid.is_passable(candidate.0, candidate.1) {
+                            candidate
+                        } else if self.grid.is_passable(candidate.0 + 1, candidate.1) {
+                            (candidate.0 + 1, candidate.1)
+                        } else if self.grid.is_passable(candidate.0.saturating_sub(1), candidate.1) {
+                            (candidate.0.saturating_sub(1), candidate.1)
+                        } else {
+                            // Last resort: use faction base
+                            match faction {
+                                Faction::Blue => self.zone_manager.blue_base,
+                                _ => self.zone_manager.red_base,
+                            }
+                        }
+                    })
+                    .unwrap_or_else(|| match faction {
+                        Faction::Blue => self.zone_manager.blue_base,
+                        _ => self.zone_manager.red_base,
+                    });
+                self.spawn_unit(kind, faction, sx, sy, false);
             }
         }
     }
@@ -1777,90 +1830,74 @@ impl Game {
     }
 
     pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
-        self.grid = mapgen::generate_battlefield(seed);
+        let (gen_grid, layout) = mapgen::generate_battlefield(seed);
+        self.grid = gen_grid;
 
-        let (blue_x, blue_y) = mapgen::blue_spawn_area();
-        let (red_x, red_y) = mapgen::red_spawn_area();
+        let (blue_cx, blue_cy) = layout.blue_base;
+        let (red_cx, red_cy) = layout.red_base;
 
         // Each faction's objective is the other faction's base
-        self.blue_objective = grid::grid_to_world(red_x, red_y);
-        self.red_objective = grid::grid_to_world(blue_x, blue_y);
+        self.blue_objective = grid::grid_to_world(red_cx, red_cy);
+        self.red_objective = grid::grid_to_world(blue_cx, blue_cy);
 
-        // Initialize capture zones (diagonal)
-        self.zone_manager = ZoneManager::create_default_zones();
+        // Create capture zones from BSP layout
+        self.zone_manager = ZoneManager::create_from_layout(&layout);
 
-        // Initialize faction bases with production buildings
-        self.bases = vec![
-            FactionBase::create_blue_base(),
-            FactionBase::create_red_base(),
-        ];
-
-        // Mark building footprint tiles as impassable
-        for base in &self.bases {
-            for building in &base.buildings {
-                for &(dx, dy) in building.kind.footprint_offsets() {
-                    let bx = building.grid_x as i32 + dx;
-                    let by = building.grid_y as i32 + dy;
-                    if self.grid.in_bounds(bx, by) {
-                        self.grid.mark_building(bx as u32, by as u32);
-                    }
+        // Place production buildings at both bases
+        let mut buildings = building::base_buildings(Faction::Blue, blue_cx, blue_cy);
+        buildings.extend(building::base_buildings(Faction::Red, red_cx, red_cy));
+        for b in &buildings {
+            for &(dx, dy) in b.kind.footprint_offsets() {
+                let fx = b.grid_x as i32 + dx;
+                let fy = b.grid_y as i32 + dy;
+                if self.grid.in_bounds(fx, fy) {
+                    self.grid.mark_building(fx as u32, fy as u32);
                 }
             }
         }
+        self.buildings = buildings;
 
-        // Blue rally point for initial army spawn
-        let blue_rally_gx = self.bases[0].rally_gx;
-        let blue_rally_gy = self.bases[0].rally_gy;
-
-        // Blue army (player side) — 16 units at rally point
-        // Front line: player warrior + 4 warriors
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_rally_gx + 1, blue_rally_gy, true);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_rally_gx + 1, blue_rally_gy + 1, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_rally_gx + 1, blue_rally_gy.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_rally_gx + 1, blue_rally_gy + 2, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_rally_gx + 1, blue_rally_gy.saturating_sub(2), false);
-        // Lancers: second line
+        // Blue army — spawn in front of base (toward center)
+        let bx = blue_cx;
+        let by = blue_cy + 5;
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by, true);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by + 1, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by + 2, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by.saturating_sub(2), false);
         for i in 0..3u32 {
-            self.spawn_unit(UnitKind::Lancer, Faction::Blue, blue_rally_gx, blue_rally_gy + i, false);
-            self.spawn_unit(UnitKind::Lancer, Faction::Blue, blue_rally_gx, blue_rally_gy.saturating_sub(1 + i), false);
+            self.spawn_unit(UnitKind::Lancer, Faction::Blue, bx, by + i, false);
+            self.spawn_unit(UnitKind::Lancer, Faction::Blue, bx, by.saturating_sub(1 + i), false);
         }
-        // Archers: third line
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_rally_gx.saturating_sub(2), blue_rally_gy + 1, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_rally_gx.saturating_sub(2), blue_rally_gy.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Archer, Faction::Blue, blue_rally_gx.saturating_sub(2), blue_rally_gy, false);
-        // Monks: rear
-        self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_rally_gx.saturating_sub(3), blue_rally_gy + 1, false);
-        self.spawn_unit(UnitKind::Monk, Faction::Blue, blue_rally_gx.saturating_sub(3), blue_rally_gy.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, bx.saturating_sub(1), by + 1, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, bx.saturating_sub(1), by.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Archer, Faction::Blue, bx.saturating_sub(1), by, false);
+        self.spawn_unit(UnitKind::Monk, Faction::Blue, bx.saturating_sub(2), by + 1, false);
+        self.spawn_unit(UnitKind::Monk, Faction::Blue, bx.saturating_sub(2), by.saturating_sub(1), false);
 
-        // Red rally point for initial army spawn
-        let red_rally_gx = self.bases[1].rally_gx;
-        let red_rally_gy = self.bases[1].rally_gy;
-
-        // Red army (enemy side) — 15 units at rally point
-        // Front line: 5 warriors
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_rally_gx.saturating_sub(1), red_rally_gy, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_rally_gx.saturating_sub(1), red_rally_gy + 1, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_rally_gx.saturating_sub(1), red_rally_gy.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_rally_gx.saturating_sub(1), red_rally_gy + 2, false);
-        self.spawn_unit(UnitKind::Warrior, Faction::Red, red_rally_gx.saturating_sub(1), red_rally_gy.saturating_sub(2), false);
-        // Lancers: second line
+        // Red army — spawn in front of base (toward center)
+        let rx = red_cx;
+        let ry = red_cy.saturating_sub(5);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, rx.saturating_sub(1), ry, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, rx.saturating_sub(1), ry + 1, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, rx.saturating_sub(1), ry.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, rx.saturating_sub(1), ry + 2, false);
+        self.spawn_unit(UnitKind::Warrior, Faction::Red, rx.saturating_sub(1), ry.saturating_sub(2), false);
         for i in 0..3u32 {
-            self.spawn_unit(UnitKind::Lancer, Faction::Red, red_rally_gx, red_rally_gy + i, false);
-            self.spawn_unit(UnitKind::Lancer, Faction::Red, red_rally_gx, red_rally_gy.saturating_sub(1 + i), false);
+            self.spawn_unit(UnitKind::Lancer, Faction::Red, rx, ry + i, false);
+            self.spawn_unit(UnitKind::Lancer, Faction::Red, rx, ry.saturating_sub(1 + i), false);
         }
-        // Archers: third line
-        self.spawn_unit(UnitKind::Archer, Faction::Red, red_rally_gx + 2, red_rally_gy + 1, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, red_rally_gx + 2, red_rally_gy.saturating_sub(1), false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, red_rally_gx + 2, red_rally_gy, false);
-        // Monks: rear
-        self.spawn_unit(UnitKind::Monk, Faction::Red, red_rally_gx + 3, red_rally_gy + 1, false);
-        self.spawn_unit(UnitKind::Monk, Faction::Red, red_rally_gx + 3, red_rally_gy.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 1, ry + 1, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 1, ry.saturating_sub(1), false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 1, ry, false);
+        self.spawn_unit(UnitKind::Monk, Faction::Red, rx + 2, ry + 1, false);
+        self.spawn_unit(UnitKind::Monk, Faction::Red, rx + 2, ry.saturating_sub(1), false);
 
-        // Camera starts centered on player (Blue rally point)
-        let (cx, cy) = grid::grid_to_world(blue_rally_gx, blue_rally_gy);
+        // Camera starts centered on player
+        let (cx, cy) = grid::grid_to_world(bx, by);
         self.camera.x = cx;
         self.camera.y = cy;
-        self.camera.zoom = 1.0;
+        self.camera.zoom = self.camera.ideal_zoom();
 
         // Pre-compute caches
         self.compute_water_adjacency();
@@ -2052,7 +2089,7 @@ mod tests {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 20, 20, true);
         game.compute_fov();
-        let idx = (100 * GRID_SIZE + 100) as usize;
+        let idx = (80 * GRID_SIZE + 80) as usize;
         assert!(!game.visible[idx]);
     }
 
@@ -2463,11 +2500,16 @@ mod tests {
 
     #[test]
     fn tick_zones_updates_capture_progress() {
+        use crate::mapgen::MapLayout;
         let mut game = Game::new(960.0, 640.0);
-        game.zone_manager = ZoneManager::create_default_zones();
+        let layout = MapLayout {
+            blue_base: (21, 21),
+            red_base: (138, 138),
+            zone_centers: vec![(50, 50), (80, 80), (110, 110)],
+        };
+        game.zone_manager = ZoneManager::create_from_layout(&layout);
         let z0gx = game.zone_manager.zones[0].center_gx;
         let z0gy = game.zone_manager.zones[0].center_gy;
-        // Place a Blue unit inside zone 0
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, z0gx, z0gy, false);
         game.tick_zones(4.0);
         assert!(
@@ -2478,14 +2520,17 @@ mod tests {
 
     #[test]
     fn ai_targets_zone_not_spawn() {
-        use crate::grid::{BORDER_SIZE, PLAYABLE_SIZE};
+        use crate::mapgen::MapLayout;
         let mut game = Game::new(960.0, 640.0);
-        game.zone_manager = ZoneManager::create_default_zones();
-        let red_spawn = BORDER_SIZE + PLAYABLE_SIZE - 6;
-        game.blue_objective = grid::grid_to_world(red_spawn, red_spawn);
-        // All zones neutral — Blue should target nearest zone, not enemy base
+        let layout = MapLayout {
+            blue_base: (21, 21),
+            red_base: (138, 138),
+            zone_centers: vec![(50, 50), (80, 80), (110, 110)],
+        };
+        game.zone_manager = ZoneManager::create_from_layout(&layout);
+        game.blue_objective = grid::grid_to_world(138, 138);
         let obj = game.faction_objective(Faction::Blue);
-        let (base_wx, _) = grid::grid_to_world(red_spawn, red_spawn);
+        let (base_wx, _) = grid::grid_to_world(138, 138);
         assert!(
             obj.0 < base_wx,
             "Blue should target a zone (x < {base_wx}), got x={}", obj.0
@@ -2493,89 +2538,23 @@ mod tests {
     }
 
     #[test]
-    fn production_spawns_rallying_units_near_building() {
-        use crate::grid::BORDER_SIZE;
+    fn production_spawns_units_when_under_cap() {
         let mut game = Game::new(960.0, 640.0);
-        game.bases = vec![FactionBase::create_blue_base()];
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, BORDER_SIZE + 5, BORDER_SIZE + 10, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
 
         // Tick production for ~5s to spawn at least one unit
         for _ in 0..50 {
             game.tick_production(0.1);
         }
 
-        let rallying_units: Vec<_> = game
+        let blue_units = game
             .units
             .iter()
-            .filter(|u| u.rallying && u.faction == Faction::Blue)
-            .collect();
+            .filter(|u| u.alive && u.faction == Faction::Blue)
+            .count();
         assert!(
-            !rallying_units.is_empty(),
-            "Should have spawned rallying units"
+            blue_units > 1,
+            "Should have spawned reinforcement units, got {blue_units}"
         );
-
-        // Units should spawn near buildings (offset toward rally), not at rally point itself
-        let rally_wx = game.bases[0].rally_wx;
-        let rally_wy = game.bases[0].rally_wy;
-        for u in &rallying_units {
-            let dist_to_rally = u.distance_to_pos(rally_wx, rally_wy);
-            assert!(
-                dist_to_rally > TILE_SIZE * 0.5,
-                "Unit should spawn near building, not at rally point (dist={})", dist_to_rally
-            );
-        }
-    }
-
-    #[test]
-    fn rallying_units_dispatch_when_group_ready() {
-        use crate::building::{GROUP_WARRIORS, GROUP_LANCERS, GROUP_ARCHERS, GROUP_MONKS};
-        let mut game = Game::new(960.0, 640.0);
-        game.bases = vec![FactionBase::create_blue_base()];
-        let rally_wx = game.bases[0].rally_wx;
-        let rally_wy = game.bases[0].rally_wy;
-        let (rally_gx, rally_gy) = grid::world_to_grid(rally_wx, rally_wy);
-        let rally_gx = rally_gx as u32;
-        let rally_gy = rally_gy as u32;
-
-        // Manually spawn rallying units at the rally point
-        for _ in 0..GROUP_WARRIORS {
-            let uid = game.spawn_unit(UnitKind::Warrior, Faction::Blue, rally_gx, rally_gy, false);
-            if let Some(u) = game.units.iter_mut().find(|u| u.id == uid) {
-                u.rallying = true;
-                u.rally_target = (rally_wx, rally_wy);
-            }
-        }
-        for _ in 0..GROUP_LANCERS {
-            let uid = game.spawn_unit(UnitKind::Lancer, Faction::Blue, rally_gx, rally_gy, false);
-            if let Some(u) = game.units.iter_mut().find(|u| u.id == uid) {
-                u.rallying = true;
-                u.rally_target = (rally_wx, rally_wy);
-            }
-        }
-        for _ in 0..GROUP_ARCHERS {
-            let uid = game.spawn_unit(UnitKind::Archer, Faction::Blue, rally_gx, rally_gy, false);
-            if let Some(u) = game.units.iter_mut().find(|u| u.id == uid) {
-                u.rallying = true;
-                u.rally_target = (rally_wx, rally_wy);
-            }
-        }
-        for _ in 0..GROUP_MONKS {
-            let uid = game.spawn_unit(UnitKind::Monk, Faction::Blue, rally_gx, rally_gy, false);
-            if let Some(u) = game.units.iter_mut().find(|u| u.id == uid) {
-                u.rallying = true;
-                u.rally_target = (rally_wx, rally_wy);
-            }
-        }
-
-        // All should be rallying
-        let rallying_count = game.units.iter().filter(|u| u.rallying).count();
-        assert_eq!(rallying_count, 16);
-
-        // Tick production to trigger dispatch check
-        game.tick_production(0.01);
-
-        // All should now be in combat mode
-        let rallying_after = game.units.iter().filter(|u| u.rallying).count();
-        assert_eq!(rallying_after, 0, "All rallying units should have been dispatched");
     }
 }

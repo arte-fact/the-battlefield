@@ -76,9 +76,7 @@ struct LoadedTextures {
     /// Tower building textures: index 0=Black(neutral), 1=Blue, 2=Red (128x256 each)
     tower_textures: Vec<TextureId>,
     /// Base building textures: indexed by kind_index * 2 + faction_index
-    /// kind_index: 0=Barracks, 1=Archery, 2=Monastery
-    /// faction_index: 0=Blue, 1=Red
-    /// Each entry: (texture_id, sprite_width, sprite_height)
+    /// kind: 0=Barracks, 1=Archery, 2=Monastery; faction: 0=Blue, 1=Red
     building_textures: Vec<(TextureId, u32, u32)>,
 }
 
@@ -184,30 +182,34 @@ pub fn run(
         .unwrap()
         .dyn_into::<web_sys::CanvasRenderingContext2d>()?;
 
-    // Create offscreen terrain cache canvas (full grid pre-rendered once)
-    let terrain_size = game.grid.width * (TILE_SIZE as u32);
-    let terrain_canvas = document
+    // Create offscreen minimap terrain canvas (1 pixel per tile, rendered once)
+    let minimap_terrain = document
         .create_element("canvas")?
         .dyn_into::<web_sys::HtmlCanvasElement>()?;
-    terrain_canvas.set_width(terrain_size);
-    terrain_canvas.set_height(terrain_size);
-    let terrain_ctx = terrain_canvas
-        .get_context("2d")?
-        .unwrap()
-        .dyn_into::<web_sys::CanvasRenderingContext2d>()?;
+    minimap_terrain.set_width(game.grid.width);
+    minimap_terrain.set_height(game.grid.height);
+    render_minimap_terrain(&minimap_terrain, &game)?;
 
+    // Create chunk-based terrain cache (CHUNK_TILES x CHUNK_TILES tiles per chunk)
+    let terrain_chunks = TerrainChunks::new(&document, game.grid.width, game.grid.height)?;
+
+    let last_css_w = canvas.client_width().max(1) as u32;
+    let last_css_h = canvas.client_height().max(1) as u32;
     let state = Rc::new(RefCell::new(LoopState {
         canvas2d,
+        canvas_element: canvas.clone(),
         game,
         texture_manager,
         last_time: None,
         elapsed: 0.0,
         fog_canvas,
         fog_ctx,
-        terrain_canvas,
-        terrain_ctx,
+        terrain_chunks,
         terrain_dirty: true,
         animator: TurnAnimator::new(),
+        minimap_terrain,
+        last_css_w,
+        last_css_h,
     }));
 
     // Start async texture loading
@@ -242,6 +244,28 @@ pub fn run(
             let dt = dt.min(0.1);
             state_guard.elapsed += dt;
 
+            // Detect resize / orientation change
+            {
+                let css_w = state_guard.canvas_element.client_width().max(1) as u32;
+                let css_h = state_guard.canvas_element.client_height().max(1) as u32;
+                if css_w != state_guard.last_css_w || css_h != state_guard.last_css_h {
+                    state_guard.last_css_w = css_w;
+                    state_guard.last_css_h = css_h;
+                    let dpr = state_guard.canvas2d.dpr as f32;
+                    let canvas_w = (css_w as f32 * dpr) as u32;
+                    let canvas_h = (css_h as f32 * dpr) as u32;
+                    state_guard.canvas_element.set_width(canvas_w);
+                    state_guard.canvas_element.set_height(canvas_h);
+                    state_guard.canvas2d.width = canvas_w as f64;
+                    state_guard.canvas2d.height = canvas_h as f64;
+                    state_guard.canvas2d.ctx.set_image_smoothing_enabled(false);
+                    state_guard.game.camera.resize(canvas_w as f32, canvas_h as f32);
+                    state_guard.game.camera.zoom = state_guard.game.camera.ideal_zoom();
+                    let mut inp = input.borrow_mut();
+                    inp.update_layout(canvas_w as f32, canvas_h as f32, dpr);
+                }
+            }
+
             // Process input and real-time game logic
             {
                 let game = &mut state_guard.game;
@@ -264,6 +288,13 @@ pub fn run(
                 if pan_tx.abs() > f32::EPSILON || pan_ty.abs() > f32::EPSILON {
                     game.camera.x -= pan_tx / game.camera.zoom;
                     game.camera.y -= pan_ty / game.camera.zoom;
+                }
+
+                // Touch: single-finger camera drag (right side)
+                let (drag_dx, drag_dy) = inp.take_camera_drag();
+                if drag_dx.abs() > f32::EPSILON || drag_dy.abs() > f32::EPSILON {
+                    game.camera.x -= drag_dx / game.camera.zoom;
+                    game.camera.y -= drag_dy / game.camera.zoom;
                 }
 
                 // Clamp camera to world bounds after pan/zoom
@@ -324,20 +355,27 @@ pub fn run(
                         || attack_held;
                     if attack_input {
                         game.player_attack();
+                        if inp.is_touch_device {
+                            haptic(25);
+                        }
                     }
 
-                    // Player orders: H=Hold, G=Go, R=Retreat
+                    // Player orders: H=Hold, G=Go, R=Retreat, F=Follow
                     if inp.take_order_hold() {
                         game.issue_order("hold");
+                        if inp.is_touch_device { haptic(15); }
                     }
                     if inp.take_order_go() {
                         game.issue_order("go");
+                        if inp.is_touch_device { haptic(15); }
                     }
                     if inp.take_order_retreat() {
                         game.issue_order("retreat");
+                        if inp.is_touch_device { haptic(15); }
                     }
                     if inp.take_order_follow() {
                         game.issue_order("follow");
+                        if inp.is_touch_device { haptic(15); }
                     }
 
                     // Resolve circle-circle collisions
@@ -522,6 +560,20 @@ fn canvas_touch_coords(
     let cx = (touch.client_x() as f64 - rect.left()) * scale_x;
     let cy = (touch.client_y() as f64 - rect.top()) * scale_y;
     (cx as f32, cy as f32)
+}
+
+/// Trigger haptic feedback (vibration) if supported.
+fn haptic(duration_ms: u32) {
+    if let Some(window) = web_sys::window() {
+        let navigator = window.navigator();
+        let nav_js: &JsValue = navigator.as_ref();
+        if let Ok(vibrate_fn) = js_sys::Reflect::get(nav_js, &JsValue::from_str("vibrate")) {
+            if vibrate_fn.is_function() {
+                let _ = js_sys::Function::from(vibrate_fn)
+                    .call1(nav_js, &JsValue::from(duration_ms));
+            }
+        }
+    }
 }
 
 /// Load a texture through `LoopState`, splitting borrows around the await.
@@ -726,8 +778,7 @@ async fn load_textures(
         }
     }
 
-    // Load base building sprites (3 kinds × 2 factions)
-    // Index: kind_index * 2 + faction_index
+    // Load base production building sprites (3 kinds × 2 factions)
     {
         let kinds = [
             (BuildingKind::Barracks, 192u32, 256u32),
@@ -756,13 +807,14 @@ async fn load_textures(
 
         let mut tree_flipped = Vec::new();
         for &(tex_id, fw, fh) in &loaded_ref.tree_textures {
-            if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+            if let Some((img, _, _, frame_count)) = tm.get_image(tex_id) {
+                let sheet_w = fw * frame_count;
                 let c = document
                     .create_element("canvas")
                     .unwrap()
                     .dyn_into::<web_sys::HtmlCanvasElement>()
                     .unwrap();
-                c.set_width(fw);
+                c.set_width(sheet_w);
                 c.set_height(fh);
                 let fctx = c
                     .get_context("2d")
@@ -770,11 +822,11 @@ async fn load_textures(
                     .unwrap()
                     .dyn_into::<web_sys::CanvasRenderingContext2d>()
                     .unwrap();
-                let _ = fctx.translate(fw as f64, 0.0);
+                let _ = fctx.translate(sheet_w as f64, 0.0);
                 let _ = fctx.scale(-1.0, 1.0);
                 let _ = fctx
                     .draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                        img, 0.0, 0.0, fw as f64, fh as f64, 0.0, 0.0, fw as f64, fh as f64,
+                        img, 0.0, 0.0, sheet_w as f64, fh as f64, 0.0, 0.0, sheet_w as f64, fh as f64,
                     );
                 tree_flipped.push((c, fw, fh));
             }
@@ -808,13 +860,14 @@ async fn load_textures(
 
         let mut bush_flipped = Vec::new();
         for &(tex_id, fw, fh) in &loaded_ref.bush_textures {
-            if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+            if let Some((img, _, _, frame_count)) = tm.get_image(tex_id) {
+                let sheet_w = fw * frame_count;
                 let c = document
                     .create_element("canvas")
                     .unwrap()
                     .dyn_into::<web_sys::HtmlCanvasElement>()
                     .unwrap();
-                c.set_width(fw);
+                c.set_width(sheet_w);
                 c.set_height(fh);
                 let fctx = c
                     .get_context("2d")
@@ -822,11 +875,11 @@ async fn load_textures(
                     .unwrap()
                     .dyn_into::<web_sys::CanvasRenderingContext2d>()
                     .unwrap();
-                let _ = fctx.translate(fw as f64, 0.0);
+                let _ = fctx.translate(sheet_w as f64, 0.0);
                 let _ = fctx.scale(-1.0, 1.0);
                 let _ = fctx
                     .draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                        img, 0.0, 0.0, fw as f64, fh as f64, 0.0, 0.0, fw as f64, fh as f64,
+                        img, 0.0, 0.0, sheet_w as f64, fh as f64, 0.0, 0.0, sheet_w as f64, fh as f64,
                     );
                 bush_flipped.push((c, fw, fh));
             }
@@ -834,13 +887,14 @@ async fn load_textures(
 
         let mut water_rock_flipped = Vec::new();
         for &(tex_id, fw, fh) in &loaded_ref.water_rock_textures {
-            if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+            if let Some((img, _, _, frame_count)) = tm.get_image(tex_id) {
+                let sheet_w = fw * frame_count;
                 let c = document
                     .create_element("canvas")
                     .unwrap()
                     .dyn_into::<web_sys::HtmlCanvasElement>()
                     .unwrap();
-                c.set_width(fw);
+                c.set_width(sheet_w);
                 c.set_height(fh);
                 let fctx = c
                     .get_context("2d")
@@ -848,11 +902,11 @@ async fn load_textures(
                     .unwrap()
                     .dyn_into::<web_sys::CanvasRenderingContext2d>()
                     .unwrap();
-                let _ = fctx.translate(fw as f64, 0.0);
+                let _ = fctx.translate(sheet_w as f64, 0.0);
                 let _ = fctx.scale(-1.0, 1.0);
                 let _ = fctx
                     .draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                        img, 0.0, 0.0, fw as f64, fh as f64, 0.0, 0.0, fw as f64, fh as f64,
+                        img, 0.0, 0.0, sheet_w as f64, fh as f64, 0.0, 0.0, sheet_w as f64, fh as f64,
                     );
                 water_rock_flipped.push((c, fw, fh));
             }
@@ -878,14 +932,9 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
         state.game.fog_dirty = false;
     }
 
-    // Render terrain cache once (all static layers pre-rendered to offscreen canvas)
+    // Mark all terrain chunks dirty on first render or when terrain changes
     if state.terrain_dirty {
-        render_terrain_cache(
-            &state.terrain_ctx,
-            &state.game,
-            loaded,
-            &state.texture_manager,
-        )?;
+        state.terrain_chunks.mark_all_dirty();
         state.terrain_dirty = false;
     }
 
@@ -920,13 +969,51 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     let max_gx = ((vr / TILE_SIZE).ceil() as i32).min(game.grid.width as i32) as u32;
     let max_gy = ((vb / TILE_SIZE).ceil() as i32).min(game.grid.height as i32) as u32;
 
-    // 3. Water → foam → cached land/elevation (foam must layer between water and grass)
+    // 3. Water → foam → cached terrain chunks (only visible chunks drawn)
     draw_water(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy)?;
     draw_foam(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy, state.elapsed)?;
-    ctx.draw_image_with_html_canvas_element(&state.terrain_canvas, 0.0, 0.0)?;
 
-    // 3b. Base buildings drawn as background layer (behind all units/trees)
-    draw_base_buildings(ctx, game, loaded, tm)?;
+    // Render and draw only the terrain chunks that overlap the visible area
+    {
+        let min_cx = min_gx / CHUNK_TILES;
+        let min_cy = min_gy / CHUNK_TILES;
+        let max_cx = ((max_gx + CHUNK_TILES - 1) / CHUNK_TILES).min(state.terrain_chunks.cols);
+        let max_cy = ((max_gy + CHUNK_TILES - 1) / CHUNK_TILES).min(state.terrain_chunks.rows);
+
+        for cy in min_cy..max_cy {
+            for cx in min_cx..max_cx {
+                let ci = (cy * state.terrain_chunks.cols + cx) as usize;
+
+                // Render chunk if dirty
+                if state.terrain_chunks.dirty[ci] {
+                    let chunk_gx = cx * CHUNK_TILES;
+                    let chunk_gy = cy * CHUNK_TILES;
+                    let chunk_end_gx = (chunk_gx + CHUNK_TILES).min(game.grid.width);
+                    let chunk_end_gy = (chunk_gy + CHUNK_TILES).min(game.grid.height);
+                    render_terrain_chunk(
+                        &state.terrain_chunks.contexts[ci],
+                        game,
+                        loaded,
+                        &state.texture_manager,
+                        chunk_gx,
+                        chunk_gy,
+                        chunk_end_gx,
+                        chunk_end_gy,
+                    )?;
+                    state.terrain_chunks.dirty[ci] = false;
+                }
+
+                // Draw chunk to main canvas at its world position
+                let wx = (cx * CHUNK_TILES) as f64 * ts;
+                let wy = (cy * CHUNK_TILES) as f64 * ts;
+                ctx.draw_image_with_html_canvas_element(
+                    &state.terrain_chunks.canvases[ci],
+                    wx,
+                    wy,
+                )?;
+            }
+        }
+    }
 
     // 4. Capture zone overlays (colored fill, dashed border, labels, progress bars)
     draw_zone_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy)?;
@@ -934,19 +1021,38 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     // 5. Draw overlays (player highlight, HP bars, path line, attack target)
     draw_overlays(ctx, game, min_gx, min_gy, max_gx, max_gy, ts, &state.animator)?;
 
-    // 6. Draw foreground sprites (units, particles, projectiles, trees) — Y-sorted together
-    draw_foreground(ctx, game, loaded, tm, &state.animator, min_gx, min_gy, max_gx, max_gy)?;
+    // 6a. Draw ground-level rocks (always behind units)
+    draw_rocks(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy)?;
 
-    // 8. Draw fog of war from cached offscreen canvas (single drawImage call)
+    // 6a2. Draw bush decorations (animated, ground level)
+    draw_bushes(ctx, game, loaded, tm, min_gx, min_gy, max_gx, max_gy, state.elapsed)?;
+
+    // 6b. Draw foreground sprites (units, particles, projectiles, trees) — Y-sorted together
+    draw_foreground(ctx, game, loaded, tm, &state.animator, min_gx, min_gy, max_gx, max_gy, state.elapsed)?;
+
+    // 7. HP bars and order labels (drawn on top of units)
+    draw_unit_bars(ctx, game, &state.animator)?;
+
+    // 8. Draw fog of war — only the visible portion of the fog canvas
     let grid_world_size = (game.grid.width as f64) * ts;
     ctx.set_image_smoothing_enabled(true);
-    ctx.draw_image_with_html_canvas_element_and_dw_and_dh(
-        &state.fog_canvas,
-        0.0,
-        0.0,
-        grid_world_size,
-        grid_world_size,
-    )?;
+    {
+        // Source rect in fog canvas (1 pixel per tile)
+        let sx = min_gx as f64;
+        let sy = min_gy as f64;
+        let sw = (max_gx - min_gx) as f64;
+        let sh = (max_gy - min_gy) as f64;
+        // Dest rect in world space
+        let dx = min_gx as f64 * ts;
+        let dy = min_gy as f64 * ts;
+        let dw = sw * ts;
+        let dh = sh * ts;
+        ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+            &state.fog_canvas,
+            sx, sy, sw, sh,
+            dx, dy, dw, dh,
+        )?;
+    }
 
     // 9. Fill solid black outside the grid to hide background when zoomed out.
     // Use a large margin so it covers any visible area beyond the grid.
@@ -959,8 +1065,11 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
 
     ctx.restore();
 
-    // Draw zone HUD pips in screen space (top-right corner)
-    draw_zone_hud(ctx, game, canvas_w, state.canvas2d.dpr)?;
+    // Draw zone HUD pips
+    draw_zone_hud(ctx, game, canvas_w, state.canvas2d.dpr, input.is_touch_device)?;
+
+    // Draw minimap (top-left on touch to avoid joystick, bottom-left on desktop)
+    draw_minimap(ctx, game, &state.minimap_terrain, canvas_w, canvas_h, state.canvas2d.dpr, input.is_touch_device)?;
 
     // Draw victory progress bar (when a faction holds all zones)
     draw_victory_progress(ctx, game, canvas_w, canvas_h, state.canvas2d.dpr)?;
@@ -969,38 +1078,77 @@ fn render_frame(state: &mut LoopState, loaded: &LoadedTextures, input: &Input) -
     draw_victory_overlay(ctx, game, canvas_w, canvas_h, state.canvas2d.dpr)?;
 
     // Draw touch controls in screen space (after camera transform is restored)
-    draw_touch_controls(ctx, input, state.canvas2d.dpr)?;
+    draw_touch_controls(ctx, input, canvas_h, state.canvas2d.dpr)?;
 
     Ok(())
 }
 
 /// Render all static terrain layers to the offscreen terrain cache canvas.
 /// Called once after textures load; the result is blitted each frame.
-fn render_terrain_cache(
+/// Render a single terrain chunk covering tiles [gx0..gx1) x [gy0..gy1).
+/// All drawing uses chunk-local coordinates (tile position minus chunk origin).
+#[allow(clippy::too_many_arguments)]
+fn render_terrain_chunk(
     ctx: &web_sys::CanvasRenderingContext2d,
     game: &Game,
     loaded: &LoadedTextures,
     tm: &TextureManager,
+    gx0: u32,
+    gy0: u32,
+    gx1: u32,
+    gy1: u32,
 ) -> Result<(), JsValue> {
     let ts = TILE_SIZE as f64;
     let w = game.grid.width;
     let h = game.grid.height;
+    let ox = gx0 as f64 * ts; // world-space origin of this chunk
+    let oy = gy0 as f64 * ts;
 
-    // Water is NOT cached here — it's drawn per-frame so foam can layer between water and land.
-    // This canvas stays transparent where there's no land, letting water+foam show through.
+    // Clear the chunk canvas (transparent)
+    let chunk_w = (gx1 - gx0) as f64 * ts;
+    let chunk_h = (gy1 - gy0) as f64 * ts;
+    ctx.clear_rect(0.0, 0.0, chunk_w, chunk_h);
 
-    // Layer 3: Flat ground (auto-tiled, flips amortized since drawn once)
+    // Layer 2.5: Road sand fill (extends 1 tile into neighbors)
+    {
+        ctx.set_fill_style_str("#C4A265");
+        for gy in gy0..gy1 {
+            for gx in gx0..gx1 {
+                if game.grid.get(gx, gy) != TileKind::Road {
+                    continue;
+                }
+                let dx = (gx as f64) * ts - ox;
+                let dy = (gy as f64) * ts - oy;
+                ctx.fill_rect(dx, dy, ts, ts);
+                if gx > 0 && game.grid.get(gx - 1, gy) != TileKind::Road {
+                    ctx.fill_rect(dx - ts, dy, ts, ts);
+                }
+                if gx + 1 < w && game.grid.get(gx + 1, gy) != TileKind::Road {
+                    ctx.fill_rect(dx + ts, dy, ts, ts);
+                }
+                if gy > 0 && game.grid.get(gx, gy - 1) != TileKind::Road {
+                    ctx.fill_rect(dx, dy - ts, ts, ts);
+                }
+                if gy + 1 < h && game.grid.get(gx, gy + 1) != TileKind::Road {
+                    ctx.fill_rect(dx, dy + ts, ts, ts);
+                }
+            }
+        }
+    }
+
+    // Layer 3: Flat ground (auto-tiled)
     if let Some(tilemap_tex_id) = loaded.tilemap_texture {
         if let Some((img, _, _, _)) = tm.get_image(tilemap_tex_id) {
-            for gy in 0..h {
-                for gx in 0..w {
-                    if !game.grid.get(gx, gy).is_land() {
+            for gy in gy0..gy1 {
+                for gx in gx0..gx1 {
+                    let tile = game.grid.get(gx, gy);
+                    if !tile.is_land() || tile == TileKind::Road {
                         continue;
                     }
                     let (col, row) = autotile::flat_ground_src(&game.grid, gx, gy);
                     let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
-                    let dx = (gx as f64) * ts;
-                    let dy = (gy as f64) * ts;
+                    let dx = (gx as f64) * ts - ox;
+                    let dy = (gy as f64) * ts - oy;
                     if col == 1 && row == 1 && tile_flip(gx, gy) {
                         draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
                     } else {
@@ -1013,21 +1161,54 @@ fn render_terrain_cache(
         }
     }
 
+    // Layer 3.5: Road surface (grass autotile tinted to sand)
+    if let Some(tilemap_tex_id) = loaded.tilemap_texture {
+        if let Some((img, _, _, _)) = tm.get_image(tilemap_tex_id) {
+            for gy in gy0..gy1 {
+                for gx in gx0..gx1 {
+                    if game.grid.get(gx, gy) != TileKind::Road {
+                        continue;
+                    }
+                    let (col, row) = autotile::flat_ground_src(&game.grid, gx, gy);
+                    let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
+                    let dx = (gx as f64) * ts - ox;
+                    let dy = (gy as f64) * ts - oy;
+                    if col == 1 && row == 1 && tile_flip(gx, gy) {
+                        draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
+                    } else {
+                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            img, sx, sy, sw, sh, dx, dy, ts, ts,
+                        )?;
+                    }
+                }
+            }
+            ctx.set_global_composite_operation("multiply")?;
+            ctx.set_fill_style_str("#D4B070");
+            for gy in gy0..gy1 {
+                for gx in gx0..gx1 {
+                    if game.grid.get(gx, gy) == TileKind::Road {
+                        ctx.fill_rect((gx as f64) * ts - ox, (gy as f64) * ts - oy, ts, ts);
+                    }
+                }
+            }
+            ctx.set_global_composite_operation("source-over")?;
+        }
+    }
+
     // Layer 4: Elevation (shadow + elevated surface + cliff)
     for level in 2..=2u8 {
-        // Shadow pass
         if let Some(shadow_tex_id) = loaded.shadow_texture {
             if let Some((img, _, _, _)) = tm.get_image(shadow_tex_id) {
                 ctx.set_global_alpha(0.5);
-                for gy in 0..h {
-                    for gx in 0..w {
+                for gy in gy0..gy1 {
+                    for gx in gx0..gx1 {
                         if game.grid.elevation(gx, gy) < level {
                             continue;
                         }
                         if gy + 1 < h && game.grid.elevation(gx, gy + 1) < level {
                             let shadow_size = 192.0_f64;
-                            let dx = (gx as f64) * ts + ts / 2.0 - shadow_size / 2.0;
-                            let dy = ((gy + 1) as f64) * ts + ts / 2.0 - shadow_size / 2.0;
+                            let dx = (gx as f64) * ts + ts / 2.0 - shadow_size / 2.0 - ox;
+                            let dy = ((gy + 1) as f64) * ts + ts / 2.0 - shadow_size / 2.0 - oy;
                             ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
                                 img, 0.0, 0.0, shadow_size, shadow_size, dx, dy, shadow_size, shadow_size,
                             )?;
@@ -1038,7 +1219,6 @@ fn render_terrain_cache(
             }
         }
 
-        // Elevated surface + cliff
         let elev_tex_id = if level == 2 {
             loaded.tilemap_texture2
         } else {
@@ -1046,16 +1226,16 @@ fn render_terrain_cache(
         };
         if let Some(tilemap_tex_id) = elev_tex_id {
             if let Some((img, _, _, _)) = tm.get_image(tilemap_tex_id) {
-                for gy in 0..h {
-                    for gx in 0..w {
+                for gy in gy0..gy1 {
+                    for gx in gx0..gx1 {
                         if game.grid.elevation(gx, gy) < level {
                             continue;
                         }
                         let (col, row) =
                             autotile::elevated_top_src(&game.grid, gx, gy, level);
                         let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
-                        let dx = (gx as f64) * ts;
-                        let dy = (gy as f64) * ts;
+                        let dx = (gx as f64) * ts - ox;
+                        let dy = (gy as f64) * ts - oy;
                         if col == 6 && row == 1 && tile_flip(gx, gy) {
                             draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
                         } else {
@@ -1068,7 +1248,7 @@ fn render_terrain_cache(
                             autotile::cliff_src(&game.grid, gx, gy, level)
                         {
                             let (csx, csy, csw, csh) = grid::tilemap_src_rect(ccol, crow);
-                            let cdy = ((gy + 1) as f64) * ts;
+                            let cdy = ((gy + 1) as f64) * ts - oy;
                             if tile_flip(gx, gy.wrapping_add(1000)) {
                                 draw_tile_flipped(ctx, img, csx, csy, csw, csh, dx, cdy, ts, ts)?;
                             } else {
@@ -1083,39 +1263,7 @@ fn render_terrain_cache(
         }
     }
 
-    // Layer 5: Bush decorations (rendered under units, on terrain)
-    if !loaded.bush_textures.is_empty() {
-        for gy in 0..h {
-            for gx in 0..w {
-                if game.grid.decoration(gx, gy) != Some(Decoration::Bush) {
-                    continue;
-                }
-                let variant_idx =
-                    (gx.wrapping_mul(41).wrapping_add(gy.wrapping_mul(23))) as usize
-                        % loaded.bush_textures.len();
-                let (tex_id, frame_w, frame_h) = loaded.bush_textures[variant_idx];
-
-                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
-                    let fw = frame_w as f64;
-                    let fh = frame_h as f64;
-                    let dx = (gx as f64) * ts;
-                    let dy = (gy as f64) * ts;
-
-                    if tile_flip(gx, gy) {
-                        if let Some((flipped, _, _)) = loaded.bush_textures_flipped.get(variant_idx) {
-                            ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                                flipped, 0.0, 0.0, fw, fh, dx, dy, ts, ts,
-                            )?;
-                        }
-                    } else {
-                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                            img, 0.0, 0.0, fw, fh, dx, dy, ts, ts,
-                        )?;
-                    }
-                }
-            }
-        }
-    }
+    // (Bushes are drawn in a separate animated pass, not in cached terrain chunks)
 
     Ok(())
 }
@@ -1181,7 +1329,7 @@ fn draw_zone_overlays(
         ctx.set_text_align("center");
         ctx.set_text_baseline("bottom");
         ctx.set_fill_style_str("rgba(255,255,255,0.7)");
-        ctx.fill_text(zone.name, cx, label_y)?;
+        ctx.fill_text(&zone.name, cx, label_y)?;
 
         // Progress bar (just below the label, above circle)
         let bar_w = r;
@@ -1213,23 +1361,29 @@ fn draw_zone_overlays(
     Ok(())
 }
 
-/// Draw capture zone HUD pips in screen space (top-right corner).
+/// Draw capture zone HUD pips in screen space (top-center on touch, top-right on desktop).
 fn draw_zone_hud(
     ctx: &web_sys::CanvasRenderingContext2d,
     game: &Game,
     canvas_w: f64,
     dpr: f64,
+    is_touch: bool,
 ) -> Result<(), JsValue> {
     let zones = &game.zone_manager.zones;
     if zones.is_empty() {
         return Ok(());
     }
 
-    let pip_size = 14.0 * dpr;
-    let gap = 3.0 * dpr;
+    let pip_size = if is_touch { 20.0 * dpr } else { 14.0 * dpr };
+    let gap = if is_touch { 5.0 * dpr } else { 3.0 * dpr };
     let margin = 10.0 * dpr;
     let total_w = zones.len() as f64 * (pip_size + gap) - gap;
-    let start_x = canvas_w - margin - total_w;
+    // Center horizontally on touch, right-align on desktop
+    let start_x = if is_touch {
+        (canvas_w - total_w) / 2.0
+    } else {
+        canvas_w - margin - total_w
+    };
     let y = margin;
 
     for (i, zone) in zones.iter().enumerate() {
@@ -1265,6 +1419,189 @@ fn draw_zone_hud(
     }
 
     ctx.set_global_alpha(1.0);
+    Ok(())
+}
+
+/// Render the static terrain layer of the minimap (1 pixel per tile).
+fn render_minimap_terrain(
+    canvas: &web_sys::HtmlCanvasElement,
+    game: &Game,
+) -> Result<(), JsValue> {
+    let w = game.grid.width;
+    let h = game.grid.height;
+    let len = (w * h * 4) as usize;
+    let mut pixels = vec![0u8; len];
+
+    for gy in 0..h {
+        for gx in 0..w {
+            let idx = (gy * w + gx) as usize;
+            let po = idx * 4;
+
+            let (r, g, b) = match game.grid.get(gx, gy) {
+                TileKind::Water => (30, 60, 120),
+                TileKind::Forest => (30, 80, 30),
+                TileKind::Rock => (90, 85, 75),
+                TileKind::Road => (160, 140, 100),
+                TileKind::Grass => {
+                    if game.grid.elevation(gx, gy) >= 2 {
+                        (100, 95, 70)
+                    } else if game.grid.decoration(gx, gy) == Some(Decoration::Bush) {
+                        (55, 100, 45)
+                    } else {
+                        (70, 110, 50)
+                    }
+                }
+            };
+            pixels[po] = r;
+            pixels[po + 1] = g;
+            pixels[po + 2] = b;
+            pixels[po + 3] = 255;
+        }
+    }
+
+    let mm_ctx = canvas
+        .get_context("2d")?
+        .unwrap()
+        .dyn_into::<web_sys::CanvasRenderingContext2d>()?;
+    let clamped = wasm_bindgen::Clamped(&pixels[..]);
+    let image_data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(clamped, w, h)?;
+    mm_ctx.put_image_data(&image_data, 0.0, 0.0)?;
+    Ok(())
+}
+
+/// Draw the minimap HUD (top-left on touch devices, bottom-left on desktop).
+fn draw_minimap(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    terrain_canvas: &web_sys::HtmlCanvasElement,
+    _canvas_w: f64,
+    canvas_h: f64,
+    dpr: f64,
+    is_touch: bool,
+) -> Result<(), JsValue> {
+    let mm_size = (160.0 * dpr).min(canvas_h * 0.25);
+    let mm_margin = 8.0 * dpr;
+    let mm_x = mm_margin;
+    // Top-left on touch (below zone HUD), bottom-left on desktop
+    let mm_y = if is_touch {
+        mm_margin + 34.0 * dpr // below zone pips
+    } else {
+        canvas_h - mm_margin - mm_size
+    };
+
+    let grid_w = game.grid.width as f64;
+    let grid_h = game.grid.height as f64;
+    let scale_x = mm_size / grid_w;
+    let scale_y = mm_size / grid_h;
+
+    // Background border
+    ctx.set_fill_style_str("rgba(0,0,0,0.7)");
+    let border = 2.0 * dpr;
+    ctx.fill_rect(mm_x - border, mm_y - border, mm_size + border * 2.0, mm_size + border * 2.0);
+
+    // Draw pre-rendered terrain (nearest-neighbor for crisp pixels)
+    ctx.save();
+    let _ = ctx.set_image_smoothing_enabled(false);
+    ctx.draw_image_with_html_canvas_element_and_dw_and_dh(
+        terrain_canvas,
+        mm_x, mm_y, mm_size, mm_size,
+    )?;
+    ctx.restore();
+
+    // Fog of war overlay (semi-transparent black for hidden tiles)
+    // Use a coarse approach: sample every 2nd tile for performance
+    let step = 2.0_f64;
+    let rect_w = (scale_x * step).ceil().max(1.0);
+    let rect_h = (scale_y * step).ceil().max(1.0);
+    ctx.set_fill_style_str("rgba(0,0,0,0.55)");
+    let mut gy = 0.0_f64;
+    while gy < grid_h {
+        let mut gx = 0.0_f64;
+        while gx < grid_w {
+            let idx = (gy as u32 * game.grid.width + gx as u32) as usize;
+            if idx < game.visible.len() && !game.visible[idx] {
+                let rx = mm_x + gx * scale_x;
+                let ry = mm_y + gy * scale_y;
+                ctx.fill_rect(rx, ry, rect_w, rect_h);
+            }
+            gx += step;
+        }
+        gy += step;
+    }
+
+    // Capture zones — colored circles
+    for zone in &game.zone_manager.zones {
+        let zx = mm_x + zone.center_gx as f64 * scale_x;
+        let zy = mm_y + zone.center_gy as f64 * scale_y;
+        let zr = (zone.radius as f64 * scale_x).max(2.0 * dpr);
+
+        let color = match zone.state {
+            ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => "rgba(60,130,255,0.8)",
+            ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => "rgba(255,60,60,0.8)",
+            ZoneState::Contested => "rgba(255,200,0,0.8)",
+            _ => "rgba(180,180,180,0.6)",
+        };
+        ctx.set_fill_style_str(color);
+        ctx.begin_path();
+        ctx.arc(zx, zy, zr, 0.0, std::f64::consts::TAU)?;
+        ctx.fill();
+    }
+
+    // Buildings — small faction-colored squares
+    for b in &game.buildings {
+        let bx = mm_x + b.grid_x as f64 * scale_x;
+        let by = mm_y + b.grid_y as f64 * scale_y;
+        let bs = (2.0 * dpr).max(2.0);
+        let color = match b.faction {
+            Faction::Blue => "rgba(80,150,255,0.9)",
+            _ => "rgba(255,80,80,0.9)",
+        };
+        ctx.set_fill_style_str(color);
+        ctx.fill_rect(bx - bs * 0.5, by - bs * 0.5, bs, bs);
+    }
+
+    // Units — small dots (enemies hidden in fog)
+    for unit in &game.units {
+        if !unit.alive {
+            continue;
+        }
+        let (gx, gy) = grid::world_to_grid(unit.x, unit.y);
+        // Hide enemy units outside player visibility
+        if unit.faction != Faction::Blue {
+            let idx = (gy as u32 * game.grid.width + gx as u32) as usize;
+            if idx >= game.visible.len() || !game.visible[idx] {
+                continue;
+            }
+        }
+        let ux = mm_x + gx as f64 * scale_x;
+        let uy = mm_y + gy as f64 * scale_y;
+        let ur = (1.2 * dpr).max(1.0);
+
+        let color = match unit.faction {
+            Faction::Blue => "#4a9eff",
+            _ => "#ff4a4a",
+        };
+        ctx.set_fill_style_str(color);
+        ctx.fill_rect(ux - ur, uy - ur, ur * 2.0, ur * 2.0);
+    }
+
+    // Camera viewport rectangle
+    let (vl, vt, vr, vb) = game.camera.visible_rect();
+    let world_size = grid_w * TILE_SIZE as f64;
+    let vx = mm_x + (vl as f64 / world_size) * mm_size;
+    let vy = mm_y + (vt as f64 / world_size) * mm_size;
+    let vw = ((vr - vl) as f64 / world_size) * mm_size;
+    let vh = ((vb - vt) as f64 / world_size) * mm_size;
+
+    ctx.set_stroke_style_str("rgba(255,255,255,0.85)");
+    ctx.set_line_width(1.5 * dpr);
+    ctx.stroke_rect(
+        vx.max(mm_x),
+        vy.max(mm_y),
+        vw.min(mm_size - (vx - mm_x).max(0.0)),
+        vh.min(mm_size - (vy - mm_y).max(0.0)),
+    );
+
     Ok(())
 }
 
@@ -1392,7 +1729,18 @@ fn draw_overlays(
         ctx.stroke();
     }
 
-    // HP bars for alive units (use visual_alive during animation)
+    ctx.set_global_alpha(1.0);
+
+    Ok(())
+}
+
+/// Draw HP bars and order labels on top of unit sprites.
+fn draw_unit_bars(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    animator: &TurnAnimator,
+) -> Result<(), JsValue> {
+    // HP bars
     for unit in &game.units {
         let show = if animator.is_playing() {
             animator.is_visually_alive(unit.id)
@@ -1402,10 +1750,18 @@ fn draw_overlays(
         if !show {
             continue;
         }
+        // Hide enemy HP bars outside friendly line of sight
+        if unit.faction != Faction::Blue {
+            let (gx, gy) = unit.grid_cell();
+            let idx = (gy * game.grid.width + gx) as usize;
+            if !game.visible[idx] {
+                continue;
+            }
+        }
         let (wx, wy) = (unit.x, unit.y);
         let bar_width = 48.0_f64;
         let bar_height = 6.0_f64;
-        let bar_y = (wy as f64) - (TILE_SIZE as f64) * 0.45;
+        let bar_y = (wy as f64) - (TILE_SIZE as f64) * 0.85;
         let bar_x = (wx as f64) - bar_width / 2.0;
 
         ctx.set_global_alpha(0.8);
@@ -1448,17 +1804,15 @@ fn draw_overlays(
 
         let alpha = (unit.order_flash / ORDER_FLASH_DURATION) as f64;
         let wx = unit.x as f64;
-        let wy = unit.y as f64 - (TILE_SIZE as f64) * 0.65;
+        let wy = unit.y as f64 - (TILE_SIZE as f64) * 1.0;
 
         ctx.set_global_alpha(alpha);
         ctx.set_font("bold 14px sans-serif");
         ctx.set_text_align("center");
         ctx.set_text_baseline("bottom");
-        // Black stroke
         ctx.set_stroke_style_str("rgba(0,0,0,0.9)");
         ctx.set_line_width(3.0);
         ctx.stroke_text(label, wx, wy)?;
-        // Gold fill
         ctx.set_fill_style_str("rgb(255,215,0)");
         ctx.fill_text(label, wx, wy)?;
     }
@@ -1575,17 +1929,81 @@ fn draw_victory_overlay(
     Ok(())
 }
 
-/// Draw touch controls in screen space (virtual joystick + attack button).
+/// Draw a circular touch button with label.
+fn draw_touch_button(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    cx: f64, cy: f64, radius: f64,
+    fill_color: &str, label: &str,
+    pressed: bool, dpr: f64,
+) -> Result<(), JsValue> {
+    let scale = if pressed { 1.12 } else { 1.0 };
+    let r = radius * scale;
+
+    // Dark background for contrast
+    ctx.set_global_alpha(if pressed { 0.6 } else { 0.35 });
+    ctx.set_fill_style_str("rgba(0,0,0,0.7)");
+    ctx.begin_path();
+    ctx.arc(cx, cy, r + 2.0 * dpr, 0.0, std::f64::consts::TAU)?;
+    ctx.fill();
+
+    // Colored fill
+    ctx.set_global_alpha(if pressed { 0.85 } else { 0.55 });
+    ctx.set_fill_style_str(fill_color);
+    ctx.begin_path();
+    ctx.arc(cx, cy, r, 0.0, std::f64::consts::TAU)?;
+    ctx.fill();
+
+    // Border ring
+    ctx.set_stroke_style_str(if pressed { "rgba(255,255,255,0.8)" } else { "rgba(255,255,255,0.4)" });
+    ctx.set_line_width(2.0 * dpr);
+    ctx.stroke();
+
+    // Label
+    let font_size = (radius * 0.5).max(10.0 * dpr);
+    ctx.set_global_alpha(0.95);
+    ctx.set_fill_style_str("white");
+    ctx.set_font(&format!("bold {}px monospace", font_size as u32));
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+    ctx.fill_text(label, cx, cy)?;
+
+    ctx.set_global_alpha(1.0);
+    Ok(())
+}
+
+/// Draw touch controls in screen space (virtual joystick + attack + order buttons).
 fn draw_touch_controls(
     ctx: &web_sys::CanvasRenderingContext2d,
     input: &Input,
+    canvas_h: f64,
     dpr: f64,
 ) -> Result<(), JsValue> {
     if !input.is_touch_device {
         return Ok(());
     }
 
-    // Virtual joystick (only when active)
+    // Ghost joystick hint (before first use)
+    if !input.has_used_joystick && !input.joystick.active {
+        let ghost_x = 100.0 * dpr;
+        let ghost_y = canvas_h - 120.0 * dpr;
+        ctx.set_global_alpha(0.15);
+        ctx.set_fill_style_str("rgba(255,255,255,0.3)");
+        ctx.begin_path();
+        ctx.arc(ghost_x, ghost_y, input.joystick.max_radius as f64, 0.0, std::f64::consts::TAU)?;
+        ctx.fill();
+        ctx.set_stroke_style_str("rgba(255,255,255,0.2)");
+        ctx.set_line_width(2.0 * dpr);
+        ctx.stroke();
+        ctx.set_global_alpha(0.3);
+        ctx.set_fill_style_str("white");
+        ctx.set_font(&format!("bold {}px monospace", (12.0 * dpr) as u32));
+        ctx.set_text_align("center");
+        ctx.set_text_baseline("middle");
+        ctx.fill_text("MOVE", ghost_x, ghost_y)?;
+        ctx.set_global_alpha(1.0);
+    }
+
+    // Virtual joystick (when active)
     if input.joystick.active {
         // Base circle
         ctx.set_global_alpha(0.25);
@@ -1602,81 +2020,145 @@ fn draw_touch_controls(
 
         // Stick knob
         ctx.set_global_alpha(0.6);
-        ctx.set_fill_style_str("rgba(255,255,255,0.6)");
+        ctx.set_fill_style_str("rgba(255,255,255,0.7)");
         ctx.begin_path();
         ctx.arc(
             input.joystick.stick_x as f64,
             input.joystick.stick_y as f64,
-            20.0 * dpr,
+            22.0 * dpr,
             0.0,
             std::f64::consts::TAU,
         )?;
         ctx.fill();
+        ctx.set_stroke_style_str("rgba(255,255,255,0.5)");
+        ctx.set_line_width(2.0 * dpr);
+        ctx.stroke();
     }
 
-    // Attack button (always visible on touch device)
-    let btn = &input.attack_button;
-    let alpha = if btn.pressed { 0.7 } else { 0.4 };
-    ctx.set_global_alpha(alpha);
-    ctx.set_fill_style_str("rgba(220,50,50,0.6)");
-    ctx.begin_path();
-    ctx.arc(
-        btn.center_x as f64,
-        btn.center_y as f64,
-        btn.radius as f64,
-        0.0,
-        std::f64::consts::TAU,
+    // Attack button
+    draw_touch_button(
+        ctx,
+        input.attack_button.center_x as f64,
+        input.attack_button.center_y as f64,
+        input.attack_button.radius as f64,
+        "rgba(220,50,50,0.6)", "ATK",
+        input.attack_button.pressed, dpr,
     )?;
-    ctx.fill();
 
-    // Button label
-    ctx.set_global_alpha(0.9);
-    ctx.set_fill_style_str("white");
-    ctx.set_font(&format!("bold {}px monospace", (14.0 * dpr) as u32));
-    ctx.set_text_align("center");
-    ctx.set_text_baseline("middle");
-    ctx.fill_text("ATK", btn.center_x as f64, btn.center_y as f64)?;
+    // Order buttons
+    let order_btns: [(&crate::input::ActionButton, &str, &str); 4] = [
+        (&input.order_hold_btn, "H", "rgba(200,170,50,0.5)"),
+        (&input.order_go_btn, "G", "rgba(50,180,80,0.5)"),
+        (&input.order_retreat_btn, "R", "rgba(50,120,200,0.5)"),
+        (&input.order_follow_btn, "F", "rgba(160,80,200,0.5)"),
+    ];
+    for (btn, label, color) in &order_btns {
+        draw_touch_button(
+            ctx,
+            btn.center_x as f64, btn.center_y as f64, btn.radius as f64,
+            color, label, btn.pressed, dpr,
+        )?;
+    }
 
     ctx.set_global_alpha(1.0);
     Ok(())
 }
 
-/// Draw base buildings as a background layer (behind all Y-sorted sprites).
-fn draw_base_buildings(
+/// Draw animated bush decorations (ground level, always behind units).
+fn draw_bushes(
     ctx: &web_sys::CanvasRenderingContext2d,
     game: &Game,
     loaded: &LoadedTextures,
     tm: &TextureManager,
+    min_gx: u32,
+    min_gy: u32,
+    max_gx: u32,
+    max_gy: u32,
+    elapsed: f64,
 ) -> Result<(), JsValue> {
-    if loaded.building_textures.is_empty() {
+    if loaded.bush_textures.is_empty() {
         return Ok(());
     }
     let ts = TILE_SIZE as f64;
-    for base in &game.bases {
-        for building in &base.buildings {
-            let kind_index = match building.kind {
-                BuildingKind::Barracks => 0,
-                BuildingKind::Archery => 1,
-                BuildingKind::Monastery => 2,
-            };
-            let faction_index = match base.faction {
-                Faction::Blue => 0,
-                _ => 1,
-            };
-            let tex_idx = kind_index * 2 + faction_index;
+    for gy in min_gy..max_gy {
+        for gx in min_gx..max_gx {
+            if game.grid.decoration(gx, gy) != Some(Decoration::Bush) {
+                continue;
+            }
+            let variant_idx =
+                (gx.wrapping_mul(41).wrapping_add(gy.wrapping_mul(23))) as usize
+                    % loaded.bush_textures.len();
+            let (tex_id, frame_w, frame_h) = loaded.bush_textures[variant_idx];
 
-            if tex_idx < loaded.building_textures.len() {
-                let (tex_id, sprite_w, sprite_h) = loaded.building_textures[tex_idx];
-                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
-                    let sw = sprite_w as f64;
-                    let sh = sprite_h as f64;
-                    let draw_w = ts * 3.0;
-                    let draw_h = draw_w * (sh / sw);
-                    let dx = (building.grid_x as f64) * ts + ts / 2.0 - draw_w / 2.0;
-                    let dy = (building.grid_y as f64) * ts + ts - draw_h;
+            if let Some((img, _, _, frame_count)) = tm.get_image(tex_id) {
+                let fw = frame_w as f64;
+                let fh = frame_h as f64;
 
+                // Animated frame (6 FPS, diagonal wave across map)
+                let wave = (gx as f64 * 0.4 + gy as f64 * 0.3) + (gx ^ gy) as f64 * 0.15;
+                let frame = ((elapsed * 6.0 + wave) as u32) % frame_count;
+                let sx = frame as f64 * fw;
+
+                let dx = (gx as f64) * ts;
+                let dy = (gy as f64) * ts;
+
+                if tile_flip(gx, gy) {
+                    if let Some((flipped, _, _)) = loaded.bush_textures_flipped.get(variant_idx) {
+                        let sheet_w = frame_count as f64 * fw;
+                        let flipped_sx = sheet_w - sx - fw;
+                        ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            flipped, flipped_sx, 0.0, fw, fh, dx, dy, ts, ts,
+                        )?;
+                    }
+                } else {
                     ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                        img, 0.0, 0.0, sw, sh, dx, dy, draw_w, draw_h,
+                        img, sx, 0.0, fw, fh, dx, dy, ts, ts,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Draw rocks as a ground-level pass (always behind units).
+fn draw_rocks(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    game: &Game,
+    loaded: &LoadedTextures,
+    tm: &TextureManager,
+    min_gx: u32,
+    min_gy: u32,
+    max_gx: u32,
+    max_gy: u32,
+) -> Result<(), JsValue> {
+    if loaded.rock_textures.is_empty() {
+        return Ok(());
+    }
+    let ts = TILE_SIZE as f64;
+    for gy in min_gy..max_gy {
+        for gx in min_gx..max_gx {
+            if game.grid.get(gx, gy) != TileKind::Rock {
+                continue;
+            }
+            let variant_idx =
+                (gx.wrapping_mul(13).wrapping_add(gy.wrapping_mul(29))) as usize
+                    % loaded.rock_textures.len();
+            let tex_id = loaded.rock_textures[variant_idx];
+
+            if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                let dx = (gx as f64) * ts;
+                let dy = (gy as f64) * ts;
+
+                if tile_flip(gx, gy) {
+                    if let Some(flipped) = loaded.rock_textures_flipped.get(variant_idx) {
+                        ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            flipped, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
+                        )?;
+                    }
+                } else {
+                    ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                        img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
                     )?;
                 }
             }
@@ -1689,9 +2171,9 @@ fn draw_base_buildings(
 enum Drawable {
     Unit(usize),            // index into game.units
     Tree(u32, u32),         // (gx, gy)
-    Rock(u32, u32),         // (gx, gy)
     WaterRock(u32, u32),    // (gx, gy)
     Building(u8),           // zone index (tower)
+    BaseBuilding(usize),    // index into game.buildings
     Particle(usize),        // index into game.particles
 }
 
@@ -1705,6 +2187,7 @@ fn draw_foreground(
     min_gy: u32,
     max_gx: u32,
     max_gy: u32,
+    elapsed: f64,
 ) -> Result<(), JsValue> {
     let ts = TILE_SIZE as f64;
 
@@ -1714,16 +2197,25 @@ fn draw_foreground(
     // Collect all drawable entities with their Y-sort key (foot position)
     let mut drawables: Vec<(f64, Drawable)> = Vec::new();
 
-    // Units
+    // Units (hide enemies outside friendly line of sight)
     for (i, u) in game.units.iter().enumerate() {
-        let visible = if animator.is_playing() {
+        let alive_or_fading = if animator.is_playing() {
             animator.is_visually_alive(u.id) || u.death_fade > 0.0
         } else {
             u.alive || u.death_fade > 0.0
         };
-        if visible {
-            drawables.push((u.y as f64, Drawable::Unit(i)));
+        if !alive_or_fading {
+            continue;
         }
+        // Hide enemy units on non-visible tiles
+        if u.faction != Faction::Blue {
+            let (gx, gy) = u.grid_cell();
+            let idx = (gy * game.grid.width + gx) as usize;
+            if !game.visible[idx] {
+                continue;
+            }
+        }
+        drawables.push((u.y as f64 + ts * 0.5, Drawable::Unit(i)));
     }
 
     // Trees and rocks (visible range only)
@@ -1731,16 +2223,9 @@ fn draw_foreground(
         for gx in min_gx..max_gx {
             let tile = game.grid.get(gx, gy);
             let foot_y = ((gy + 1) as f64) * ts;
-            match tile {
-                TileKind::Forest if !loaded.tree_textures.is_empty() => {
-                    drawables.push((foot_y, Drawable::Tree(gx, gy)));
-                }
-                TileKind::Rock if !loaded.rock_textures.is_empty() => {
-                    drawables.push((foot_y, Drawable::Rock(gx, gy)));
-                }
-                _ => {}
+            if tile == TileKind::Forest && !loaded.tree_textures.is_empty() {
+                drawables.push((foot_y, Drawable::Tree(gx, gy)));
             }
-            // Decorations (bushes rendered in terrain cache, not here)
             if game.grid.decoration(gx, gy) == Some(Decoration::WaterRock)
                 && !loaded.water_rock_textures.is_empty()
             {
@@ -1755,9 +2240,15 @@ fn draw_foreground(
         drawables.push((foot_y, Drawable::Building(i as u8)));
     }
 
+    // Production buildings at faction bases
+    for (i, b) in game.buildings.iter().enumerate() {
+        let foot_y = (b.grid_y as f64 + 1.0) * ts;
+        drawables.push((foot_y, Drawable::BaseBuilding(i)));
+    }
+
     // Particles
     for (i, _) in game.particles.iter().enumerate() {
-        drawables.push((game.particles[i].world_y as f64, Drawable::Particle(i)));
+        drawables.push((game.particles[i].world_y as f64 + ts * 0.5, Drawable::Particle(i)));
     }
 
     // Sort by Y (foot position), then by X for stability
@@ -1798,7 +2289,15 @@ fn draw_foreground(
                         frame_height: frame_h,
                         frame_count: unit.animation.frame_count,
                     };
-                    let (sx, sy, sw, sh) = sheet.frame_src_rect(unit.animation.current_frame);
+                    // Archer idle uses wind wave pattern to sync with trees/bushes
+                    let anim_frame = if unit.kind == UnitKind::Archer && unit.current_anim == UnitAnim::Idle {
+                        let (gx, gy) = unit.grid_cell();
+                        let wave = gx as f64 * 0.4 + gy as f64 * 0.3 + (gx ^ gy) as f64 * 0.15;
+                        ((elapsed * 6.0 + wave) as u32) % unit.animation.frame_count
+                    } else {
+                        unit.animation.current_frame
+                    };
+                    let (sx, sy, sw, sh) = sheet.frame_src_rect(anim_frame);
                     let sprite_size = unit.kind.frame_size() as f64;
 
                     let opacity = if !unit.alive {
@@ -1828,9 +2327,14 @@ fn draw_foreground(
                         % loaded.tree_textures.len();
                 let (tex_id, frame_w, frame_h) = loaded.tree_textures[variant_idx];
 
-                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                if let Some((img, _, _, frame_count)) = tm.get_image(tex_id) {
                     let fw = frame_w as f64;
                     let fh = frame_h as f64;
+
+                    // Animated frame (6 FPS, diagonal wave across map)
+                    let wave = (*gx as f64 * 0.4 + *gy as f64 * 0.3) + (*gx ^ *gy) as f64 * 0.15;
+                    let frame = ((elapsed * 6.0 + wave) as u32) % frame_count;
+                    let sx = frame as f64 * fw;
 
                     let draw_w = ts * 3.0;
                     let draw_h = draw_w * (fh / fw);
@@ -1866,42 +2370,20 @@ fn draw_foreground(
 
                     if tile_flip(*gx, *gy) {
                         if let Some((flipped, _, _)) = loaded.tree_textures_flipped.get(variant_idx) {
+                            let sheet_w = frame_count as f64 * fw;
+                            let flipped_sx = sheet_w - sx - fw;
                             ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                                flipped, 0.0, 0.0, fw, fh, dx, dy, draw_w, draw_h,
+                                flipped, flipped_sx, 0.0, fw, fh, dx, dy, draw_w, draw_h,
                             )?;
                         }
                     } else {
                         ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                            img, 0.0, 0.0, fw, fh, dx, dy, draw_w, draw_h,
+                            img, sx, 0.0, fw, fh, dx, dy, draw_w, draw_h,
                         )?;
                     }
 
                     if (alpha - 1.0).abs() > 0.001 {
                         ctx.set_global_alpha(1.0);
-                    }
-                }
-            }
-
-            Drawable::Rock(gx, gy) => {
-                let variant_idx =
-                    (gx.wrapping_mul(13).wrapping_add(gy.wrapping_mul(29))) as usize
-                        % loaded.rock_textures.len();
-                let tex_id = loaded.rock_textures[variant_idx];
-
-                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
-                    let dx = (*gx as f64) * ts;
-                    let dy = (*gy as f64) * ts;
-
-                    if tile_flip(*gx, *gy) {
-                        if let Some(flipped) = loaded.rock_textures_flipped.get(variant_idx) {
-                            ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                                flipped, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
-                            )?;
-                        }
-                    } else {
-                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                            img, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
-                        )?;
                     }
                 }
             }
@@ -1912,22 +2394,29 @@ fn draw_foreground(
                         % loaded.water_rock_textures.len();
                 let (tex_id, frame_w, frame_h) = loaded.water_rock_textures[variant_idx];
 
-                if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                if let Some((img, _, _, frame_count)) = tm.get_image(tex_id) {
                     let fw = frame_w as f64;
                     let fh = frame_h as f64;
+
+                    // Animated frame (8 FPS, diagonal wave across map)
+                    let wave = (*gx as f64 * 0.4 + *gy as f64 * 0.3) + (*gx ^ *gy) as f64 * 0.15;
+                    let frame = ((elapsed * 8.0 + wave) as u32) % frame_count;
+                    let sx = frame as f64 * fw;
+
                     let dx = (*gx as f64) * ts;
                     let dy = (*gy as f64) * ts;
 
                     if tile_flip(*gx, *gy) {
                         if let Some((flipped, _, _)) = loaded.water_rock_textures_flipped.get(variant_idx) {
+                            let sheet_w = frame_count as f64 * fw;
+                            let flipped_sx = sheet_w - sx - fw;
                             ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                                flipped, 0.0, 0.0, fw, fh, dx, dy, ts, ts,
+                                flipped, flipped_sx, 0.0, fw, fh, dx, dy, ts, ts,
                             )?;
                         }
                     } else {
-                        // Use frame 0 only (static)
                         ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                            img, 0.0, 0.0, fw, fh, dx, dy, ts, ts,
+                            img, sx, 0.0, fw, fh, dx, dy, ts, ts,
                         )?;
                     }
                 }
@@ -1973,6 +2462,36 @@ fn draw_foreground(
 
                     if (alpha - 1.0).abs() > 0.001 {
                         ctx.set_global_alpha(1.0);
+                    }
+                }
+            }
+
+            Drawable::BaseBuilding(idx) => {
+                if !loaded.building_textures.is_empty() {
+                    let b = &game.buildings[*idx];
+                    let kind_index = match b.kind {
+                        BuildingKind::Barracks => 0,
+                        BuildingKind::Archery => 1,
+                        BuildingKind::Monastery => 2,
+                    };
+                    let faction_index = match b.faction {
+                        Faction::Blue => 0,
+                        _ => 1,
+                    };
+                    let tex_idx = kind_index * 2 + faction_index;
+                    if tex_idx < loaded.building_textures.len() {
+                        let (tex_id, sprite_w, sprite_h) = loaded.building_textures[tex_idx];
+                        if let Some((img, _, _, _)) = tm.get_image(tex_id) {
+                            let sw = sprite_w as f64;
+                            let sh = sprite_h as f64;
+                            let draw_w = ts * 3.0;
+                            let draw_h = draw_w * (sh / sw);
+                            let dx = (b.grid_x as f64) * ts + ts / 2.0 - draw_w / 2.0;
+                            let dy = (b.grid_y as f64) * ts + ts - draw_h;
+                            ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                                img, 0.0, 0.0, sw, sh, dx, dy, draw_w, draw_h,
+                            )?;
+                        }
                     }
                 }
             }
@@ -2052,16 +2571,11 @@ fn update_fog_canvas(
                 } else {
                     0
                 }
-            } else if game.revealed[idx] {
-                // Previously seen — dim fog, softer near visible tiles
+            } else {
+                // Outside line of sight — dim fog, softer near visible tiles
                 let vis_n = visible_neighbor_count_fast(&game.visible, gx, gy, w, h);
                 let base = 140i32; // ~0.55 * 255
                 (base - (vis_n as i32) * 15).max(38) as u8
-            } else {
-                // Never seen — full darkness
-                let vis_n = visible_neighbor_count_fast(&game.visible, gx, gy, w, h);
-                let base = 235i32; // ~0.92 * 255
-                (base - (vis_n as i32) * 20).max(102) as u8
             };
 
             // Black with computed alpha
@@ -2109,16 +2623,79 @@ fn request_animation_frame(f: &Closure<dyn FnMut(f64)>) {
         .expect("should register `requestAnimationFrame`");
 }
 
+/// Chunk size in tiles. Each chunk is CHUNK_TILES × CHUNK_TILES tiles,
+/// rendered to a (CHUNK_TILES * 64) × (CHUNK_TILES * 64) pixel canvas.
+/// 32 tiles → 2048×2048 px (~4MP, well within browser canvas limits).
+const CHUNK_TILES: u32 = 32;
+
+/// Chunk-based terrain cache: the grid is divided into chunks, each with
+/// its own small offscreen canvas. Only visible chunks are drawn per frame.
+struct TerrainChunks {
+    /// Chunk canvases stored row-major: chunks[cy * cols + cx]
+    canvases: Vec<web_sys::HtmlCanvasElement>,
+    contexts: Vec<web_sys::CanvasRenderingContext2d>,
+    /// Whether each chunk needs re-rendering
+    dirty: Vec<bool>,
+    /// Number of chunks in each dimension
+    cols: u32,
+    rows: u32,
+}
+
+impl TerrainChunks {
+    fn new(document: &web_sys::Document, grid_w: u32, grid_h: u32) -> Result<Self, JsValue> {
+        let cols = (grid_w + CHUNK_TILES - 1) / CHUNK_TILES;
+        let rows = (grid_h + CHUNK_TILES - 1) / CHUNK_TILES;
+        let count = (cols * rows) as usize;
+        let chunk_px = CHUNK_TILES * (TILE_SIZE as u32);
+
+        let mut canvases = Vec::with_capacity(count);
+        let mut contexts = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            let c = document
+                .create_element("canvas")?
+                .dyn_into::<web_sys::HtmlCanvasElement>()?;
+            c.set_width(chunk_px);
+            c.set_height(chunk_px);
+            let ctx = c
+                .get_context("2d")?
+                .unwrap()
+                .dyn_into::<web_sys::CanvasRenderingContext2d>()?;
+            canvases.push(c);
+            contexts.push(ctx);
+        }
+
+        Ok(Self {
+            canvases,
+            contexts,
+            dirty: vec![true; count],
+            cols,
+            rows,
+        })
+    }
+
+    fn mark_all_dirty(&mut self) {
+        for d in &mut self.dirty {
+            *d = true;
+        }
+    }
+}
+
 struct LoopState {
     canvas2d: Canvas2d,
+    canvas_element: web_sys::HtmlCanvasElement,
     game: Game,
     texture_manager: TextureManager,
     last_time: Option<f64>,
     elapsed: f64,
     fog_canvas: web_sys::HtmlCanvasElement,
     fog_ctx: web_sys::CanvasRenderingContext2d,
-    terrain_canvas: web_sys::HtmlCanvasElement,
-    terrain_ctx: web_sys::CanvasRenderingContext2d,
+    terrain_chunks: TerrainChunks,
     terrain_dirty: bool,
     animator: TurnAnimator,
+    /// Pre-rendered minimap terrain (1 pixel per tile, static after generation).
+    minimap_terrain: web_sys::HtmlCanvasElement,
+    /// Last known CSS size for resize detection.
+    last_css_w: u32,
+    last_css_h: u32,
 }

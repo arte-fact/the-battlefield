@@ -2,7 +2,7 @@ use crate::grid::{self, TILE_SIZE};
 use crate::sprite::AnimationState;
 
 /// Collision circle radius for all units.
-pub const UNIT_RADIUS: f32 = TILE_SIZE * 0.35;
+pub const UNIT_RADIUS: f32 = 28.0;
 
 /// Melee attack reach in world pixels.
 pub const MELEE_RANGE: f32 = TILE_SIZE * 1.5;
@@ -179,14 +179,14 @@ pub struct Unit {
     pub ai_path_cooldown: f32,
     /// Remaining seconds of hit flash blink effect (0.0 = not flashing).
     pub hit_flash: f32,
-    /// Whether this unit is rallying (walking to rally point / waiting for group).
-    pub rallying: bool,
-    /// Rally destination in world-space (only meaningful when rallying=true).
-    pub rally_target: (f32, f32),
     /// Active player order (None = default AI behavior).
     pub order: Option<OrderKind>,
     /// Seconds remaining for order flash indicator.
     pub order_flash: f32,
+    /// Cached nearest enemy result (refreshed periodically, not every frame).
+    pub cached_enemy: Option<(f32, f32, UnitId, f32)>,
+    /// Cooldown before refreshing cached_enemy (avoids LOS raycasts every frame).
+    pub enemy_scan_cooldown: f32,
 }
 
 impl Unit {
@@ -220,10 +220,10 @@ impl Unit {
             ai_waypoint_idx: 0,
             ai_path_cooldown: 0.0,
             hit_flash: 0.0,
-            rallying: false,
-            rally_target: (0.0, 0.0),
             order: None,
             order_flash: 0.0,
+            cached_enemy: None,
+            enemy_scan_cooldown: 0.0,
         }
     }
 

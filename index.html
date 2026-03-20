@@ -2,8 +2,18 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="description" content="Real-time tactical battlefield game — command warriors, archers, lancers and monks in strategic combat.">
     <title>The Battlefield</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Battlefield">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -27,8 +37,8 @@
         }
         #hud {
             position: fixed;
-            top: 8px;
-            left: 8px;
+            top: calc(8px + env(safe-area-inset-top, 0px));
+            left: calc(8px + env(safe-area-inset-left, 0px));
             pointer-events: none;
             display: flex;
             flex-direction: column;
@@ -36,12 +46,12 @@
             z-index: 10;
         }
         #turn-display {
-            font-size: 0.8rem;
+            font-size: clamp(0.7rem, 2vw, 0.9rem);
             color: #ffd700;
             text-shadow: 1px 1px 2px #000;
         }
         #phase-display {
-            font-size: 1.1rem;
+            font-size: clamp(0.9rem, 2.5vw, 1.2rem);
             font-weight: bold;
             text-shadow: 1px 1px 3px #000;
         }
@@ -52,13 +62,13 @@
             gap: 6px;
         }
         #hp-label {
-            font-size: 0.7rem;
+            font-size: clamp(0.6rem, 1.8vw, 0.75rem);
             color: #ccc;
             text-shadow: 1px 1px 2px #000;
         }
         #hp-bar-bg {
-            width: 120px;
-            height: 10px;
+            width: clamp(80px, 20vw, 160px);
+            height: clamp(8px, 1.5vw, 12px);
             background: #333;
             border: 1px solid #555;
             border-radius: 2px;
@@ -93,6 +103,34 @@
             white-space: pre-wrap;
             word-break: break-word;
         }
+        /* Rotate prompt for portrait mobile in browser (non-installed) */
+        #rotate-prompt {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            z-index: 200;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            font-size: 1.2rem;
+            text-align: center;
+            padding: 20px;
+        }
+        #rotate-prompt .rotate-icon {
+            font-size: 3rem;
+        }
+        @media (orientation: portrait) {
+            #rotate-prompt { display: flex; }
+            #game-canvas, #hud { display: none; }
+        }
+        /* In fullscreen/standalone PWA, the manifest handles orientation — hide prompt */
+        @media (display-mode: fullscreen), (display-mode: standalone) {
+            #rotate-prompt { display: none !important; }
+            #game-canvas, #hud { display: block !important; }
+        }
     </style>
 </head>
 <body>
@@ -106,8 +144,62 @@
     </div>
     <div id="loading">Loading...</div>
     <div id="error-overlay"></div>
+    <div id="rotate-prompt">
+        <div class="rotate-icon">&#x1F4F1;&#x21BB;</div>
+        <div>Rotate your device to landscape</div>
+        <div style="font-size: 0.8rem; color: #888;">or install the app for the best experience</div>
+    </div>
+
     <script type="module">
         import init from './pkg/the_battlefield.js';
+
+        // Register Service Worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(() => {});
+        }
+
+        // Request fullscreen + lock orientation on first touch (mobile browsers require user gesture)
+        function requestFullscreenLandscape() {
+            const el = document.documentElement;
+            const rfs = el.requestFullscreen
+                || el.webkitRequestFullscreen
+                || el.mozRequestFullScreen
+                || el.msRequestFullscreen;
+            if (rfs) {
+                rfs.call(el).then(() => {
+                    if (screen.orientation && screen.orientation.lock) {
+                        screen.orientation.lock('landscape').catch(() => {});
+                    }
+                }).catch(() => {});
+            }
+        }
+
+        // On first touch, always go fullscreen + landscape
+        // (manifest "fullscreen" often falls back to "standalone" which keeps status bar)
+        document.addEventListener('touchstart', function onFirstTouch() {
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                requestFullscreenLandscape();
+            }
+        }, { once: true });
+
+        // Lock orientation whenever entering fullscreen
+        document.addEventListener('fullscreenchange', () => {
+            if (document.fullscreenElement && screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock('landscape').catch(() => {});
+            }
+        });
+        document.addEventListener('webkitfullscreenchange', () => {
+            if (document.webkitFullscreenElement && screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock('landscape').catch(() => {});
+            }
+        });
+
+        // Re-request fullscreen on next touch if user exited it
+        document.addEventListener('touchstart', () => {
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                requestFullscreenLandscape();
+            }
+        });
 
         async function run() {
             try {

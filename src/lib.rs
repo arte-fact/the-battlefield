@@ -3,6 +3,7 @@ pub mod autotile;
 pub mod building;
 pub mod camera;
 pub mod combat;
+pub mod flowfield;
 pub mod game;
 pub mod grid;
 pub mod input;

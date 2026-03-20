@@ -8,14 +8,16 @@ pub enum TileKind {
     Water,
     Forest,
     Rock,
+    Road,
 }
 
 impl TileKind {
     pub fn movement_cost(self) -> Option<u32> {
         match self {
-            TileKind::Grass => Some(1),
+            TileKind::Grass | TileKind::Road => Some(1),
             TileKind::Forest => Some(2),
-            TileKind::Water | TileKind::Rock => None, // impassable
+            TileKind::Water => None, // impassable
+            TileKind::Rock => Some(1),
         }
     }
 
@@ -26,14 +28,14 @@ impl TileKind {
         }
     }
 
-    /// Returns true for non-water terrain (Grass, Forest, Rock).
+    /// Returns true for non-water terrain (Grass, Forest, Rock, Road).
     pub fn is_land(self) -> bool {
         self != TileKind::Water
     }
 }
 
-pub const PLAYABLE_SIZE: u32 = 96;
-pub const BORDER_SIZE: u32 = 32;
+pub const PLAYABLE_SIZE: u32 = 128;
+pub const BORDER_SIZE: u32 = 16;
 pub const GRID_SIZE: u32 = PLAYABLE_SIZE + 2 * BORDER_SIZE; // 160
 
 /// Decorative elements that sit on top of tiles without affecting gameplay.
@@ -151,7 +153,7 @@ impl Grid {
         true
     }
 
-    /// Speed multiplier at world position (1.0 grass, 0.75 bush, 0.5 forest, 0.0 out-of-bounds).
+    /// Speed multiplier at world position (1.0 grass, 0.75 bush/rock, 0.5 forest, 0.0 out-of-bounds).
     pub fn speed_factor_at(&self, wx: f32, wy: f32) -> f32 {
         let (gx, gy) = world_to_grid(wx, wy);
         if !self.in_bounds(gx, gy) {
@@ -161,6 +163,8 @@ impl Grid {
         let uy = gy as u32;
         match self.get(ux, uy) {
             TileKind::Forest => 0.5,
+            TileKind::Rock => 0.75,
+            TileKind::Road => 1.25,
             TileKind::Grass => {
                 if self.decoration(ux, uy) == Some(Decoration::Bush) {
                     0.75
@@ -364,7 +368,8 @@ mod tests {
         assert_eq!(TileKind::Grass.movement_cost(), Some(1));
         assert_eq!(TileKind::Forest.movement_cost(), Some(2));
         assert_eq!(TileKind::Water.movement_cost(), None);
-        assert_eq!(TileKind::Rock.movement_cost(), None);
+        assert_eq!(TileKind::Rock.movement_cost(), Some(1));
+        assert_eq!(TileKind::Road.movement_cost(), Some(1));
     }
 
     #[test]
@@ -387,6 +392,7 @@ mod tests {
         assert!(TileKind::Grass.is_land());
         assert!(TileKind::Forest.is_land());
         assert!(TileKind::Rock.is_land());
+        assert!(TileKind::Road.is_land());
         assert!(!TileKind::Water.is_land());
     }
 

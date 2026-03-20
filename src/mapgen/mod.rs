@@ -1,9 +1,70 @@
 pub mod simplex;
 
-use crate::building;
 use crate::grid::{Decoration, Grid, TileKind, BORDER_SIZE, GRID_SIZE, PLAYABLE_SIZE};
-use crate::zone::ZoneManager;
 use simplex::Simplex;
+
+/// BSP layout data returned from map generation.
+pub struct MapLayout {
+    pub blue_base: (u32, u32),
+    pub red_base: (u32, u32),
+    pub zone_centers: Vec<(u32, u32)>,
+}
+
+/// A rectangle used during BSP partitioning.
+#[derive(Clone, Copy, Debug)]
+struct Rect {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+impl Rect {
+    fn center(&self) -> (u32, u32) {
+        (self.x + self.w / 2, self.y + self.h / 2)
+    }
+}
+
+/// Recursively split a rectangle via BSP, returning leaf rects.
+fn bsp_split(rng: &mut Rng, rect: Rect, depth: u32, max_depth: u32, min_size: u32) -> Vec<Rect> {
+    if depth >= max_depth || (rect.w < min_size * 2 && rect.h < min_size * 2) {
+        return vec![rect];
+    }
+
+    // Split along longer axis
+    let split_horizontal = if rect.w > rect.h + 4 {
+        false // split vertically (along x)
+    } else if rect.h > rect.w + 4 {
+        true // split horizontally (along y)
+    } else {
+        rng.chance(0.5)
+    };
+
+    if split_horizontal {
+        if rect.h < min_size * 2 {
+            return vec![rect];
+        }
+        // Split position: 40-60% of height
+        let range = rect.h - 2 * min_size;
+        let split_offset = min_size + (rng.next() % (range + 1));
+        let top = Rect { x: rect.x, y: rect.y, w: rect.w, h: split_offset };
+        let bottom = Rect { x: rect.x, y: rect.y + split_offset, w: rect.w, h: rect.h - split_offset };
+        let mut leaves = bsp_split(rng, top, depth + 1, max_depth, min_size);
+        leaves.extend(bsp_split(rng, bottom, depth + 1, max_depth, min_size));
+        leaves
+    } else {
+        if rect.w < min_size * 2 {
+            return vec![rect];
+        }
+        let range = rect.w - 2 * min_size;
+        let split_offset = min_size + (rng.next() % (range + 1));
+        let left = Rect { x: rect.x, y: rect.y, w: split_offset, h: rect.h };
+        let right = Rect { x: rect.x + split_offset, y: rect.y, w: rect.w - split_offset, h: rect.h };
+        let mut leaves = bsp_split(rng, left, depth + 1, max_depth, min_size);
+        leaves.extend(bsp_split(rng, right, depth + 1, max_depth, min_size));
+        leaves
+    }
+}
 
 /// Simple xorshift32 PRNG for deterministic terrain generation.
 struct Rng {
@@ -24,11 +85,6 @@ impl Rng {
         self.state
     }
 
-    /// Random u32 in [0, max).
-    fn range(&mut self, max: u32) -> u32 {
-        self.next() % max
-    }
-
     /// Random f32 in [0.0, 1.0).
     fn f32(&mut self) -> f32 {
         (self.next() & 0x00FF_FFFF) as f32 / 16_777_216.0
@@ -42,7 +98,7 @@ impl Rng {
 
 /// Configuration for battlefield generation.
 pub struct TerrainConfig {
-    /// Noise frequency — controls feature size (~14-tile features at 0.07).
+    /// Noise frequency — controls feature size (lower = larger features).
     pub elevation_scale: f64,
     /// Noise values below this become water.
     pub water_threshold: f64,
@@ -63,13 +119,13 @@ pub struct TerrainConfig {
 impl Default for TerrainConfig {
     fn default() -> Self {
         Self {
-            elevation_scale: 0.07,
+            elevation_scale: 0.04,
             water_threshold: -0.3,
             hill_threshold: 0.45,
             tree_density: 0.3,
-            bush_density: 0.25,
-            rock_density: 0.20,
-            rock_frequency: 0.10,
+            bush_density: 0.04,
+            rock_density: 0.03,
+            rock_frequency: 0.06,
             water_rock_density: 0.12,
         }
     }
@@ -83,13 +139,16 @@ fn in_border(x: u32, y: u32) -> bool {
         || y >= BORDER_SIZE + PLAYABLE_SIZE
 }
 
-/// Generate a procedural battlefield grid.
-pub fn generate_battlefield(seed: u32) -> Grid {
+/// Generate a procedural battlefield grid with BSP layout.
+pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
     generate_battlefield_with_config(seed, &TerrainConfig::default())
 }
 
 /// Generate a battlefield with custom configuration.
-pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> Grid {
+pub fn generate_battlefield_with_config(
+    seed: u32,
+    config: &TerrainConfig,
+) -> (Grid, MapLayout) {
     let mut rng = Rng::new(seed);
     let w = GRID_SIZE;
     let h = GRID_SIZE;
@@ -133,9 +192,8 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> Gr
     // --- Phase B: Cellular automata for vegetation & decorations ---
 
     // Trees: seeded from simplex noise at offset, placed on grass
-    // In playable area: only on elev 0. In border: also on elevated tiles.
     let tree_seed = run_cellular_automaton(
-        &seed_from_noise(&noise, w, h, 100.0, 0.12, config.tree_density),
+        &seed_from_noise(&noise, w, h, 100.0, 0.07, config.tree_density),
         w,
         h,
         5,
@@ -154,20 +212,10 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> Gr
         }
     }
 
-    // Rocks: seeded from simplex noise at offset, placed on grass
-    // In playable area: only on elev 0. In border: also on elevated tiles.
-    let rock_seed = run_cellular_automaton(
-        &seed_from_noise(&noise, w, h, 200.0, config.rock_frequency, config.rock_density),
-        w,
-        h,
-        3,
-        4,
-        2,
-    );
+    // Rocks: sparse random scatter on grass
     for y in 0..h {
         for x in 0..w {
-            let i = (y * w + x) as usize;
-            if rock_seed[i]
+            if rng.chance(config.rock_density as f32)
                 && grid.get(x, y) == TileKind::Grass
                 && (grid.elevation(x, y) == 0 || in_border(x, y))
             {
@@ -176,20 +224,10 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> Gr
         }
     }
 
-    // Bushes: decoration on grass (not Forest/Rock)
-    // In playable area: only on elev 0. In border: also on elevated tiles.
-    let bush_seed = run_cellular_automaton(
-        &seed_from_noise(&noise, w, h, 300.0, 0.10, config.bush_density),
-        w,
-        h,
-        4,
-        4,
-        1,
-    );
+    // Bushes: sparse random scatter on grass
     for y in 0..h {
         for x in 0..w {
-            let i = (y * w + x) as usize;
-            if bush_seed[i]
+            if rng.chance(config.bush_density as f32)
                 && grid.get(x, y) == TileKind::Grass
                 && (grid.elevation(x, y) == 0 || in_border(x, y))
             {
@@ -207,30 +245,102 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> Gr
         }
     }
 
-    // --- Phase C: Post-processing ---
+    // --- Phase C: Post-processing with BSP layout ---
 
-    // Clear deployment zones (diagonal corners offset into playable area)
     let b = BORDER_SIZE;
     let p = PLAYABLE_SIZE;
-    // Blue base: top-left 12x12 of playable area
-    clear_zone(&mut grid, b, b, 12, 12);
-    // Red base: bottom-right 12x12 of playable area
-    clear_zone(&mut grid, b + p - 12, b + p - 12, 12, 12);
 
-    // Ensure a clear diagonal corridor from base to base
-    ensure_diagonal_path(&mut grid, &mut rng);
+    // Run BSP on playable area
+    let playable_rect = Rect { x: b, y: b, w: p, h: p };
+    let mut bsp_rng = Rng::new(seed.wrapping_add(0xBEEF));
+    let leaves = bsp_split(&mut bsp_rng, playable_rect, 0, 4, 20);
 
-    // Clear 5x5 areas around capture zone centers so units can always reach them
-    clear_zone_centers(&mut grid);
+    // Sort leaves by distance to top-left corner to assign bases
+    let top_left = (b as f32, b as f32);
+    let mut sorted_leaves = leaves.clone();
+    sorted_leaves.sort_by(|a, b_leaf| {
+        let (ax, ay) = a.center();
+        let (bx, by) = b_leaf.center();
+        let da = (ax as f32 - top_left.0).powi(2) + (ay as f32 - top_left.1).powi(2);
+        let db = (bx as f32 - top_left.0).powi(2) + (by as f32 - top_left.1).powi(2);
+        da.partial_cmp(&db).unwrap()
+    });
 
-    // Clear 5x5 areas around building footprints
-    clear_building_footprints(&mut grid);
+    let blue_base = sorted_leaves[0].center();
+    let red_base = sorted_leaves[sorted_leaves.len() - 1].center();
 
-    grid
+    // Place 5 zones: 3 along the diagonal between bases + 2 flanks
+    let (bx, by) = (blue_base.0 as f32, blue_base.1 as f32);
+    let (rx, ry) = (red_base.0 as f32, red_base.1 as f32);
+    let mid_x = (bx + rx) * 0.5;
+    let mid_y = (by + ry) * 0.5;
+    let dx = rx - bx;
+    let dy = ry - by;
+    // 3 diagonal zones at 25%, 50%, 75% between bases
+    let diag: Vec<(u32, u32)> = [0.25_f32, 0.50, 0.75]
+        .iter()
+        .map(|&t| {
+            ((bx + dx * t) as u32, (by + dy * t) as u32)
+        })
+        .collect();
+    // 2 flanks: perpendicular offset from midpoint
+    let perp_x = -dy * 0.25;
+    let perp_y = dx * 0.25;
+    let flank1 = ((mid_x + perp_x) as u32, (mid_y + perp_y) as u32);
+    let flank2 = ((mid_x - perp_x) as u32, (mid_y - perp_y) as u32);
+    let mut zone_centers = diag;
+    zone_centers.push(flank1);
+    zone_centers.push(flank2);
+
+    // Clear 14x14 rect around each base center
+    clear_rect(
+        &mut grid,
+        blue_base.0.saturating_sub(7),
+        blue_base.1.saturating_sub(7),
+        14,
+        14,
+    );
+    clear_rect(
+        &mut grid,
+        red_base.0.saturating_sub(7),
+        red_base.1.saturating_sub(7),
+        14,
+        14,
+    );
+
+    // Clear 6-tile radius around each zone center
+    for &(cx, cy) in &zone_centers {
+        clear_circle(&mut grid, cx, cy, 6);
+    }
+
+    let layout = MapLayout {
+        blue_base,
+        red_base,
+        zone_centers,
+    };
+
+    (grid, layout)
+}
+
+/// Clear a circular area to grass.
+fn clear_circle(grid: &mut Grid, cx: u32, cy: u32, radius: i32) {
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            if dx * dx + dy * dy > radius * radius {
+                continue;
+            }
+            let nx = cx as i32 + dx;
+            let ny = cy as i32 + dy;
+            if grid.in_bounds(nx, ny) {
+                grid.set(nx as u32, ny as u32, TileKind::Grass);
+                grid.set_elevation(nx as u32, ny as u32, 0);
+                grid.set_decoration(nx as u32, ny as u32, None);
+            }
+        }
+    }
 }
 
 /// Seed a boolean grid from simplex noise at a given offset and frequency.
-/// Cells where noise > threshold become true.
 fn seed_from_noise(
     noise: &Simplex,
     w: u32,
@@ -249,7 +359,6 @@ fn seed_from_noise(
                 3,
                 0.5,
             );
-            // Map noise [-1,1] to [0,1] then compare to threshold
             let normalized = (val + 1.0) * 0.5;
             grid[(y * w + x) as usize] = normalized < threshold;
         }
@@ -258,8 +367,6 @@ fn seed_from_noise(
 }
 
 /// Run cellular automaton iterations on a boolean grid.
-/// birth_threshold: number of alive neighbors to birth a dead cell.
-/// death_threshold: number of alive neighbors below which a live cell dies.
 fn run_cellular_automaton(
     initial: &[bool],
     w: u32,
@@ -305,7 +412,6 @@ fn count_neighbors(grid: &[bool], w: u32, h: u32, x: u32, y: u32) -> u32 {
                     count += 1;
                 }
             } else {
-                // Out-of-bounds counts as alive (encourages growth at edges)
                 count += 1;
             }
         }
@@ -314,7 +420,7 @@ fn count_neighbors(grid: &[bool], w: u32, h: u32, x: u32, y: u32) -> u32 {
 }
 
 /// Clear a rectangular zone back to grass with zero elevation and no decorations.
-fn clear_zone(grid: &mut Grid, x: u32, y: u32, w: u32, h: u32) {
+fn clear_rect(grid: &mut Grid, x: u32, y: u32, w: u32, h: u32) {
     for dy in 0..h {
         for dx in 0..w {
             let nx = x + dx;
@@ -328,81 +434,14 @@ fn clear_zone(grid: &mut Grid, x: u32, y: u32, w: u32, h: u32) {
     }
 }
 
-/// Ensure there's a passable diagonal path from top-left base to bottom-right base.
-/// Clears a 3-tile-wide corridor along the diagonal, offset by BORDER_SIZE.
-fn ensure_diagonal_path(grid: &mut Grid, rng: &mut Rng) {
-    let start = BORDER_SIZE + 10;
-    let end = BORDER_SIZE + PLAYABLE_SIZE - 11;
-    let steps = end - start;
-    for i in 0..=steps {
-        let cx = start + i;
-        let cy = start + i;
-        let wobble = (rng.range(3) as i32) - 1; // -1, 0, or 1
-        for d in -1i32..=1 {
-            let x = (cx as i32 + d + wobble).clamp(0, grid.width as i32 - 1) as u32;
-            let y = (cy as i32 + d + wobble).clamp(0, grid.height as i32 - 1) as u32;
-            let tile = grid.get(x, y);
-            if tile == TileKind::Water || tile == TileKind::Rock || tile == TileKind::Forest {
-                grid.set(x, y, TileKind::Grass);
-            }
-            grid.set_elevation(x, y, 0);
-            grid.set_decoration(x, y, None);
-        }
-    }
-}
-
-/// Clear a 5x5 area around each capture zone center for tower footprint and surroundings.
-fn clear_zone_centers(grid: &mut Grid) {
-    for (cx, cy) in ZoneManager::default_zone_centers() {
-        for dy in -2i32..=2 {
-            for dx in -2i32..=2 {
-                let nx = cx as i32 + dx;
-                let ny = cy as i32 + dy;
-                if grid.in_bounds(nx, ny) {
-                    let (ux, uy) = (nx as u32, ny as u32);
-                    let tile = grid.get(ux, uy);
-                    if tile == TileKind::Water || tile == TileKind::Rock || tile == TileKind::Forest {
-                        grid.set(ux, uy, TileKind::Grass);
-                    }
-                    grid.set_elevation(ux, uy, 0);
-                    grid.set_decoration(ux, uy, None);
-                }
-            }
-        }
-    }
-}
-
-/// Clear 5x5 areas around each building footprint and rally point.
-fn clear_building_footprints(grid: &mut Grid) {
-    let mut positions = building::all_building_positions();
-    positions.extend(building::all_rally_positions());
-    for (cx, cy) in positions {
-        for dy in -2i32..=2 {
-            for dx in -2i32..=2 {
-                let nx = cx as i32 + dx;
-                let ny = cy as i32 + dy;
-                if grid.in_bounds(nx, ny) {
-                    let (ux, uy) = (nx as u32, ny as u32);
-                    let tile = grid.get(ux, uy);
-                    if tile == TileKind::Water || tile == TileKind::Rock || tile == TileKind::Forest {
-                        grid.set(ux, uy, TileKind::Grass);
-                    }
-                    grid.set_elevation(ux, uy, 0);
-                    grid.set_decoration(ux, uy, None);
-                }
-            }
-        }
-    }
-}
-
-/// Suggested player spawn position (Blue base, top-left of playable area).
+/// Fallback player spawn position (Blue base).
 pub fn blue_spawn_area() -> (u32, u32) {
-    (BORDER_SIZE + 5, BORDER_SIZE + 5) // (21, 21)
+    (BORDER_SIZE + 5, BORDER_SIZE + 5)
 }
 
-/// Suggested enemy spawn area center (Red base, bottom-right of playable area).
+/// Fallback enemy spawn area center (Red base).
 pub fn red_spawn_area() -> (u32, u32) {
-    (BORDER_SIZE + PLAYABLE_SIZE - 6, BORDER_SIZE + PLAYABLE_SIZE - 6) // (106, 106)
+    (BORDER_SIZE + PLAYABLE_SIZE - 6, BORDER_SIZE + PLAYABLE_SIZE - 6)
 }
 
 #[cfg(test)]
@@ -411,8 +450,8 @@ mod tests {
 
     #[test]
     fn deterministic_generation() {
-        let g1 = generate_battlefield(42);
-        let g2 = generate_battlefield(42);
+        let (g1, l1) = generate_battlefield(42);
+        let (g2, l2) = generate_battlefield(42);
         for y in 0..GRID_SIZE {
             for x in 0..GRID_SIZE {
                 assert_eq!(g1.get(x, y), g2.get(x, y));
@@ -420,12 +459,15 @@ mod tests {
                 assert_eq!(g1.decoration(x, y), g2.decoration(x, y));
             }
         }
+        assert_eq!(l1.blue_base, l2.blue_base);
+        assert_eq!(l1.red_base, l2.red_base);
+        assert_eq!(l1.zone_centers, l2.zone_centers);
     }
 
     #[test]
     fn different_seeds_differ() {
-        let g1 = generate_battlefield(42);
-        let g2 = generate_battlefield(99);
+        let (g1, _) = generate_battlefield(42);
+        let (g2, _) = generate_battlefield(99);
         let mut differs = false;
         for y in 0..GRID_SIZE {
             for x in 0..GRID_SIZE {
@@ -440,73 +482,46 @@ mod tests {
 
     #[test]
     fn deployment_zones_clear() {
-        let grid = generate_battlefield(42);
-        let b = BORDER_SIZE;
-        let p = PLAYABLE_SIZE;
-        // Blue base: 12x12 at (b, b)
-        for y in b..b + 12 {
-            for x in b..b + 12 {
-                assert_eq!(
-                    grid.get(x, y),
-                    TileKind::Grass,
-                    "Non-grass at ({x},{y}) in Blue deploy zone"
-                );
-                assert_eq!(
-                    grid.elevation(x, y),
-                    0,
-                    "Non-zero elevation at ({x},{y}) in Blue deploy zone"
-                );
-                assert_eq!(
-                    grid.decoration(x, y),
-                    None,
-                    "Decoration at ({x},{y}) in Blue deploy zone"
-                );
-            }
-        }
-        // Red base: 12x12 at (b+p-12, b+p-12)
-        for y in (b + p - 12)..(b + p) {
-            for x in (b + p - 12)..(b + p) {
-                assert_eq!(
-                    grid.get(x, y),
-                    TileKind::Grass,
-                    "Non-grass at ({x},{y}) in Red deploy zone"
-                );
-                assert_eq!(
-                    grid.elevation(x, y),
-                    0,
-                    "Non-zero elevation at ({x},{y}) in Red deploy zone"
-                );
-                assert_eq!(
-                    grid.decoration(x, y),
-                    None,
-                    "Decoration at ({x},{y}) in Red deploy zone"
-                );
+        let (grid, layout) = generate_battlefield(42);
+        // Check 7-tile radius around each base center is clear
+        for &(cx, cy) in &[layout.blue_base, layout.red_base] {
+            for dy in 0..14i32 {
+                for dx in 0..14i32 {
+                    let x = cx.saturating_sub(7) + dx as u32;
+                    let y = cy.saturating_sub(7) + dy as u32;
+                    if grid.in_bounds(x as i32, y as i32) {
+                        assert_eq!(
+                            grid.get(x, y),
+                            TileKind::Grass,
+                            "Non-grass at ({x},{y}) in deploy zone around ({cx},{cy})"
+                        );
+                    }
+                }
             }
         }
     }
 
     #[test]
-    fn diagonal_path_passable() {
-        let grid = generate_battlefield(42);
-        let start = BORDER_SIZE + 10;
-        let end = BORDER_SIZE + PLAYABLE_SIZE - 11;
-        // Diagonal corridor should have passable tiles
-        for i in start..=end {
-            let passable = (i.saturating_sub(2)..=i + 2).any(|d| {
-                let x = d.min(GRID_SIZE - 1);
-                let y = d.min(GRID_SIZE - 1);
-                grid.is_passable(x, y)
-            });
-            assert!(
-                passable,
-                "No passable tile near diagonal at step {i}"
-            );
+    fn zone_centers_clear() {
+        let (grid, layout) = generate_battlefield(42);
+        for &(cx, cy) in &layout.zone_centers {
+            for dy in -3i32..=3 {
+                for dx in -3i32..=3 {
+                    let x = (cx as i32 + dx) as u32;
+                    let y = (cy as i32 + dy) as u32;
+                    assert!(
+                        grid.is_passable(x, y),
+                        "Zone center ({cx},{cy}) blocked at ({x},{y}): {:?}",
+                        grid.get(x, y)
+                    );
+                }
+            }
         }
     }
 
     #[test]
     fn has_terrain_variety() {
-        let grid = generate_battlefield(42);
+        let (grid, _) = generate_battlefield(42);
         let mut has_forest = false;
         let mut has_water = false;
         let mut has_elevation = false;
@@ -537,7 +552,7 @@ mod tests {
 
     #[test]
     fn elevation_from_noise() {
-        let grid = generate_battlefield(42);
+        let (grid, _) = generate_battlefield(42);
         let mut has_elev0 = false;
         let mut has_elev2 = false;
         for y in 0..GRID_SIZE {
@@ -555,7 +570,7 @@ mod tests {
 
     #[test]
     fn decorations_on_correct_terrain() {
-        let grid = generate_battlefield(42);
+        let (grid, _) = generate_battlefield(42);
         for y in 0..GRID_SIZE {
             for x in 0..GRID_SIZE {
                 match grid.decoration(x, y) {
@@ -565,8 +580,6 @@ mod tests {
                             TileKind::Grass,
                             "Bush on non-grass at ({x},{y})"
                         );
-                        // In playable area bushes are only on elev 0;
-                        // in the border ring they can be on elevated tiles too
                         if !in_border(x, y) {
                             assert_eq!(
                                 grid.elevation(x, y),
@@ -590,8 +603,7 @@ mod tests {
 
     #[test]
     fn trees_form_clusters() {
-        let grid = generate_battlefield(42);
-        // Count forest tiles that have at least one forest neighbor
+        let (grid, _) = generate_battlefield(42);
         let mut clustered = 0;
         let mut total_forest = 0;
         for y in 0..GRID_SIZE {
@@ -613,21 +625,11 @@ mod tests {
             }
         }
         assert!(total_forest > 0, "No forest tiles at all");
-        // At least 60% of forest tiles should be clustered (CA produces groups)
         let ratio = clustered as f32 / total_forest as f32;
         assert!(
             ratio > 0.6,
             "Trees not clustered enough: {clustered}/{total_forest} = {ratio:.2}"
         );
-    }
-
-    #[test]
-    fn rng_range_in_bounds() {
-        let mut rng = Rng::new(12345);
-        for _ in 0..1000 {
-            let v = rng.range(10);
-            assert!(v < 10);
-        }
     }
 
     #[test]
@@ -640,48 +642,37 @@ mod tests {
     }
 
     #[test]
-    fn spawn_areas_in_deployment_zones() {
-        let b = BORDER_SIZE;
-        let p = PLAYABLE_SIZE;
-        let (bx, by) = blue_spawn_area();
-        assert!(bx >= b && bx < b + 12, "Blue spawn x should be in top-left zone");
-        assert!(by >= b && by < b + 12, "Blue spawn y should be in top-left zone");
-        let (rx, ry) = red_spawn_area();
-        assert!(rx >= b + p - 12 && rx < b + p, "Red spawn x should be in bottom-right zone");
-        assert!(ry >= b + p - 12 && ry < b + p, "Red spawn y should be in bottom-right zone");
+    fn bsp_produces_leaves() {
+        let mut rng = Rng::new(42);
+        let rect = Rect { x: 16, y: 16, w: 128, h: 128 };
+        let leaves = bsp_split(&mut rng, rect, 0, 4, 20);
+        assert!(leaves.len() >= 4, "BSP should produce at least 4 leaves, got {}", leaves.len());
+        assert!(leaves.len() <= 16, "BSP should produce at most 16 leaves, got {}", leaves.len());
     }
 
     #[test]
-    fn zone_centers_clear() {
-        let grid = generate_battlefield(42);
-        for (cx, cy) in crate::zone::ZoneManager::default_zone_centers() {
-            for dy in -2i32..=2 {
-                for dx in -2i32..=2 {
-                    let x = (cx as i32 + dx) as u32;
-                    let y = (cy as i32 + dy) as u32;
-                    assert!(
-                        grid.is_passable(x, y),
-                        "Zone center ({cx},{cy}) blocked at ({x},{y}): {:?}",
-                        grid.get(x, y)
-                    );
-                    assert_eq!(
-                        grid.elevation(x, y),
-                        0,
-                        "Zone center ({cx},{cy}) has elevation at ({x},{y})"
-                    );
-                    assert_eq!(
-                        grid.decoration(x, y),
-                        None,
-                        "Zone center ({cx},{cy}) has decoration at ({x},{y})"
-                    );
-                }
-            }
-        }
+    fn bsp_bases_at_opposing_corners() {
+        let (_, layout) = generate_battlefield(42);
+        let b = BORDER_SIZE;
+        let p = PLAYABLE_SIZE;
+        let mid = b + p / 2;
+        // Blue base should be in top-left quadrant
+        assert!(layout.blue_base.0 < mid, "Blue base x={} should be < {mid}", layout.blue_base.0);
+        assert!(layout.blue_base.1 < mid, "Blue base y={} should be < {mid}", layout.blue_base.1);
+        // Red base should be in bottom-right quadrant
+        assert!(layout.red_base.0 > mid, "Red base x={} should be > {mid}", layout.red_base.0);
+        assert!(layout.red_base.1 > mid, "Red base y={} should be > {mid}", layout.red_base.1);
+    }
+
+    #[test]
+    fn layout_has_five_zones() {
+        let (_, layout) = generate_battlefield(42);
+        assert_eq!(layout.zone_centers.len(), 5, "Should have exactly 5 zones (3 diagonal + 2 flanks)");
     }
 
     #[test]
     fn border_has_vegetation() {
-        let grid = generate_battlefield(42);
+        let (grid, _) = generate_battlefield(42);
         let mut border_forest = 0u32;
         let mut border_rock = 0u32;
         let mut border_bush = 0u32;

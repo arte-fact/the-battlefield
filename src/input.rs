@@ -235,8 +235,15 @@ pub struct Input {
     // Touch controls
     pub joystick: VirtualJoystick,
     pub attack_button: ActionButton,
+    /// Order buttons for touch (Hold, Go, Retreat, Follow).
+    pub order_hold_btn: ActionButton,
+    pub order_go_btn: ActionButton,
+    pub order_retreat_btn: ActionButton,
+    pub order_follow_btn: ActionButton,
     /// Set on first touch event; enables touch control rendering.
     pub is_touch_device: bool,
+    /// True after the player has used the joystick at least once (hides ghost hint).
+    pub has_used_joystick: bool,
     /// Attack button was pressed this frame (consumed on read).
     pub attack_pressed: bool,
     /// Keyboard attack key (space) was pressed this frame (consumed on read).
@@ -246,6 +253,15 @@ pub struct Input {
     order_go_pressed: bool,
     order_retreat_pressed: bool,
     order_follow_pressed: bool,
+
+    // Single-finger camera drag (right side of screen, not on any button)
+    /// Touch ID for camera drag, if active.
+    camera_drag_id: Option<i32>,
+    /// Previous position for camera drag delta.
+    camera_drag_prev: (f32, f32),
+    /// Accumulated camera drag delta (consumed each frame).
+    pub camera_drag_dx: f32,
+    pub camera_drag_dy: f32,
 }
 
 impl Default for Input {
@@ -265,22 +281,65 @@ impl Input {
             touch_pan_x: 0.0,
             touch_pan_y: 0.0,
             joystick: VirtualJoystick::new(),
-            attack_button: ActionButton::new(0.0, 0.0, 40.0),
+            attack_button: ActionButton::new(0.0, 0.0, 56.0),
+            order_hold_btn: ActionButton::new(0.0, 0.0, 28.0),
+            order_go_btn: ActionButton::new(0.0, 0.0, 28.0),
+            order_retreat_btn: ActionButton::new(0.0, 0.0, 28.0),
+            order_follow_btn: ActionButton::new(0.0, 0.0, 28.0),
             is_touch_device: false,
+            has_used_joystick: false,
             attack_pressed: false,
             attack_key_pressed: false,
             order_hold_pressed: false,
             order_go_pressed: false,
             order_retreat_pressed: false,
             order_follow_pressed: false,
+            camera_drag_id: None,
+            camera_drag_prev: (0.0, 0.0),
+            camera_drag_dx: 0.0,
+            camera_drag_dy: 0.0,
         }
     }
 
     /// Update touch control positions and sizes based on canvas size and DPR.
     pub fn update_layout(&mut self, canvas_w: f32, canvas_h: f32, dpr: f32) {
-        self.attack_button.center_x = canvas_w - 80.0 * dpr;
-        self.attack_button.center_y = canvas_h - 80.0 * dpr;
-        self.attack_button.radius = 40.0 * dpr;
+        // Attack button: larger, bottom-right with comfortable margin
+        let atk_radius = 56.0 * dpr;
+        let atk_margin = 90.0 * dpr;
+        self.attack_button.center_x = canvas_w - atk_margin;
+        self.attack_button.center_y = canvas_h - atk_margin;
+        self.attack_button.radius = atk_radius;
+
+        // Order buttons: vertical stack above attack button
+        // Scale down if the stack would go off-screen
+        let ord_x = self.attack_button.center_x;
+        let min_top = 10.0 * dpr; // minimum distance from top edge
+        let available_h = self.attack_button.center_y - atk_radius - min_top;
+        // 4 buttons need: 4*(2r) + 3*gap + gap_from_atk = 8r + 4gap
+        let ideal_radius = 28.0 * dpr;
+        let ideal_gap = 14.0 * dpr;
+        let ideal_total = 8.0 * ideal_radius + 4.0 * ideal_gap;
+        let (ord_radius, ord_gap) = if ideal_total > available_h && available_h > 0.0 {
+            let scale = available_h / ideal_total;
+            (ideal_radius * scale, ideal_gap * scale)
+        } else {
+            (ideal_radius, ideal_gap)
+        };
+        let ord_base_y = self.attack_button.center_y - atk_radius - ord_gap - ord_radius;
+
+        let order_btns = [
+            &mut self.order_follow_btn,   // bottom of stack (closest to ATK)
+            &mut self.order_retreat_btn,
+            &mut self.order_go_btn,
+            &mut self.order_hold_btn,     // top of stack
+        ];
+        for (i, btn) in order_btns.into_iter().enumerate() {
+            btn.center_x = ord_x;
+            btn.center_y = ord_base_y - i as f32 * (ord_radius * 2.0 + ord_gap);
+            btn.radius = ord_radius;
+        }
+
+        // Joystick
         self.joystick.max_radius = 60.0 * dpr;
         self.joystick.dead_zone = 5.0 * dpr;
     }
@@ -399,7 +458,32 @@ impl Input {
 
     // -- Touch methods --
 
-    /// Called on touchstart. Routes to joystick or attack button.
+    /// Check if a touch hits any order button; if so, press it and set the flag.
+    fn try_order_buttons(&mut self, touch_id: i32, x: f32, y: f32) -> bool {
+        if self.order_hold_btn.contains(x, y) {
+            self.order_hold_btn.press(touch_id);
+            self.order_hold_pressed = true;
+            return true;
+        }
+        if self.order_go_btn.contains(x, y) {
+            self.order_go_btn.press(touch_id);
+            self.order_go_pressed = true;
+            return true;
+        }
+        if self.order_retreat_btn.contains(x, y) {
+            self.order_retreat_btn.press(touch_id);
+            self.order_retreat_pressed = true;
+            return true;
+        }
+        if self.order_follow_btn.contains(x, y) {
+            self.order_follow_btn.press(touch_id);
+            self.order_follow_pressed = true;
+            return true;
+        }
+        false
+    }
+
+    /// Called on touchstart. Routes to joystick, attack button, or order buttons.
     pub fn on_touch_start(&mut self, touch_id: i32, x: f32, y: f32, total_touches: u32, canvas_width: f32) {
         self.is_touch_device = true;
 
@@ -409,6 +493,10 @@ impl Input {
             if self.joystick.active || self.attack_button.pressed {
                 if !self.joystick.active && x < canvas_width * 0.4 {
                     self.joystick.activate(touch_id, x, y);
+                    self.has_used_joystick = true;
+                    return;
+                }
+                if self.try_order_buttons(touch_id, x, y) {
                     return;
                 }
                 if !self.attack_button.pressed && self.attack_button.contains(x, y) {
@@ -424,6 +512,12 @@ impl Input {
         // Left 40% of screen → joystick
         if x < canvas_width * 0.4 {
             self.joystick.activate(touch_id, x, y);
+            self.has_used_joystick = true;
+            return;
+        }
+
+        // Check order buttons first (they sit above attack button)
+        if self.try_order_buttons(touch_id, x, y) {
             return;
         }
 
@@ -431,17 +525,33 @@ impl Input {
         if self.attack_button.contains(x, y) {
             self.attack_button.press(touch_id);
             self.attack_pressed = true;
+            return;
+        }
+
+        // Right side, no button hit → camera drag
+        if self.camera_drag_id.is_none() {
+            self.camera_drag_id = Some(touch_id);
+            self.camera_drag_prev = (x, y);
         }
     }
 
-    /// Returns true if any touch control (joystick or attack button) is currently active.
+    /// Returns true if any touch control (joystick, attack, order, or camera drag) is currently active.
     pub fn has_active_control(&self) -> bool {
         self.joystick.active || self.attack_button.pressed
+            || self.order_hold_btn.pressed || self.order_go_btn.pressed
+            || self.order_retreat_btn.pressed || self.order_follow_btn.pressed
+            || self.camera_drag_id.is_some()
     }
 
     /// Called on touchmove when a single finger is active.
     pub fn on_touch_move_single(&mut self, touch_id: i32, x: f32, y: f32) {
         self.joystick.update(touch_id, x, y);
+        // Camera drag
+        if self.camera_drag_id == Some(touch_id) {
+            self.camera_drag_dx += x - self.camera_drag_prev.0;
+            self.camera_drag_dy += y - self.camera_drag_prev.1;
+            self.camera_drag_prev = (x, y);
+        }
     }
 
     /// Called on touchmove when two fingers are active.
@@ -473,6 +583,13 @@ impl Input {
 
         self.joystick.deactivate(touch_id);
         self.attack_button.release(touch_id);
+        self.order_hold_btn.release(touch_id);
+        self.order_go_btn.release(touch_id);
+        self.order_retreat_btn.release(touch_id);
+        self.order_follow_btn.release(touch_id);
+        if self.camera_drag_id == Some(touch_id) {
+            self.camera_drag_id = None;
+        }
     }
 
     /// Consume pinch zoom delta.
@@ -489,6 +606,15 @@ impl Input {
         self.touch_pan_x = 0.0;
         self.touch_pan_y = 0.0;
         (x, y)
+    }
+
+    /// Consume single-finger camera drag delta.
+    pub fn take_camera_drag(&mut self) -> (f32, f32) {
+        let dx = self.camera_drag_dx;
+        let dy = self.camera_drag_dy;
+        self.camera_drag_dx = 0.0;
+        self.camera_drag_dy = 0.0;
+        (dx, dy)
     }
 
     /// Consume attack button press.
@@ -727,10 +853,32 @@ mod tests {
     fn touch_attack_button() {
         let mut input = Input::new();
         input.update_layout(960.0, 640.0, 1.0);
-        // Touch on the attack button (center at 880, 560, radius 40)
-        input.on_touch_start(1, 880.0, 560.0, 1, 960.0);
+        // Touch on the attack button (center at 870, 550, radius 56)
+        input.on_touch_start(1, 870.0, 550.0, 1, 960.0);
         assert!(input.attack_pressed);
         assert!(input.attack_button.pressed);
+    }
+
+    #[test]
+    fn touch_order_hold_button() {
+        let mut input = Input::new();
+        input.update_layout(960.0, 640.0, 1.0);
+        // Touch the hold button (top of stack above attack)
+        let hx = input.order_hold_btn.center_x;
+        let hy = input.order_hold_btn.center_y;
+        input.on_touch_start(1, hx, hy, 1, 960.0);
+        assert!(input.take_order_hold());
+        assert!(!input.take_order_hold()); // consumed
+    }
+
+    #[test]
+    fn touch_order_go_button() {
+        let mut input = Input::new();
+        input.update_layout(960.0, 640.0, 1.0);
+        let gx = input.order_go_btn.center_x;
+        let gy = input.order_go_btn.center_y;
+        input.on_touch_start(1, gx, gy, 1, 960.0);
+        assert!(input.take_order_go());
     }
 
     #[test]

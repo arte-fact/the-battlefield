@@ -112,10 +112,23 @@ const CLIFF_WATER: [(u32, u32); 4] = [
 // ---------------------------------------------------------------------------
 
 /// Returns tilemap (col, row) for flat ground at the given grid position.
-/// "Same" = any land tile (not water).
+/// "Same" = any land tile that is not a road (not water, not road).
+/// This makes grass tiles next to roads use the bordered edge tiles,
+/// creating a natural grass-to-road transition using the same art as grass-to-water.
 pub fn flat_ground_src(grid: &Grid, x: u32, y: u32) -> (u32, u32) {
-    let mask = cardinal_mask(grid, x, y, |nx, ny| grid.get(nx, ny).is_land());
-    FLAT_GROUND[mask as usize]
+    let tile = grid.get(x, y);
+    if tile == TileKind::Road {
+        // Road tiles: "same" = other road tiles (edges where road meets non-road)
+        let mask = cardinal_mask(grid, x, y, |nx, ny| grid.get(nx, ny) == TileKind::Road);
+        FLAT_GROUND[mask as usize]
+    } else {
+        // Non-road land tiles: treat road as "not same" so edges appear next to roads
+        let mask = cardinal_mask(grid, x, y, |nx, ny| {
+            let t = grid.get(nx, ny);
+            t.is_land() && t != TileKind::Road
+        });
+        FLAT_GROUND[mask as usize]
+    }
 }
 
 /// Returns tilemap (col, row) for elevated ground top surface.
@@ -259,5 +272,38 @@ mod tests {
         grid.set_elevation(1, 0, 2);
         grid.set_elevation(1, 1, 2);
         assert!(cliff_src(&grid, 1, 0, 2).is_none());
+    }
+
+    #[test]
+    fn grass_next_to_road_gets_edge() {
+        // Road to the east of a grass tile → grass should get a right edge
+        let grid = make_grid(3, 3, &[
+            (2, 0, TileKind::Road), (2, 1, TileKind::Road), (2, 2, TileKind::Road),
+        ]);
+        // (1,1): N=grass, E=road, S=grass, W=grass → mask = N+S+W = 13 → Right edge
+        let (col, row) = flat_ground_src(&grid, 1, 1);
+        assert_eq!((col, row), (2, 1)); // Right edge
+    }
+
+    #[test]
+    fn road_tile_autotile() {
+        // Vertical road strip: road tiles see other road tiles as "same"
+        let grid = make_grid(3, 3, &[
+            (1, 0, TileKind::Road), (1, 1, TileKind::Road), (1, 2, TileKind::Road),
+        ]);
+        // (1,1): N=road, E=grass(not same), S=road, W=grass(not same) → mask = N+S = 5 → V-mid
+        let (col, row) = flat_ground_src(&grid, 1, 1);
+        assert_eq!((col, row), (3, 1)); // V-mid
+    }
+
+    #[test]
+    fn road_does_not_count_as_same_for_grass() {
+        // A grass tile surrounded by grass on 3 sides and road on 1 should NOT be center fill
+        let grid = make_grid(3, 3, &[
+            (1, 0, TileKind::Road),
+        ]);
+        // (1,1): N=road(not same), E=grass, S=grass, W=grass → mask = E+S+W = 14 → Top edge
+        let (col, row) = flat_ground_src(&grid, 1, 1);
+        assert_eq!((col, row), (1, 0)); // Top edge
     }
 }

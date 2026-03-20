@@ -67,6 +67,28 @@ impl Camera {
         let wy = self.y + (sy - self.viewport_h * 0.5) / self.zoom;
         (wx, wy)
     }
+
+    /// Calculate an ideal zoom level based on viewport dimensions.
+    /// Targets ~15 tiles visible along the shortest axis (landscape)
+    /// or ~10 tiles in portrait for a more zoomed-in mobile feel.
+    pub fn ideal_zoom(&self) -> f32 {
+        let tile = crate::grid::TILE_SIZE;
+        let short = self.viewport_w.min(self.viewport_h);
+        let target_tiles = if self.viewport_h > self.viewport_w {
+            10.0 // portrait: show fewer tiles (more zoomed in)
+        } else {
+            15.0 // landscape
+        };
+        let raw = short / (target_tiles * tile);
+        let snapped = (raw * 64.0).round() / 64.0;
+        snapped.clamp(MIN_ZOOM, MAX_ZOOM)
+    }
+
+    /// Update viewport dimensions (e.g., on resize/orientation change).
+    pub fn resize(&mut self, viewport_w: f32, viewport_h: f32) {
+        self.viewport_w = viewport_w;
+        self.viewport_h = viewport_h;
+    }
 }
 
 #[cfg(test)]
