@@ -37,8 +37,11 @@ jobs:
         run: |
           mkdir -p _site
           cp index.html _site/
+          cp manifest.json _site/
+          cp sw.js _site/
           cp -r pkg _site/pkg
           cp -r assets _site/assets
+          cp -r icons _site/icons
 
       - uses: actions/upload-pages-artifact@v3
 
