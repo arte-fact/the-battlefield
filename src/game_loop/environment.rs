@@ -130,9 +130,7 @@ pub(super) fn draw_bushes(
                     if let Some((flipped, _, _)) = loaded.bush_textures_flipped.get(variant_idx) {
                         let sheet_w = info.frame_count as f64 * fw;
                         let flipped_sx = sheet_w - sx - fw;
-                        r.draw_canvas_region(
-                            flipped, flipped_sx, 0.0, fw, fh, dx, dy, ts, ts,
-                        )?;
+                        r.draw_canvas_region(flipped, flipped_sx, 0.0, fw, fh, dx, dy, ts, ts)?;
                     }
                 } else {
                     r.draw_texture(tex_id, sx, 0.0, fw, fh, dx, dy, ts, ts)?;
@@ -172,9 +170,7 @@ pub(super) fn draw_rocks(
 
             if tile_flip(gx, gy) {
                 if let Some(flipped) = loaded.rock_textures_flipped.get(variant_idx) {
-                    r.draw_canvas_region(
-                        flipped, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts,
-                    )?;
+                    r.draw_canvas_region(flipped, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts)?;
                 }
             } else {
                 r.draw_texture(tex_id, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts)?;

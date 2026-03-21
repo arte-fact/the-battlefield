@@ -62,8 +62,7 @@ pub(super) fn compute_wave_frame(
     frame_count: u32,
     speed: f64,
 ) -> u32 {
-    let wave_pos =
-        elapsed * speed + gx as f64 * 0.06 + gy as f64 * 0.04 + (gx ^ gy) as f64 * 0.01;
+    let wave_pos = elapsed * speed + gx as f64 * 0.06 + gy as f64 * 0.04 + (gx ^ gy) as f64 * 0.01;
     if (wave_pos * std::f64::consts::TAU).sin() > 0.3 {
         ((elapsed * 10.0) as u32) % frame_count
     } else {

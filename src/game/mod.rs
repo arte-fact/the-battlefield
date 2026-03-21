@@ -21,8 +21,8 @@ use crate::unit::{
 use crate::zone::{ZoneManager, MAX_UNITS_PER_FACTION};
 use std::collections::HashSet;
 
-pub use player::ATTACK_CONE_HALF_ANGLE;
 pub use orders::ORDER_FLASH_DURATION;
+pub use player::ATTACK_CONE_HALF_ANGLE;
 
 pub struct Game {
     pub grid: Grid,

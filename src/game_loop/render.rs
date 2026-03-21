@@ -6,9 +6,7 @@ use super::hud::{
     draw_minimap, draw_overlays, draw_unit_bars, draw_victory_progress, draw_zone_hud,
     draw_zone_overlays,
 };
-use super::screens::{
-    draw_death_screen, draw_main_menu, draw_result_screen, GameScreen,
-};
+use super::screens::{draw_death_screen, draw_main_menu, draw_result_screen, GameScreen};
 use super::terrain::{render_terrain_chunk, CHUNK_TILES};
 use super::touch::draw_touch_controls;
 use super::LoopState;
@@ -107,11 +105,9 @@ pub(super) fn render_frame(
                 // Draw chunk to main canvas at its world position
                 let wx = (cx * CHUNK_TILES) as f64 * ts;
                 let wy = (cy * CHUNK_TILES) as f64 * ts;
-                state.renderer.draw_canvas(
-                    &state.terrain_chunks.canvases[ci],
-                    wx,
-                    wy,
-                )?;
+                state
+                    .renderer
+                    .draw_canvas(&state.terrain_chunks.canvases[ci], wx, wy)?;
             }
         }
     }
@@ -120,16 +116,7 @@ pub(super) fn render_frame(
     draw_zone_overlays(r, game, min_gx, min_gy, max_gx, max_gy)?;
 
     // 5. Draw overlays (player highlight, HP bars, path line, attack target)
-    draw_overlays(
-        r,
-        game,
-        min_gx,
-        min_gy,
-        max_gx,
-        max_gy,
-        ts,
-        &state.animator,
-    )?;
+    draw_overlays(r, game, min_gx, min_gy, max_gx, max_gy, ts, &state.animator)?;
 
     // 6a. Draw ground-level rocks (always behind units)
     draw_rocks(r, game, loaded, min_gx, min_gy, max_gx, max_gy)?;
@@ -176,17 +163,9 @@ pub(super) fn render_frame(
         let dy = min_gy as f64 * ts;
         let dw = sw * ts;
         let dh = sh * ts;
-        state.renderer.draw_canvas_region(
-            &state.fog_canvas,
-            sx,
-            sy,
-            sw,
-            sh,
-            dx,
-            dy,
-            dw,
-            dh,
-        )?;
+        state
+            .renderer
+            .draw_canvas_region(&state.fog_canvas, sx, sy, sw, sh, dx, dy, dw, dh)?;
     }
 
     // 9. Fill solid black outside the grid to hide background when zoomed out.
@@ -205,13 +184,7 @@ pub(super) fn render_frame(
     r.restore();
 
     // Draw zone HUD pips
-    draw_zone_hud(
-        r,
-        game,
-        canvas_w,
-        r.dpr(),
-        input.is_touch_device,
-    )?;
+    draw_zone_hud(r, game, canvas_w, r.dpr(), input.is_touch_device)?;
 
     // Draw minimap (top-left on touch to avoid joystick, bottom-left on desktop)
     draw_minimap(
@@ -238,22 +211,10 @@ pub(super) fn render_frame(
     state.overlay_buttons.clear();
     match state.screen {
         GameScreen::MainMenu => {
-            draw_main_menu(
-                r,
-                canvas_w,
-                canvas_h,
-                r.dpr(),
-                &mut state.overlay_buttons,
-            )?;
+            draw_main_menu(r, canvas_w, canvas_h, r.dpr(), &mut state.overlay_buttons)?;
         }
         GameScreen::PlayerDeath => {
-            draw_death_screen(
-                r,
-                canvas_w,
-                canvas_h,
-                r.dpr(),
-                &mut state.overlay_buttons,
-            )?;
+            draw_death_screen(r, canvas_w, canvas_h, r.dpr(), &mut state.overlay_buttons)?;
         }
         GameScreen::GameWon => {
             draw_result_screen(

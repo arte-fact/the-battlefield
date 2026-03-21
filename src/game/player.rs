@@ -133,7 +133,12 @@ impl Game {
 
     /// Find the closest alive enemy unit near a world position (for arrow impact).
     /// Returns the index of the closest enemy of the opposing faction within hit radius.
-    pub(super) fn find_unit_near(&self, x: f32, y: f32, attacker_faction: Faction) -> Option<usize> {
+    pub(super) fn find_unit_near(
+        &self,
+        x: f32,
+        y: f32,
+        attacker_faction: Faction,
+    ) -> Option<usize> {
         let hit_radius = TILE_SIZE * 0.75;
         self.units
             .iter()

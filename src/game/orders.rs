@@ -135,7 +135,13 @@ impl Game {
     }
 
     /// Go order AI: advance to target zone, fight enemies on the way.
-    pub(super) fn ai_order_go_tick(&mut self, ai_idx: usize, target_x: f32, target_y: f32, dt: f32) {
+    pub(super) fn ai_order_go_tick(
+        &mut self,
+        ai_idx: usize,
+        target_x: f32,
+        target_y: f32,
+        dt: f32,
+    ) {
         let ai_id = self.units[ai_idx].id;
 
         // Fight enemies encountered along the way
@@ -163,7 +169,13 @@ impl Game {
     }
 
     /// Retreat order AI: fall back to target, only fight in melee self-defense.
-    pub(super) fn ai_order_retreat_tick(&mut self, ai_idx: usize, target_x: f32, target_y: f32, dt: f32) {
+    pub(super) fn ai_order_retreat_tick(
+        &mut self,
+        ai_idx: usize,
+        target_x: f32,
+        target_y: f32,
+        dt: f32,
+    ) {
         let ai_id = self.units[ai_idx].id;
 
         // Only fight if enemy is in melee reach (self-defense)

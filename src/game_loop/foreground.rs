@@ -138,17 +138,7 @@ pub(super) fn draw_foreground(
             r.save();
             r.translate(proj.current_x as f64, proj.current_y as f64)?;
             r.rotate(draw_angle)?;
-            r.draw_texture(
-                arrow_tex_id,
-                0.0,
-                0.0,
-                64.0,
-                64.0,
-                -32.0,
-                -32.0,
-                64.0,
-                64.0,
-            )?;
+            r.draw_texture(arrow_tex_id, 0.0, 0.0, 64.0, 64.0, -32.0, -32.0, 64.0, 64.0)?;
             r.restore();
         }
     }
@@ -193,13 +183,12 @@ fn draw_unit(
             frame_count: unit.animation.frame_count,
         };
         // Archer idle uses wind wave pattern to sync with trees/bushes
-        let anim_frame =
-            if unit.kind == UnitKind::Archer && unit.current_anim == UnitAnim::Idle {
-                let (gx, gy) = unit.grid_cell();
-                compute_wave_frame(elapsed, gx, gy, unit.animation.frame_count, 0.15)
-            } else {
-                unit.animation.current_frame
-            };
+        let anim_frame = if unit.kind == UnitKind::Archer && unit.current_anim == UnitAnim::Idle {
+            let (gx, gy) = unit.grid_cell();
+            compute_wave_frame(elapsed, gx, gy, unit.animation.frame_count, 0.15)
+        } else {
+            unit.animation.current_frame
+        };
         let (sx, sy, sw, sh) = sheet.frame_src_rect(anim_frame);
         let sprite_size = unit.kind.frame_size() as f64;
 
@@ -288,9 +277,7 @@ fn draw_tree(
             if let Some((flipped, _, _)) = loaded.tree_textures_flipped.get(variant_idx) {
                 let sheet_w = info.frame_count as f64 * fw;
                 let flipped_sx = sheet_w - sx - fw;
-                r.draw_canvas_region(
-                    flipped, flipped_sx, 0.0, fw, fh, dx, dy, draw_w, draw_h,
-                )?;
+                r.draw_canvas_region(flipped, flipped_sx, 0.0, fw, fh, dx, dy, draw_w, draw_h)?;
             }
         } else {
             r.draw_texture(tex_id, sx, 0.0, fw, fh, dx, dy, draw_w, draw_h)?;
@@ -329,9 +316,7 @@ fn draw_water_rock(
             if let Some((flipped, _, _)) = loaded.water_rock_textures_flipped.get(variant_idx) {
                 let sheet_w = info.frame_count as f64 * fw;
                 let flipped_sx = sheet_w - sx - fw;
-                r.draw_canvas_region(
-                    flipped, flipped_sx, 0.0, fw, fh, dx, dy, ts, ts,
-                )?;
+                r.draw_canvas_region(flipped, flipped_sx, 0.0, fw, fh, dx, dy, ts, ts)?;
             }
         } else {
             r.draw_texture(tex_id, sx, 0.0, fw, fh, dx, dy, ts, ts)?;
@@ -367,9 +352,7 @@ fn draw_tower(
 
     // Pulse opacity during capturing to show in-progress
     let alpha = match zone.state {
-        ZoneState::Capturing(_) => {
-            (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0)
-        }
+        ZoneState::Capturing(_) => (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0),
         _ => 1.0,
     };
 

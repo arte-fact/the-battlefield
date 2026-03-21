@@ -50,14 +50,8 @@ impl Canvas2dRenderer {
 
     // --- Canvas-specific: offscreen canvas blitting ---
 
-    pub fn draw_canvas(
-        &self,
-        canvas: &HtmlCanvasElement,
-        x: f64,
-        y: f64,
-    ) -> Result<(), JsValue> {
-        self.ctx
-            .draw_image_with_html_canvas_element(canvas, x, y)?;
+    pub fn draw_canvas(&self, canvas: &HtmlCanvasElement, x: f64, y: f64) -> Result<(), JsValue> {
+        self.ctx.draw_image_with_html_canvas_element(canvas, x, y)?;
         Ok(())
     }
 

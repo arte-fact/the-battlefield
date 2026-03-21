@@ -267,15 +267,11 @@ pub(super) fn render_terrain_chunk(
                             )?;
                         }
 
-                        if let Some((ccol, crow)) =
-                            autotile::cliff_src(&game.grid, gx, gy, level)
-                        {
+                        if let Some((ccol, crow)) = autotile::cliff_src(&game.grid, gx, gy, level) {
                             let (csx, csy, csw, csh) = grid::tilemap_src_rect(ccol, crow);
                             let cdy = ((gy + 1) as f64) * ts - oy;
                             if tile_flip(gx, gy.wrapping_add(1000)) {
-                                draw_tile_flipped(
-                                    ctx, img, csx, csy, csw, csh, dx, cdy, ts, ts,
-                                )?;
+                                draw_tile_flipped(ctx, img, csx, csy, csw, csh, dx, cdy, ts, ts)?;
                             } else {
                                 ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
                                     img, csx, csy, csw, csh, dx, cdy, ts, ts,

@@ -3,7 +3,13 @@ use super::*;
 impl Game {
     /// Move AI unit continuously toward target using waypoint-following with A*.
     /// Pathfinding is rate-limited by ai_path_cooldown (one repath per 0.5s per unit).
-    pub(super) fn ai_move_toward_continuous(&mut self, ai_idx: usize, target_x: f32, target_y: f32, dt: f32) {
+    pub(super) fn ai_move_toward_continuous(
+        &mut self,
+        ai_idx: usize,
+        target_x: f32,
+        target_y: f32,
+        dt: f32,
+    ) {
         // Tick path cooldown
         self.units[ai_idx].ai_path_cooldown = (self.units[ai_idx].ai_path_cooldown - dt).max(0.0);
 

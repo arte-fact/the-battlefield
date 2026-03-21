@@ -290,13 +290,7 @@ pub(super) fn draw_minimap(
     // Draw pre-rendered terrain (nearest-neighbor for crisp pixels)
     r.save();
     r.set_image_smoothing(false);
-    r.draw_canvas_scaled(
-        terrain_canvas,
-        mm_x,
-        mm_y,
-        mm_size,
-        mm_size,
-    )?;
+    r.draw_canvas_scaled(terrain_canvas, mm_x, mm_y, mm_size, mm_size)?;
     r.restore();
 
     // Fog of war overlay (semi-transparent black for hidden tiles)

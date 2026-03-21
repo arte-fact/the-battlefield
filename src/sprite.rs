@@ -13,7 +13,6 @@ impl SpriteSheet {
         let sh = self.frame_height as f64;
         (sx, sy, sw, sh)
     }
-
 }
 
 pub struct AnimationState {

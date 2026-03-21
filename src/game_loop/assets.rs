@@ -154,8 +154,7 @@ pub(super) async fn load_textures(
                     filename
                 );
 
-                let tex_id =
-                    load_texture(state, &url, frame_size, frame_size, frame_count).await?;
+                let tex_id = load_texture(state, &url, frame_size, frame_size, frame_count).await?;
 
                 loaded.borrow_mut().unit_textures.insert(
                     UnitTextureKey {
@@ -293,10 +292,7 @@ pub(super) async fn load_textures(
                     kind.asset_filename()
                 );
                 let tex_id = load_texture(state, &url, sw, sh, 1).await?;
-                loaded
-                    .borrow_mut()
-                    .building_textures
-                    .push((tex_id, sw, sh));
+                loaded.borrow_mut().building_textures.push((tex_id, sw, sh));
             }
         }
     }
