@@ -303,45 +303,43 @@ impl Input {
 
     /// Update touch control positions and sizes based on canvas size and DPR.
     pub fn update_layout(&mut self, canvas_w: f32, canvas_h: f32, dpr: f32) {
-        // Attack button: larger, bottom-right with comfortable margin
+        // Attack button: bottom-right with comfortable margin
         let atk_radius = 56.0 * dpr;
         let atk_margin = 90.0 * dpr;
-        self.attack_button.center_x = canvas_w - atk_margin;
-        self.attack_button.center_y = canvas_h - atk_margin;
+        let atk_cx = canvas_w - atk_margin;
+        let atk_cy = canvas_h - atk_margin;
+        self.attack_button.center_x = atk_cx;
+        self.attack_button.center_y = atk_cy;
         self.attack_button.radius = atk_radius;
 
-        // Order buttons: vertical stack above attack button
-        // Scale down if the stack would go off-screen
-        let ord_x = self.attack_button.center_x;
-        let min_top = 10.0 * dpr; // minimum distance from top edge
-        let available_h = self.attack_button.center_y - atk_radius - min_top;
-        // 4 buttons need: 4*(2r) + 3*gap + gap_from_atk = 8r + 4gap
-        let ideal_radius = 28.0 * dpr;
-        let ideal_gap = 14.0 * dpr;
-        let ideal_total = 8.0 * ideal_radius + 4.0 * ideal_gap;
-        let (ord_radius, ord_gap) = if ideal_total > available_h && available_h > 0.0 {
-            let scale = available_h / ideal_total;
-            (ideal_radius * scale, ideal_gap * scale)
-        } else {
-            (ideal_radius, ideal_gap)
-        };
-        let ord_base_y = self.attack_button.center_y - atk_radius - ord_gap - ord_radius;
+        // Order buttons: arranged around the attack button (left, top-left, top, top-right)
+        let ord_radius = 36.0 * dpr;
+        let spacing = atk_radius + ord_radius + 12.0 * dpr;
 
-        let order_btns = [
-            &mut self.order_follow_btn, // bottom of stack (closest to ATK)
-            &mut self.order_retreat_btn,
-            &mut self.order_go_btn,
-            &mut self.order_hold_btn, // top of stack
-        ];
-        for (i, btn) in order_btns.into_iter().enumerate() {
-            btn.center_x = ord_x;
-            btn.center_y = ord_base_y - i as f32 * (ord_radius * 2.0 + ord_gap);
-            btn.radius = ord_radius;
-        }
+        // Left of ATK
+        self.order_hold_btn.center_x = atk_cx - spacing;
+        self.order_hold_btn.center_y = atk_cy;
+        self.order_hold_btn.radius = ord_radius;
 
-        // Joystick
-        self.joystick.max_radius = 60.0 * dpr;
-        self.joystick.dead_zone = 5.0 * dpr;
+        // Top-left of ATK
+        let diag = spacing * 0.707;
+        self.order_go_btn.center_x = atk_cx - diag;
+        self.order_go_btn.center_y = atk_cy - diag;
+        self.order_go_btn.radius = ord_radius;
+
+        // Top of ATK
+        self.order_retreat_btn.center_x = atk_cx;
+        self.order_retreat_btn.center_y = atk_cy - spacing;
+        self.order_retreat_btn.radius = ord_radius;
+
+        // Top-right of ATK
+        self.order_follow_btn.center_x = atk_cx + diag;
+        self.order_follow_btn.center_y = atk_cy - diag;
+        self.order_follow_btn.radius = ord_radius;
+
+        // Joystick: smaller radius for higher sensitivity
+        self.joystick.max_radius = 40.0 * dpr;
+        self.joystick.dead_zone = 4.0 * dpr;
     }
 
     pub fn key_down(&mut self, key: String) {
@@ -454,6 +452,26 @@ impl Input {
         let r = self.order_follow_pressed;
         self.order_follow_pressed = false;
         r
+    }
+
+    /// Consume a specific key press (returns true if that key was just pressed).
+    pub fn take_key(&mut self, key: &str) -> bool {
+        self.keys_down.remove(key)
+    }
+
+    /// Clear all input state (used on screen transitions).
+    pub fn clear_all(&mut self) {
+        self.keys_down.clear();
+        self.scroll_delta = 0.0;
+        self.attack_key_pressed = false;
+        self.order_hold_pressed = false;
+        self.order_go_pressed = false;
+        self.order_retreat_pressed = false;
+        self.order_follow_pressed = false;
+        self.joystick.active = false;
+        self.joystick.dx = 0.0;
+        self.joystick.dy = 0.0;
+        self.attack_button.pressed = false;
     }
 
     // -- Touch methods --

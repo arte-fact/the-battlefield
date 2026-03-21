@@ -132,14 +132,19 @@ impl Grid {
     }
 
     /// Is a circle at (wx,wy) with given radius entirely on passable terrain?
-    /// Checks center + 4 cardinal edge points.
+    /// Checks center + 4 cardinal + 4 diagonal edge points.
     pub fn is_circle_passable(&self, wx: f32, wy: f32, radius: f32) -> bool {
+        let d = radius * 0.707; // radius * cos(45°) for diagonal points
         let points = [
             (wx, wy),
             (wx + radius, wy),
             (wx - radius, wy),
             (wx, wy + radius),
             (wx, wy - radius),
+            (wx + d, wy + d),
+            (wx + d, wy - d),
+            (wx - d, wy + d),
+            (wx - d, wy - d),
         ];
         for &(px, py) in &points {
             let (gx, gy) = world_to_grid(px, py);

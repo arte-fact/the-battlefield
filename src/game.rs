@@ -389,7 +389,8 @@ impl Game {
         let speed = self.units[idx].move_speed()
             * self
                 .grid
-                .speed_factor_at(self.units[idx].x, self.units[idx].y);
+                .speed_factor_at(self.units[idx].x, self.units[idx].y)
+                .max(0.25); // never freeze a unit (e.g. edge of water)
         let vx = dir_x * speed * dt;
         let vy = dir_y * speed * dt;
 
@@ -419,8 +420,30 @@ impl Game {
         }
     }
 
+    /// Try to push a unit by (push_x, push_y). Falls back to axis-aligned sliding
+    /// if the full push hits terrain.
+    fn try_push(grid: &crate::grid::Grid, unit: &mut Unit, push_x: f32, push_y: f32) {
+        let ox = unit.x;
+        let oy = unit.y;
+        // Try full push
+        if grid.is_circle_passable(ox + push_x, oy + push_y, UNIT_RADIUS) {
+            unit.x = ox + push_x;
+            unit.y = oy + push_y;
+            return;
+        }
+        // Wall slide: try X only
+        if push_x.abs() > 0.001 && grid.is_circle_passable(ox + push_x, oy, UNIT_RADIUS) {
+            unit.x = ox + push_x;
+            return;
+        }
+        // Wall slide: try Y only
+        if push_y.abs() > 0.001 && grid.is_circle_passable(ox, oy + push_y, UNIT_RADIUS) {
+            unit.y = oy + push_y;
+        }
+    }
+
     /// Resolve circle-circle collisions between all alive units.
-    /// Only pushes a unit if the destination is passable terrain.
+    /// Uses wall-sliding so units don't get trapped in corners.
     pub fn resolve_collisions(&mut self) {
         let min_dist = UNIT_RADIUS * 2.0;
 
@@ -439,35 +462,18 @@ impl Game {
                     let overlap = (min_dist - dist) / 2.0;
                     let nx = dx / dist;
                     let ny = dy / dist;
-                    let new_ix = self.units[i].x - nx * overlap;
-                    let new_iy = self.units[i].y - ny * overlap;
-                    let new_jx = self.units[j].x + nx * overlap;
-                    let new_jy = self.units[j].y + ny * overlap;
-                    let i_ok = self.grid.is_circle_passable(new_ix, new_iy, UNIT_RADIUS);
-                    let j_ok = self.grid.is_circle_passable(new_jx, new_jy, UNIT_RADIUS);
-                    if i_ok && j_ok {
-                        self.units[i].x = new_ix;
-                        self.units[i].y = new_iy;
-                        self.units[j].x = new_jx;
-                        self.units[j].y = new_jy;
-                    } else if i_ok {
-                        // Only push i (j is against terrain)
-                        let dbl_ix = self.units[i].x - nx * overlap * 2.0;
-                        let dbl_iy = self.units[i].y - ny * overlap * 2.0;
-                        if self.grid.is_circle_passable(dbl_ix, dbl_iy, UNIT_RADIUS) {
-                            self.units[i].x = dbl_ix;
-                            self.units[i].y = dbl_iy;
-                        }
-                    } else if j_ok {
-                        // Only push j (i is against terrain)
-                        let dbl_jx = self.units[j].x + nx * overlap * 2.0;
-                        let dbl_jy = self.units[j].y + ny * overlap * 2.0;
-                        if self.grid.is_circle_passable(dbl_jx, dbl_jy, UNIT_RADIUS) {
-                            self.units[j].x = dbl_jx;
-                            self.units[j].y = dbl_jy;
-                        }
-                    }
-                    // If neither is passable, don't move either
+
+                    // Softer push between same-faction units to avoid corner-trapping
+                    let strength = if self.units[i].faction == self.units[j].faction {
+                        0.4
+                    } else {
+                        1.0
+                    };
+                    let push = overlap * strength;
+
+                    let (left, right) = self.units.split_at_mut(j);
+                    Self::try_push(&self.grid, &mut left[i], -nx * push, -ny * push);
+                    Self::try_push(&self.grid, &mut right[0], nx * push, ny * push);
                 }
             }
         }
@@ -518,14 +524,15 @@ impl Game {
     /// Try to attack the nearest enemy in range. Returns true if an attack was executed.
     /// Called explicitly from attack key/button — never auto-attacks.
     /// Player attack: hit enemies in cone if any, otherwise whiff swing.
-    pub fn player_attack(&mut self) {
+    /// Returns true if the attack hit at least one enemy.
+    pub fn player_attack(&mut self) -> bool {
         let player_idx = match self.units.iter().position(|u| u.is_player && u.alive) {
             Some(i) => i,
-            None => return,
+            None => return false,
         };
 
         if !self.units[player_idx].can_act() {
-            return;
+            return false;
         }
 
         let player_id = self.units[player_idx].id;
@@ -553,6 +560,7 @@ impl Game {
             self.units[player_idx].set_anim(UnitAnim::Attack);
             self.units[player_idx].attack_cooldown =
                 self.units[player_idx].kind.base_attack_cooldown() * 0.5;
+            false
         } else {
             for enemy_id in targets {
                 self.execute_attack(player_id, enemy_id, None);
@@ -560,6 +568,7 @@ impl Game {
                     self.apply_knockback(idx, px, py);
                 }
             }
+            true
         }
     }
 
@@ -657,10 +666,11 @@ impl Game {
     }
 
     /// Issue a player order to nearby friendly units.
-    pub fn issue_order(&mut self, order_type: &str) {
+    /// Returns the number of units that acknowledged the order.
+    pub fn issue_order(&mut self, order_type: &str) -> usize {
         let (player_x, player_y, player_faction) = match self.player_unit() {
             Some(p) => (p.x, p.y, p.faction),
-            None => return,
+            None => return 0,
         };
 
         // Collect eligible unit indices
@@ -677,6 +687,7 @@ impl Game {
             .map(|(i, _)| i)
             .collect();
 
+        let mut acknowledged = 0usize;
         for idx in eligible {
             // Dice roll: ~85% chance to follow
             #[cfg(target_arch = "wasm32")]
@@ -736,7 +747,9 @@ impl Game {
             self.units[idx].ai_waypoints.clear();
             self.units[idx].ai_waypoint_idx = 0;
             self.units[idx].ai_path_cooldown = 0.0;
+            acknowledged += 1;
         }
+        acknowledged
     }
 
     /// Hold order AI: defend current position, fight enemies within leash.
@@ -875,10 +888,13 @@ impl Game {
         };
         let (ex, ey, enemy_id, dist) = enemy;
 
-        let melee_reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
-        let melee_reach = melee_reach.max(MELEE_RANGE);
-        if self.units[ai_idx].can_act() && dist <= melee_reach {
+        let reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
+        let reach = reach.max(MELEE_RANGE);
+
+        if self.units[ai_idx].can_act() && dist <= reach {
             self.execute_attack(ai_id, enemy_id, None);
+        } else if dist <= reach {
+            // In range but on cooldown — hold position (lancers keep distance)
         } else {
             self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
         }
@@ -998,9 +1014,13 @@ impl Game {
             let gx = gx.max(0) as u32;
             let gy = gy.max(0) as u32;
 
+            // First try pathing around occupied tiles
             let path = self.grid.find_path(ax, ay, gx, gy, 40, |x, y| {
                 self.ai_occupied_cache.contains(&(x, y))
             });
+
+            // If that fails (blocked by friendlies), path ignoring them
+            let path = path.or_else(|| self.grid.find_path(ax, ay, gx, gy, 40, |_, _| false));
 
             if let Some(steps) = path {
                 self.units[ai_idx].ai_waypoints = steps
@@ -1737,6 +1757,7 @@ impl Game {
         UnitKind::Lancer,
         UnitKind::Lancer,
         UnitKind::Archer,
+        UnitKind::Archer,
         UnitKind::Monk,
     ];
 
@@ -1802,9 +1823,10 @@ impl Game {
         }
     }
 
-    pub fn setup_demo_battle(&mut self) {
+    pub fn setup_demo_battle(&mut self) -> u32 {
         let seed = (js_sys::Math::random() * u32::MAX as f64) as u32;
         self.setup_demo_battle_with_seed(seed);
+        seed
     }
 
     pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
@@ -1887,6 +1909,27 @@ impl Game {
             false,
         );
         self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Blue,
+            bx.saturating_sub(2),
+            by + 2,
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Blue,
+            bx.saturating_sub(2),
+            by.saturating_sub(2),
+            false,
+        );
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Blue,
+            bx.saturating_sub(2),
+            by,
+            false,
+        );
+        self.spawn_unit(
             UnitKind::Monk,
             Faction::Blue,
             bx.saturating_sub(2),
@@ -1958,6 +2001,15 @@ impl Game {
             false,
         );
         self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 1, ry, false);
+        self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 2, ry + 2, false);
+        self.spawn_unit(
+            UnitKind::Archer,
+            Faction::Red,
+            rx + 2,
+            ry.saturating_sub(2),
+            false,
+        );
+        self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 2, ry, false);
         self.spawn_unit(UnitKind::Monk, Faction::Red, rx + 2, ry + 1, false);
         self.spawn_unit(
             UnitKind::Monk,

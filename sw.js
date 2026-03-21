@@ -2,7 +2,7 @@
 // CACHE_NAME is updated by build.sh with a hash from the wasm binary.
 // The browser byte-diffs this file on navigation — a changed CACHE_NAME
 // triggers install → precache new assets → activate → delete old caches.
-const CACHE_NAME = 'battlefield-15357077';
+const CACHE_NAME = 'battlefield-f0c6fdfa';
 
 // Assets to precache on install (app shell)
 const PRECACHE_ASSETS = [

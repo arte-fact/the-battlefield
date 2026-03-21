@@ -17,6 +17,33 @@ use wasm_bindgen::JsCast;
 
 const ASSET_BASE: &str = "assets/Tiny Swords (Free Pack)";
 
+/// Which screen the game is currently showing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GameScreen {
+    MainMenu,
+    Playing,
+    PlayerDeath,
+    GameWon,
+    GameLost,
+}
+
+/// Action triggered by clicking an overlay button.
+#[derive(Clone, Copy)]
+enum OverlayAction {
+    Play,
+    Retry,
+    NewGame,
+}
+
+/// A clickable button on an overlay screen.
+struct OverlayButton {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    action: OverlayAction,
+}
+
 /// Deterministic pseudo-random flip based on grid position.
 /// Returns true for ~50% of tiles in a spatially uniform pattern.
 fn tile_flip(gx: u32, gy: u32) -> bool {
@@ -166,6 +193,7 @@ pub fn run(
     game: Game,
     texture_manager: TextureManager,
     canvas: &web_sys::HtmlCanvasElement,
+    initial_seed: u32,
 ) -> Result<(), JsValue> {
     let input = Rc::new(RefCell::new(Input::new()));
     let loaded_textures = Rc::new(RefCell::new(LoadedTextures::new()));
@@ -176,7 +204,15 @@ pub fn run(
     let hud = HudElements::from_document(&document);
     let hud = Rc::new(hud);
 
-    setup_input_listeners(canvas, &input)?;
+    // Shared pending click position (set by mousedown / touchstart, consumed by game loop)
+    let pending_click: Rc<RefCell<Option<(f32, f32)>>> = Rc::new(RefCell::new(None));
+
+    // Grab HUD container for show/hide toggling
+    let hud_container = document
+        .get_element_by_id("hud")
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
+
+    setup_input_listeners(canvas, &input, &pending_click)?;
 
     // Set initial touch control layout based on canvas size and DPR
     let dpr = canvas.width() as f32 / canvas.client_width().max(1) as f32;
@@ -224,6 +260,11 @@ pub fn run(
         minimap_terrain,
         last_css_w,
         last_css_h,
+        screen: GameScreen::MainMenu,
+        current_seed: initial_seed,
+        overlay_buttons: Vec::new(),
+        overlay_delay: 0.0,
+        hud_container,
     }));
 
     // Start async texture loading
@@ -283,8 +324,90 @@ pub fn run(
                 }
             }
 
-            // Process input and real-time game logic
+            // --- Overlay button click handling ---
             {
+                let click = pending_click.borrow_mut().take();
+                if let Some((cx, cy)) = click {
+                    let mut matched_action = None;
+                    for btn in &state_guard.overlay_buttons {
+                        if (cx as f64) >= btn.x
+                            && (cx as f64) <= btn.x + btn.w
+                            && (cy as f64) >= btn.y
+                            && (cy as f64) <= btn.y + btn.h
+                        {
+                            matched_action = Some(btn.action);
+                            break;
+                        }
+                    }
+                    if let Some(action) = matched_action {
+                        match action {
+                            OverlayAction::Play => {
+                                state_guard.screen = GameScreen::Playing;
+                                if let Some(ref el) = state_guard.hud_container {
+                                    let _ = el.style().set_property("display", "flex");
+                                }
+                                input.borrow_mut().clear_all();
+                            }
+                            OverlayAction::Retry => {
+                                let seed = state_guard.current_seed;
+                                let vw = state_guard.canvas2d.width as f32;
+                                let vh = state_guard.canvas2d.height as f32;
+                                restart_game(&mut state_guard, seed, vw, vh);
+                                input.borrow_mut().clear_all();
+                            }
+                            OverlayAction::NewGame => {
+                                let seed = (js_sys::Math::random() * u32::MAX as f64) as u32;
+                                let vw = state_guard.canvas2d.width as f32;
+                                let vh = state_guard.canvas2d.height as f32;
+                                restart_game(&mut state_guard, seed, vw, vh);
+                                input.borrow_mut().clear_all();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Keyboard shortcuts for menu / overlays ---
+            if state_guard.screen != GameScreen::Playing {
+                let mut inp = input.borrow_mut();
+                let enter = inp.take_key("Enter");
+                let space = inp.take_key(" ");
+                match state_guard.screen {
+                    GameScreen::MainMenu => {
+                        if enter || space {
+                            state_guard.screen = GameScreen::Playing;
+                            if let Some(ref el) = state_guard.hud_container {
+                                let _ = el.style().set_property("display", "flex");
+                            }
+                            inp.clear_all();
+                        }
+                    }
+                    GameScreen::PlayerDeath | GameScreen::GameWon | GameScreen::GameLost => {
+                        // Enter = retry same map, Space = new game
+                        if enter {
+                            let seed = state_guard.current_seed;
+                            let vw = state_guard.canvas2d.width as f32;
+                            let vh = state_guard.canvas2d.height as f32;
+                            inp.clear_all();
+                            drop(inp);
+                            restart_game(&mut state_guard, seed, vw, vh);
+                            input.borrow_mut().clear_all();
+                        } else if space {
+                            let seed = (js_sys::Math::random() * u32::MAX as f64) as u32;
+                            let vw = state_guard.canvas2d.width as f32;
+                            let vh = state_guard.canvas2d.height as f32;
+                            inp.clear_all();
+                            drop(inp);
+                            restart_game(&mut state_guard, seed, vw, vh);
+                            input.borrow_mut().clear_all();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Process input and real-time game logic (only when Playing)
+            if state_guard.screen == GameScreen::Playing {
                 let game = &mut state_guard.game;
                 let mut inp = input.borrow_mut();
 
@@ -370,37 +493,29 @@ pub fn run(
                     // Attack: keyboard (space held or pressed) or touch button
                     let attack_input =
                         inp.take_attack_key() || inp.take_attack_pressed() || attack_held;
-                    if attack_input {
-                        game.player_attack();
-                        if inp.is_touch_device {
-                            haptic(25);
-                        }
+                    if attack_input && game.player_attack() && inp.is_touch_device {
+                        haptic(25);
                     }
 
                     // Player orders: H=Hold, G=Go, R=Retreat, F=Follow
-                    if inp.take_order_hold() {
-                        game.issue_order("hold");
-                        if inp.is_touch_device {
-                            haptic(15);
-                        }
+                    if inp.take_order_hold() && game.issue_order("hold") > 0 && inp.is_touch_device
+                    {
+                        haptic(15);
                     }
-                    if inp.take_order_go() {
-                        game.issue_order("go");
-                        if inp.is_touch_device {
-                            haptic(15);
-                        }
+                    if inp.take_order_go() && game.issue_order("go") > 0 && inp.is_touch_device {
+                        haptic(15);
                     }
-                    if inp.take_order_retreat() {
-                        game.issue_order("retreat");
-                        if inp.is_touch_device {
-                            haptic(15);
-                        }
+                    if inp.take_order_retreat()
+                        && game.issue_order("retreat") > 0
+                        && inp.is_touch_device
+                    {
+                        haptic(15);
                     }
-                    if inp.take_order_follow() {
-                        game.issue_order("follow");
-                        if inp.is_touch_device {
-                            haptic(15);
-                        }
+                    if inp.take_order_follow()
+                        && game.issue_order("follow") > 0
+                        && inp.is_touch_device
+                    {
+                        haptic(15);
                     }
 
                     // Resolve circle-circle collisions
@@ -449,9 +564,44 @@ pub fn run(
             // Update game state (animations, particles, camera follow)
             state_guard.game.update(dt);
 
-            // Update HUD
-            if let Some(ref hud) = *hud.as_ref() {
-                hud.update(&state_guard.game);
+            // --- Detect state transitions ---
+            if state_guard.screen == GameScreen::Playing {
+                if let Some(winner) = state_guard.game.winner {
+                    if winner == Faction::Blue {
+                        state_guard.screen = GameScreen::GameWon;
+                    } else {
+                        state_guard.screen = GameScreen::GameLost;
+                    }
+                    state_guard.overlay_delay = 0.0;
+                    if let Some(ref el) = state_guard.hud_container {
+                        let _ = el.style().set_property("display", "none");
+                    }
+                } else if !state_guard.game.is_player_alive() {
+                    // Wait for death fade to complete + 0.5s delay
+                    let player_fade = state_guard
+                        .game
+                        .units
+                        .iter()
+                        .find(|u| u.is_player)
+                        .map(|u| u.death_fade)
+                        .unwrap_or(0.0);
+                    if player_fade <= 0.0 {
+                        state_guard.overlay_delay += dt as f32;
+                        if state_guard.overlay_delay >= 0.5 {
+                            state_guard.screen = GameScreen::PlayerDeath;
+                            if let Some(ref el) = state_guard.hud_container {
+                                let _ = el.style().set_property("display", "none");
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Update HUD (only when Playing)
+            if state_guard.screen == GameScreen::Playing {
+                if let Some(ref hud) = *hud.as_ref() {
+                    hud.update(&state_guard.game);
+                }
             }
         }
 
@@ -477,6 +627,7 @@ pub fn run(
 fn setup_input_listeners(
     canvas: &web_sys::HtmlCanvasElement,
     input: &Rc<RefCell<Input>>,
+    pending_click: &Rc<RefCell<Option<(f32, f32)>>>,
 ) -> Result<(), JsValue> {
     let window = web_sys::window().ok_or("no window")?;
 
@@ -498,6 +649,22 @@ fn setup_input_listeners(
         closure.forget();
     }
 
+    // Mousedown (for overlay button clicks)
+    {
+        let click_clone = pending_click.clone();
+        let canvas_clone = canvas.clone();
+        let closure = Closure::wrap(Box::new(move |e: web_sys::MouseEvent| {
+            let rect = canvas_clone.get_bounding_client_rect();
+            let scale_x = canvas_clone.width() as f64 / rect.width();
+            let scale_y = canvas_clone.height() as f64 / rect.height();
+            let cx = (e.client_x() as f64 - rect.left()) * scale_x;
+            let cy = (e.client_y() as f64 - rect.top()) * scale_y;
+            *click_clone.borrow_mut() = Some((cx as f32, cy as f32));
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("mousedown", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
     // Mouse wheel (zoom)
     {
         let input_clone = input.clone();
@@ -514,6 +681,7 @@ fn setup_input_listeners(
     {
         let input_clone = input.clone();
         let canvas_clone = canvas.clone();
+        let click_clone = pending_click.clone();
         let closure = Closure::wrap(Box::new(move |e: web_sys::TouchEvent| {
             e.prevent_default();
             let touches = e.touches();
@@ -522,6 +690,10 @@ fn setup_input_listeners(
                 let t = e.changed_touches().get(0).unwrap();
                 let (cx, cy) = canvas_touch_coords(&canvas_clone, &t);
                 let canvas_w = canvas_clone.width() as f32;
+                // Also set pending click for overlay button handling
+                if count == 1 {
+                    *click_clone.borrow_mut() = Some((cx, cy));
+                }
                 input_clone
                     .borrow_mut()
                     .on_touch_start(t.identifier(), cx, cy, count, canvas_w);
@@ -1197,14 +1369,59 @@ fn render_frame(
         input.is_touch_device,
     )?;
 
-    // Draw victory progress bar (when a faction holds all zones)
-    draw_victory_progress(ctx, game, canvas_w, canvas_h, state.canvas2d.dpr)?;
+    // Draw victory progress bar (only during gameplay)
+    if state.screen == GameScreen::Playing {
+        draw_victory_progress(ctx, game, canvas_w, canvas_h, state.canvas2d.dpr)?;
+    }
 
-    // Draw victory overlay (when a faction has won)
-    draw_victory_overlay(ctx, game, canvas_w, canvas_h, state.canvas2d.dpr)?;
+    // Draw touch controls (only during gameplay)
+    if state.screen == GameScreen::Playing {
+        draw_touch_controls(ctx, input, canvas_h, state.canvas2d.dpr)?;
+    }
 
-    // Draw touch controls in screen space (after camera transform is restored)
-    draw_touch_controls(ctx, input, canvas_h, state.canvas2d.dpr)?;
+    // Draw overlay screens (menu, death, win, lose)
+    state.overlay_buttons.clear();
+    match state.screen {
+        GameScreen::MainMenu => {
+            draw_main_menu(
+                ctx,
+                canvas_w,
+                canvas_h,
+                state.canvas2d.dpr,
+                &mut state.overlay_buttons,
+            )?;
+        }
+        GameScreen::PlayerDeath => {
+            draw_death_screen(
+                ctx,
+                canvas_w,
+                canvas_h,
+                state.canvas2d.dpr,
+                &mut state.overlay_buttons,
+            )?;
+        }
+        GameScreen::GameWon => {
+            draw_result_screen(
+                ctx,
+                canvas_w,
+                canvas_h,
+                state.canvas2d.dpr,
+                true,
+                &mut state.overlay_buttons,
+            )?;
+        }
+        GameScreen::GameLost => {
+            draw_result_screen(
+                ctx,
+                canvas_w,
+                canvas_h,
+                state.canvas2d.dpr,
+                false,
+                &mut state.overlay_buttons,
+            )?;
+        }
+        GameScreen::Playing => {}
+    }
 
     Ok(())
 }
@@ -2023,57 +2240,292 @@ fn draw_victory_progress(
     Ok(())
 }
 
-/// Draw victory overlay when a faction has won.
-fn draw_victory_overlay(
+/// Draw a rounded-rect overlay button and register it for hit testing.
+fn draw_overlay_button(
     ctx: &web_sys::CanvasRenderingContext2d,
-    game: &Game,
+    label: &str,
+    cx: f64,
+    cy: f64,
+    dpr: f64,
+    fill_color: &str,
+    action: OverlayAction,
+    buttons: &mut Vec<OverlayButton>,
+) -> Result<(), JsValue> {
+    let btn_w = 200.0 * dpr;
+    let btn_h = 50.0 * dpr;
+    let btn_x = cx - btn_w / 2.0;
+    let btn_y = cy - btn_h / 2.0;
+    let r = 10.0 * dpr;
+
+    // Button background
+    ctx.set_fill_style_str(fill_color);
+    ctx.begin_path();
+    // Rounded rect using arc_to
+    ctx.move_to(btn_x + r, btn_y);
+    ctx.arc_to(btn_x + btn_w, btn_y, btn_x + btn_w, btn_y + btn_h, r)?;
+    ctx.arc_to(btn_x + btn_w, btn_y + btn_h, btn_x, btn_y + btn_h, r)?;
+    ctx.arc_to(btn_x, btn_y + btn_h, btn_x, btn_y, r)?;
+    ctx.arc_to(btn_x, btn_y, btn_x + btn_w, btn_y, r)?;
+    ctx.close_path();
+    ctx.fill();
+
+    // Border
+    ctx.set_stroke_style_str("rgba(255, 255, 255, 0.4)");
+    ctx.set_line_width(2.0 * dpr);
+    ctx.stroke();
+
+    // Label
+    let font_size = 20.0 * dpr;
+    ctx.set_font(&format!("bold {font_size}px sans-serif"));
+    ctx.set_fill_style_str("white");
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+    ctx.fill_text(label, cx, cy)?;
+
+    buttons.push(OverlayButton {
+        x: btn_x,
+        y: btn_y,
+        w: btn_w,
+        h: btn_h,
+        action,
+    });
+
+    Ok(())
+}
+
+/// Draw the main menu screen.
+fn draw_main_menu(
+    ctx: &web_sys::CanvasRenderingContext2d,
     canvas_w: f64,
     canvas_h: f64,
     dpr: f64,
+    buttons: &mut Vec<OverlayButton>,
 ) -> Result<(), JsValue> {
-    let faction = match game.winner {
-        Some(f) => f,
-        None => return Ok(()),
-    };
-
-    // Semi-transparent overlay
-    ctx.set_fill_style_str("rgba(0, 0, 0, 0.5)");
+    // Dark overlay
+    ctx.set_fill_style_str("rgba(0, 0, 0, 0.75)");
     ctx.fill_rect(0.0, 0.0, canvas_w, canvas_h);
 
-    // Victory text
-    let big_font = 48.0 * dpr;
-    let small_font = 20.0 * dpr;
+    let cx = canvas_w / 2.0;
+    let cy = canvas_h / 2.0;
+
+    // Title
+    let title_font = 52.0 * dpr;
+    ctx.set_font(&format!("bold {title_font}px sans-serif"));
     ctx.set_text_align("center");
     ctx.set_text_baseline("middle");
 
-    let (title, color) = match faction {
-        Faction::Blue => ("BLUE VICTORY", "rgba(70, 150, 255, 1.0)"),
-        _ => ("RED VICTORY", "rgba(255, 80, 80, 1.0)"),
-    };
-
     // Shadow
-    ctx.set_font(&format!("bold {big_font}px sans-serif"));
     ctx.set_fill_style_str("rgba(0, 0, 0, 0.7)");
     ctx.fill_text(
-        title,
-        canvas_w / 2.0 + 2.0 * dpr,
-        canvas_h / 2.0 + 2.0 * dpr,
+        "THE BATTLEFIELD",
+        cx + 3.0 * dpr,
+        cy - 80.0 * dpr + 3.0 * dpr,
     )?;
 
-    // Title
-    ctx.set_fill_style_str(color);
-    ctx.fill_text(title, canvas_w / 2.0, canvas_h / 2.0)?;
+    // Gold title
+    ctx.set_fill_style_str("#ffd700");
+    ctx.fill_text("THE BATTLEFIELD", cx, cy - 80.0 * dpr)?;
 
-    // Subtitle
-    ctx.set_font(&format!("{small_font}px sans-serif"));
-    ctx.set_fill_style_str("rgba(255, 255, 255, 0.8)");
+    // Play button
+    draw_overlay_button(
+        ctx,
+        "PLAY",
+        cx,
+        cy + 20.0 * dpr,
+        dpr,
+        "rgba(70, 150, 70, 0.85)",
+        OverlayAction::Play,
+        buttons,
+    )?;
+
+    // Controls hint
+    let hint_font = 13.0 * dpr;
+    ctx.set_font(&format!("{hint_font}px monospace"));
+    ctx.set_fill_style_str("rgba(255, 255, 255, 0.5)");
     ctx.fill_text(
-        "All capture zones held for 2 minutes",
-        canvas_w / 2.0,
-        canvas_h / 2.0 + big_font * 0.8,
+        "WASD move \u{2022} SPACE attack \u{2022} H/G/R/F orders",
+        cx,
+        cy + 90.0 * dpr,
+    )?;
+    ctx.fill_text("Enter / Space to start", cx, cy + 110.0 * dpr)?;
+
+    Ok(())
+}
+
+/// Draw the "YOU DIED" screen with red tint.
+fn draw_death_screen(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    canvas_w: f64,
+    canvas_h: f64,
+    dpr: f64,
+    buttons: &mut Vec<OverlayButton>,
+) -> Result<(), JsValue> {
+    // Red-tinted overlay
+    ctx.set_fill_style_str("rgba(80, 0, 0, 0.6)");
+    ctx.fill_rect(0.0, 0.0, canvas_w, canvas_h);
+
+    let cx = canvas_w / 2.0;
+    let cy = canvas_h / 2.0;
+
+    // Title
+    let title_font = 56.0 * dpr;
+    ctx.set_font(&format!("bold {title_font}px sans-serif"));
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+
+    ctx.set_fill_style_str("rgba(0, 0, 0, 0.7)");
+    ctx.fill_text("YOU DIED", cx + 3.0 * dpr, cy - 70.0 * dpr + 3.0 * dpr)?;
+
+    ctx.set_fill_style_str("#cc2222");
+    ctx.fill_text("YOU DIED", cx, cy - 70.0 * dpr)?;
+
+    // Buttons
+    let btn_y = cy + 20.0 * dpr;
+    let gap = 120.0 * dpr;
+    draw_overlay_button(
+        ctx,
+        "RETRY",
+        cx - gap / 2.0,
+        btn_y,
+        dpr,
+        "rgba(180, 80, 40, 0.85)",
+        OverlayAction::Retry,
+        buttons,
+    )?;
+    draw_overlay_button(
+        ctx,
+        "NEW GAME",
+        cx + gap / 2.0,
+        btn_y,
+        dpr,
+        "rgba(60, 120, 180, 0.85)",
+        OverlayAction::NewGame,
+        buttons,
+    )?;
+
+    // Hint
+    let hint_font = 12.0 * dpr;
+    ctx.set_font(&format!("{hint_font}px monospace"));
+    ctx.set_fill_style_str("rgba(255, 255, 255, 0.4)");
+    ctx.fill_text(
+        "Enter = Retry \u{2022} Space = New Game",
+        cx,
+        btn_y + 45.0 * dpr,
     )?;
 
     Ok(())
+}
+
+/// Draw the victory / defeat result screen.
+fn draw_result_screen(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    canvas_w: f64,
+    canvas_h: f64,
+    dpr: f64,
+    is_victory: bool,
+    buttons: &mut Vec<OverlayButton>,
+) -> Result<(), JsValue> {
+    // Overlay tint
+    if is_victory {
+        ctx.set_fill_style_str("rgba(0, 30, 60, 0.6)");
+    } else {
+        ctx.set_fill_style_str("rgba(40, 0, 0, 0.6)");
+    }
+    ctx.fill_rect(0.0, 0.0, canvas_w, canvas_h);
+
+    let cx = canvas_w / 2.0;
+    let cy = canvas_h / 2.0;
+
+    // Title
+    let title_font = 52.0 * dpr;
+    ctx.set_font(&format!("bold {title_font}px sans-serif"));
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+
+    let (title, color) = if is_victory {
+        ("VICTORY", "#4ea8ff")
+    } else {
+        ("DEFEAT", "#ff5555")
+    };
+
+    ctx.set_fill_style_str("rgba(0, 0, 0, 0.7)");
+    ctx.fill_text(title, cx + 3.0 * dpr, cy - 80.0 * dpr + 3.0 * dpr)?;
+    ctx.set_fill_style_str(color);
+    ctx.fill_text(title, cx, cy - 80.0 * dpr)?;
+
+    // Subtitle
+    let sub_font = 18.0 * dpr;
+    ctx.set_font(&format!("{sub_font}px sans-serif"));
+    ctx.set_fill_style_str("rgba(255, 255, 255, 0.7)");
+    let subtitle = if is_victory {
+        "All capture zones held for 2 minutes"
+    } else {
+        "The enemy holds all capture zones"
+    };
+    ctx.fill_text(subtitle, cx, cy - 40.0 * dpr)?;
+
+    // Buttons
+    let btn_y = cy + 30.0 * dpr;
+    let gap = 120.0 * dpr;
+    let retry_label = if is_victory { "REPLAY" } else { "RETRY" };
+    draw_overlay_button(
+        ctx,
+        retry_label,
+        cx - gap / 2.0,
+        btn_y,
+        dpr,
+        "rgba(180, 130, 40, 0.85)",
+        OverlayAction::Retry,
+        buttons,
+    )?;
+    draw_overlay_button(
+        ctx,
+        "NEW GAME",
+        cx + gap / 2.0,
+        btn_y,
+        dpr,
+        "rgba(60, 120, 180, 0.85)",
+        OverlayAction::NewGame,
+        buttons,
+    )?;
+
+    // Hint
+    let hint_font = 12.0 * dpr;
+    ctx.set_font(&format!("{hint_font}px monospace"));
+    ctx.set_fill_style_str("rgba(255, 255, 255, 0.4)");
+    ctx.fill_text(
+        &format!("Enter = {} \u{2022} Space = New Game", retry_label),
+        cx,
+        btn_y + 45.0 * dpr,
+    )?;
+
+    Ok(())
+}
+
+/// Reset the game state for retry / new game.
+fn restart_game(state: &mut LoopState, seed: u32, viewport_w: f32, viewport_h: f32) {
+    state.game = Game::new(viewport_w, viewport_h);
+    state.game.setup_demo_battle_with_seed(seed);
+    state.current_seed = seed;
+    state.terrain_dirty = true;
+    state.animator = TurnAnimator::new();
+    state.overlay_delay = 0.0;
+    state.overlay_buttons.clear();
+    state.screen = GameScreen::Playing;
+
+    // Re-create fog canvas to match new grid dimensions
+    state.fog_canvas.set_width(state.game.grid.width);
+    state.fog_canvas.set_height(state.game.grid.height);
+
+    // Re-render minimap terrain
+    state.minimap_terrain.set_width(state.game.grid.width);
+    state.minimap_terrain.set_height(state.game.grid.height);
+    let _ = render_minimap_terrain(&state.minimap_terrain, &state.game);
+
+    // Show HUD
+    if let Some(ref el) = state.hud_container {
+        let _ = el.style().set_property("display", "flex");
+    }
 }
 
 /// Draw a circular touch button with label.
@@ -2261,9 +2713,14 @@ fn draw_bushes(
                 let fw = frame_w as f64;
                 let fh = frame_h as f64;
 
-                // Animated frame (6 FPS, diagonal wave across map)
-                let wave = (gx as f64 * 0.4 + gy as f64 * 0.3) + (gx ^ gy) as f64 * 0.15;
-                let frame = ((elapsed * 6.0 + wave) as u32) % frame_count;
+                // Sine wave gate: 10 FPS when wave passes, frame 0 otherwise
+                let wave_pos =
+                    elapsed * 0.15 + gx as f64 * 0.06 + gy as f64 * 0.04 + (gx ^ gy) as f64 * 0.01;
+                let frame = if (wave_pos * std::f64::consts::TAU).sin() > 0.3 {
+                    ((elapsed * 10.0) as u32) % frame_count
+                } else {
+                    0
+                };
                 let sx = frame as f64 * fw;
 
                 let dx = (gx as f64) * ts;
@@ -2459,8 +2916,15 @@ fn draw_foreground(
                     let anim_frame =
                         if unit.kind == UnitKind::Archer && unit.current_anim == UnitAnim::Idle {
                             let (gx, gy) = unit.grid_cell();
-                            let wave = gx as f64 * 0.4 + gy as f64 * 0.3 + (gx ^ gy) as f64 * 0.15;
-                            ((elapsed * 6.0 + wave) as u32) % unit.animation.frame_count
+                            let wave_pos = elapsed * 0.15
+                                + gx as f64 * 0.06
+                                + gy as f64 * 0.04
+                                + (gx ^ gy) as f64 * 0.01;
+                            if (wave_pos * std::f64::consts::TAU).sin() > 0.3 {
+                                ((elapsed * 10.0) as u32) % unit.animation.frame_count
+                            } else {
+                                0
+                            }
                         } else {
                             unit.animation.current_frame
                         };
@@ -2504,9 +2968,16 @@ fn draw_foreground(
                     let fw = frame_w as f64;
                     let fh = frame_h as f64;
 
-                    // Animated frame (6 FPS, diagonal wave across map)
-                    let wave = (*gx as f64 * 0.4 + *gy as f64 * 0.3) + (*gx ^ *gy) as f64 * 0.15;
-                    let frame = ((elapsed * 6.0 + wave) as u32) % frame_count;
+                    // Sine wave gate: 10 FPS when wave passes, frame 0 otherwise
+                    let wave_pos = elapsed * 0.15
+                        + *gx as f64 * 0.06
+                        + *gy as f64 * 0.04
+                        + (*gx ^ *gy) as f64 * 0.01;
+                    let frame = if (wave_pos * std::f64::consts::TAU).sin() > 0.3 {
+                        ((elapsed * 10.0) as u32) % frame_count
+                    } else {
+                        0
+                    };
                     let sx = frame as f64 * fw;
 
                     let draw_w = ts * 3.0;
@@ -2571,9 +3042,16 @@ fn draw_foreground(
                     let fw = frame_w as f64;
                     let fh = frame_h as f64;
 
-                    // Animated frame (8 FPS, diagonal wave across map)
-                    let wave = (*gx as f64 * 0.4 + *gy as f64 * 0.3) + (*gx ^ *gy) as f64 * 0.15;
-                    let frame = ((elapsed * 8.0 + wave) as u32) % frame_count;
+                    // Sine wave gate: 10 FPS when wave passes, frame 0 otherwise
+                    let wave_pos = elapsed * 0.2
+                        + *gx as f64 * 0.06
+                        + *gy as f64 * 0.04
+                        + (*gx ^ *gy) as f64 * 0.01;
+                    let frame = if (wave_pos * std::f64::consts::TAU).sin() > 0.3 {
+                        ((elapsed * 10.0) as u32) % frame_count
+                    } else {
+                        0
+                    };
                     let sx = frame as f64 * fw;
 
                     let dx = (*gx as f64) * ts;
@@ -2875,4 +3353,14 @@ struct LoopState {
     /// Last known CSS size for resize detection.
     last_css_w: u32,
     last_css_h: u32,
+    /// Current game screen / state machine node.
+    screen: GameScreen,
+    /// Seed used to generate the current map (for retry).
+    current_seed: u32,
+    /// Clickable buttons populated by overlay draw functions each frame.
+    overlay_buttons: Vec<OverlayButton>,
+    /// Delay timer before showing death/end overlays (lets effects finish).
+    overlay_delay: f32,
+    /// Cached HUD container element for show/hide toggling.
+    hud_container: Option<web_sys::HtmlElement>,
 }

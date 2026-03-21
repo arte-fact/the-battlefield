@@ -9,7 +9,7 @@ pub const BASE_CAPTURE_TIME: f32 = 8.0;
 const MAX_CAPTURE_MULTIPLIER: f32 = 3.0;
 
 /// Hard cap on total units per faction to avoid performance issues.
-pub const MAX_UNITS_PER_FACTION: usize = 25;
+pub const MAX_UNITS_PER_FACTION: usize = 35;
 
 /// Capture zone radius in tiles (Euclidean distance).
 pub const ZONE_RADIUS: u32 = 4;

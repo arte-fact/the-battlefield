@@ -103,39 +103,11 @@
             white-space: pre-wrap;
             word-break: break-word;
         }
-        /* Rotate prompt for portrait mobile in browser (non-installed) */
-        #rotate-prompt {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: #1a1a2e;
-            color: #e0e0e0;
-            z-index: 200;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 16px;
-            font-size: 1.2rem;
-            text-align: center;
-            padding: 20px;
-        }
-        #rotate-prompt .rotate-icon {
-            font-size: 3rem;
-        }
-        @media (orientation: portrait) {
-            #rotate-prompt { display: flex; }
-            #game-canvas, #hud { display: none; }
-        }
-        /* In fullscreen/standalone PWA, the manifest handles orientation — hide prompt */
-        @media (display-mode: fullscreen), (display-mode: standalone) {
-            #rotate-prompt { display: none !important; }
-            #game-canvas, #hud { display: block !important; }
-        }
     </style>
 </head>
 <body>
     <canvas id="game-canvas" width="960" height="640"></canvas>
-    <div id="hud">
+    <div id="hud" style="display:none">
         <div id="turn-display">Turn 1</div>
         <div id="hp-container">
             <span id="hp-label">HP</span>
@@ -144,12 +116,6 @@
     </div>
     <div id="loading">Loading...</div>
     <div id="error-overlay"></div>
-    <div id="rotate-prompt">
-        <div class="rotate-icon">&#x1F4F1;&#x21BB;</div>
-        <div>Rotate your device to landscape</div>
-        <div style="font-size: 0.8rem; color: #888;">or install the app for the best experience</div>
-    </div>
-
     <script type="module">
         import init from './pkg/the_battlefield.js';
 
@@ -158,46 +124,29 @@
             navigator.serviceWorker.register('/sw.js').catch(() => {});
         }
 
-        // Request fullscreen + lock orientation on first touch (mobile browsers require user gesture)
-        function requestFullscreenLandscape() {
+        // Request fullscreen on first touch (mobile browsers require user gesture)
+        function requestFullscreen() {
             const el = document.documentElement;
             const rfs = el.requestFullscreen
                 || el.webkitRequestFullscreen
                 || el.mozRequestFullScreen
                 || el.msRequestFullscreen;
             if (rfs) {
-                rfs.call(el).then(() => {
-                    if (screen.orientation && screen.orientation.lock) {
-                        screen.orientation.lock('landscape').catch(() => {});
-                    }
-                }).catch(() => {});
+                rfs.call(el).catch(() => {});
             }
         }
 
-        // On first touch, always go fullscreen + landscape
-        // (manifest "fullscreen" often falls back to "standalone" which keeps status bar)
+        // On first touch, go fullscreen
         document.addEventListener('touchstart', function onFirstTouch() {
             if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-                requestFullscreenLandscape();
+                requestFullscreen();
             }
         }, { once: true });
-
-        // Lock orientation whenever entering fullscreen
-        document.addEventListener('fullscreenchange', () => {
-            if (document.fullscreenElement && screen.orientation && screen.orientation.lock) {
-                screen.orientation.lock('landscape').catch(() => {});
-            }
-        });
-        document.addEventListener('webkitfullscreenchange', () => {
-            if (document.webkitFullscreenElement && screen.orientation && screen.orientation.lock) {
-                screen.orientation.lock('landscape').catch(() => {});
-            }
-        });
 
         // Re-request fullscreen on next touch if user exited it
         document.addEventListener('touchstart', () => {
             if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-                requestFullscreenLandscape();
+                requestFullscreen();
             }
         });
 

@@ -52,11 +52,11 @@ pub async fn start() -> Result<(), JsValue> {
     let canvas2d = renderer::Canvas2d::new(&canvas, dpr as f64)?;
 
     let mut game_state = game::Game::new(canvas_w as f32, canvas_h as f32);
-    game_state.setup_demo_battle();
+    let initial_seed = game_state.setup_demo_battle();
 
     let texture_manager = renderer::TextureManager::new();
 
-    game_loop::run(canvas2d, game_state, texture_manager, &canvas)?;
+    game_loop::run(canvas2d, game_state, texture_manager, &canvas, initial_seed)?;
 
     Ok(())
 }
