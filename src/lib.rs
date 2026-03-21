@@ -10,7 +10,6 @@ pub mod input;
 pub mod mapgen;
 pub mod particle;
 pub mod sprite;
-pub mod turn;
 pub mod unit;
 pub mod zone;
 
@@ -49,14 +48,12 @@ pub async fn start() -> Result<(), JsValue> {
     canvas.set_width(canvas_w);
     canvas.set_height(canvas_h);
 
-    let canvas2d = renderer::Canvas2d::new(&canvas, dpr as f64)?;
+    let renderer = renderer::Canvas2dRenderer::new(&canvas, dpr as f64)?;
 
     let mut game_state = game::Game::new(canvas_w as f32, canvas_h as f32);
     let initial_seed = game_state.setup_demo_battle();
 
-    let texture_manager = renderer::TextureManager::new();
-
-    game_loop::run(canvas2d, game_state, texture_manager, &canvas, initial_seed)?;
+    game_loop::run(renderer, game_state, &canvas, initial_seed)?;
 
     Ok(())
 }

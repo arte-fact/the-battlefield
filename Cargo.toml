@@ -34,6 +34,7 @@ web-sys = { version = "0.3", features = [
     "DomRect",
     "ImageData",
     "Navigator",
+    "TextMetrics",
 ] }
 js-sys = "0.3"
 log = "0.4"

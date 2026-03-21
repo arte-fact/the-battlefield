@@ -14,13 +14,6 @@ impl SpriteSheet {
         (sx, sy, sw, sh)
     }
 
-    /// Returns normalized UV coordinates [u_start, v_start, u_end, v_end] for a frame.
-    /// Kept for compatibility with any code that uses UV coords.
-    pub fn frame_uv(&self, frame_index: u32, image_width: u32) -> [f32; 4] {
-        let u_start = (frame_index * self.frame_width) as f32 / image_width as f32;
-        let u_end = ((frame_index + 1) * self.frame_width) as f32 / image_width as f32;
-        [u_start, 0.0, u_end, 1.0]
-    }
 }
 
 pub struct AnimationState {

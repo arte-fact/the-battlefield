@@ -1,15 +1,20 @@
 {
+  "id": "/",
   "name": "The Battlefield",
   "short_name": "Battlefield",
-  "description": "Real-time tactical battlefield game",
-  "start_url": "/index.html",
-  "scope": "/",
+  "description": "Real-time tactical battlefield game — command warriors, archers, lancers and monks in strategic combat.",
+  "start_url": ".",
+  "scope": ".",
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],
   "orientation": "any",
   "theme_color": "#1a1a2e",
   "background_color": "#1a1a2e",
-  "categories": ["games"],
+  "categories": ["games", "entertainment"],
+  "prefer_related_applications": false,
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
   "icons": [
     {
       "src": "icons/icon-192.png",

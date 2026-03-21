@@ -6,23 +6,28 @@ const CACHE_NAME = 'battlefield-f0c6fdfa';
 
 // Assets to precache on install (app shell)
 const PRECACHE_ASSETS = [
-  '/index.html',
-  '/manifest.json',
-  '/pkg/the_battlefield.js',
-  '/pkg/the_battlefield_bg.wasm',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
+  './',
+  './index.html',
+  './manifest.json',
+  './pkg/the_battlefield.js',
+  './pkg/the_battlefield_bg.wasm',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/icon-maskable-192.png',
+  './icons/icon-maskable-512.png',
 ];
 
 // Install: precache shell assets into the new versioned cache
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_ASSETS))
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(PRECACHE_ASSETS))
+      .catch((err) => console.warn('SW precache failed:', err))
   );
   self.skipWaiting();
 });
 
-// Activate: delete all caches except the current version
+// Activate: delete all caches except the current version, claim clients
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
@@ -43,7 +48,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Game asset files (sprites, textures): cache-first for speed
-  if (url.pathname.startsWith('/assets/')) {
+  if (url.pathname.includes('/assets/')) {
     event.respondWith(
       caches.match(event.request).then((cached) => {
         if (cached) return cached;

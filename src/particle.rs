@@ -4,7 +4,6 @@ use crate::unit::Faction;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParticleKind {
     Dust,
-    ExplosionSmall,
     ExplosionLarge,
 }
 
@@ -12,7 +11,6 @@ impl ParticleKind {
     pub fn frame_count(self) -> u32 {
         match self {
             ParticleKind::Dust => 8,
-            ParticleKind::ExplosionSmall => 8,
             ParticleKind::ExplosionLarge => 10,
         }
     }
@@ -20,14 +18,13 @@ impl ParticleKind {
     pub fn frame_size(self) -> u32 {
         match self {
             ParticleKind::Dust => 64,
-            ParticleKind::ExplosionSmall | ParticleKind::ExplosionLarge => 192,
+            ParticleKind::ExplosionLarge => 192,
         }
     }
 
     pub fn asset_filename(self) -> &'static str {
         match self {
             ParticleKind::Dust => "Dust_01.png",
-            ParticleKind::ExplosionSmall => "Explosion_01.png",
             ParticleKind::ExplosionLarge => "Explosion_02.png",
         }
     }

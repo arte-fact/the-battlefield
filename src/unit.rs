@@ -11,9 +11,6 @@ pub const MELEE_RANGE: f32 = TILE_SIZE * 1.5;
 pub enum Faction {
     Blue,
     Red,
-    Purple,
-    Yellow,
-    Black,
 }
 
 impl Faction {
@@ -21,9 +18,6 @@ impl Faction {
         match self {
             Faction::Blue => "Blue Units",
             Faction::Red => "Red Units",
-            Faction::Purple => "Purple Units",
-            Faction::Yellow => "Yellow Units",
-            Faction::Black => "Black Units",
         }
     }
 }
@@ -165,8 +159,6 @@ pub struct Unit {
     pub animation: AnimationState,
     pub is_player: bool,
     pub alive: bool,
-    /// Whether this unit has attacked (legacy compat for turn-based tests).
-    pub has_attacked: bool,
     /// Remaining seconds of death fade-out (0.0 = not dying or fully faded).
     pub death_fade: f32,
     /// Real-time attack cooldown (0.0 = ready to attack).
@@ -213,7 +205,6 @@ impl Unit {
             animation: AnimationState::new(kind.idle_frames(), 10.0),
             is_player,
             alive: true,
-            has_attacked: false,
             death_fade: 0.0,
             attack_cooldown: 0.0,
             ai_waypoints: Vec::new(),
@@ -247,12 +238,6 @@ impl Unit {
             };
             self.animation = AnimationState::new(frames, fps);
         }
-    }
-
-    /// Legacy turn reset (for test compat).
-    pub fn reset_turn(&mut self) {
-        self.has_attacked = false;
-        self.set_anim(UnitAnim::Idle);
     }
 
     /// Whether this unit is ready to act/attack (alive and attack cooldown expired).
@@ -340,14 +325,6 @@ mod tests {
         let c = Unit::new(3, UnitKind::Warrior, Faction::Red, 6, 5, false);
         let dist = a.distance_to_unit(&c);
         assert!((dist - TILE_SIZE).abs() < 1.0); // one tile apart
-    }
-
-    #[test]
-    fn reset_turn() {
-        let mut unit = Unit::new(1, UnitKind::Warrior, Faction::Blue, 0, 0, false);
-        unit.has_attacked = true;
-        unit.reset_turn();
-        assert!(!unit.has_attacked);
     }
 
     #[test]

@@ -36,11 +36,6 @@ pub enum TurnEvent {
     },
 }
 
-/// Easing: deceleration curve.
-pub fn ease_out_quad(t: f32) -> f32 {
-    1.0 - (1.0 - t) * (1.0 - t)
-}
-
 pub enum AnimPhase {
     MeleeAttack {
         attacker_id: UnitId,
@@ -367,22 +362,6 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
-    }
-
-    #[test]
-    fn ease_out_quad_boundaries() {
-        assert!((ease_out_quad(0.0)).abs() < f32::EPSILON);
-        assert!((ease_out_quad(1.0) - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn ease_out_quad_midpoint() {
-        let mid = ease_out_quad(0.5);
-        assert!(
-            mid > 0.5,
-            "ease_out should be > linear at midpoint, got {mid}"
-        );
-        assert!((mid - 0.75).abs() < f32::EPSILON);
     }
 
     #[test]

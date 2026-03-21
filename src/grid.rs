@@ -121,16 +121,6 @@ impl Grid {
         self.decorations[(y * self.width + x) as usize] = dec;
     }
 
-    /// Combined movement cost: base tile cost + 1 per elevation level climbed.
-    pub fn effective_movement_cost(&self, x: u32, y: u32) -> Option<u32> {
-        self.get(x, y).movement_cost()
-    }
-
-    /// Elevation contributes to defense: each level gives +1 defense.
-    pub fn elevation_defense_bonus(&self, x: u32, y: u32) -> i32 {
-        self.elevation(x, y) as i32
-    }
-
     /// Is a circle at (wx,wy) with given radius entirely on passable terrain?
     /// Checks center + 4 cardinal + 4 diagonal edge points.
     pub fn is_circle_passable(&self, wx: f32, wy: f32, radius: f32) -> bool {
@@ -420,14 +410,6 @@ mod tests {
         grid.set_elevation(10, 20, 2);
         assert_eq!(grid.elevation(10, 20), 2);
         assert_eq!(grid.elevation(10, 19), 0);
-    }
-
-    #[test]
-    fn elevation_defense_bonus() {
-        let mut grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
-        assert_eq!(grid.elevation_defense_bonus(5, 5), 0);
-        grid.set_elevation(5, 5, 2);
-        assert_eq!(grid.elevation_defense_bonus(5, 5), 2);
     }
 
     #[test]

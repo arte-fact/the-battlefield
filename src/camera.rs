@@ -13,7 +13,6 @@ pub struct Camera {
 
 const MIN_ZOOM: f32 = 0.5;
 const MAX_ZOOM: f32 = 4.0;
-const PAN_SPEED: f32 = 400.0; // pixels per second at zoom 1.0
 
 impl Camera {
     pub fn new(viewport_w: f32, viewport_h: f32) -> Self {
@@ -24,13 +23,6 @@ impl Camera {
             viewport_w,
             viewport_h,
         }
-    }
-
-    /// Pan the camera by (dx, dy) in screen-relative direction, scaled by dt.
-    pub fn pan(&mut self, dx: f32, dy: f32, dt: f32) {
-        let speed = PAN_SPEED / self.zoom;
-        self.x += dx * speed * dt;
-        self.y += dy * speed * dt;
     }
 
     /// Zoom in/out by delta (positive = zoom in).
@@ -61,13 +53,6 @@ impl Camera {
         self.y = self.y.clamp(half_h, (world_h - half_h).max(half_h));
     }
 
-    /// Convert screen pixel position to world-space position.
-    pub fn screen_to_world(&self, sx: f32, sy: f32) -> (f32, f32) {
-        let wx = self.x + (sx - self.viewport_w * 0.5) / self.zoom;
-        let wy = self.y + (sy - self.viewport_h * 0.5) / self.zoom;
-        (wx, wy)
-    }
-
     /// Calculate an ideal zoom level based on viewport dimensions.
     /// Targets ~15 tiles visible along the shortest axis (landscape)
     /// or ~10 tiles in portrait for a more zoomed-in mobile feel.
@@ -96,16 +81,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn screen_center_maps_to_camera_center() {
-        let mut cam = Camera::new(960.0, 640.0);
-        cam.x = 100.0;
-        cam.y = 200.0;
-        let (wx, wy) = cam.screen_to_world(480.0, 320.0);
-        assert!((wx - 100.0).abs() < 1e-5);
-        assert!((wy - 200.0).abs() < 1e-5);
-    }
-
-    #[test]
     fn zoom_clamps() {
         let mut cam = Camera::new(960.0, 640.0);
         for _ in 0..100 {
@@ -126,13 +101,5 @@ mod tests {
         assert!((r - 480.0).abs() < 1e-5);
         assert!((t - (-320.0)).abs() < 1e-5);
         assert!((b - 320.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn pan_moves_camera() {
-        let mut cam = Camera::new(960.0, 640.0);
-        cam.pan(1.0, 0.0, 1.0);
-        assert!(cam.x > 0.0);
-        assert!((cam.y).abs() < 1e-5);
     }
 }

@@ -2,17 +2,20 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="description" content="Real-time tactical battlefield game — command warriors, archers, lancers and monks in strategic combat.">
     <title>The Battlefield</title>
 
     <!-- PWA -->
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a1a2e">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Battlefield">
     <link rel="apple-touch-icon" href="icons/icon-192.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
 
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -23,10 +26,14 @@
             overflow: hidden;
             width: 100%;
             height: 100%;
+            /* Prevent pull-to-refresh and overscroll bounce */
+            overscroll-behavior: none;
             touch-action: none;
             -webkit-touch-callout: none;
             -webkit-user-select: none;
             user-select: none;
+            /* Fill iOS safe areas with background color */
+            padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
         }
         canvas {
             display: block;
@@ -44,16 +51,6 @@
             flex-direction: column;
             gap: 4px;
             z-index: 10;
-        }
-        #turn-display {
-            font-size: clamp(0.7rem, 2vw, 0.9rem);
-            color: #ffd700;
-            text-shadow: 1px 1px 2px #000;
-        }
-        #phase-display {
-            font-size: clamp(0.9rem, 2.5vw, 1.2rem);
-            font-weight: bold;
-            text-shadow: 1px 1px 3px #000;
         }
         #hp-container {
             margin-top: 4px;
@@ -108,7 +105,6 @@
 <body>
     <canvas id="game-canvas" width="960" height="640"></canvas>
     <div id="hud" style="display:none">
-        <div id="turn-display">Turn 1</div>
         <div id="hp-container">
             <span id="hp-label">HP</span>
             <div id="hp-bar-bg"><div id="hp-bar-fill"></div></div>
@@ -119,13 +115,13 @@
     <script type="module">
         import init from './pkg/the_battlefield.js';
 
-        // Register Service Worker
+        // Register Service Worker (relative path for non-root deployments)
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(() => {});
+            navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
         }
 
-        // Request fullscreen on first touch (mobile browsers require user gesture)
-        function requestFullscreen() {
+        // Expose fullscreen request for Rust/WASM to call on Play button press
+        window.__requestFullscreen = function() {
             const el = document.documentElement;
             const rfs = el.requestFullscreen
                 || el.webkitRequestFullscreen
@@ -134,21 +130,11 @@
             if (rfs) {
                 rfs.call(el).catch(() => {});
             }
-        }
-
-        // On first touch, go fullscreen
-        document.addEventListener('touchstart', function onFirstTouch() {
-            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-                requestFullscreen();
+            // Prevent screen from sleeping during gameplay
+            if ('wakeLock' in navigator) {
+                navigator.wakeLock.request('screen').catch(() => {});
             }
-        }, { once: true });
-
-        // Re-request fullscreen on next touch if user exited it
-        document.addEventListener('touchstart', () => {
-            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-                requestFullscreen();
-            }
-        });
+        };
 
         async function run() {
             try {

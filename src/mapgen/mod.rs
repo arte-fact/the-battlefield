@@ -116,40 +116,14 @@ impl Rng {
     }
 }
 
-/// Configuration for battlefield generation.
-pub struct TerrainConfig {
-    /// Noise frequency — controls feature size (lower = larger features).
-    pub elevation_scale: f64,
-    /// Noise values below this become water.
-    pub water_threshold: f64,
-    /// Noise values above this become impassable hills (elevation 2).
-    pub hill_threshold: f64,
-    /// Initial seed density for tree cellular automata.
-    pub tree_density: f64,
-    /// Initial seed density for bush cellular automata.
-    pub bush_density: f64,
-    /// Initial seed density for rock cellular automata.
-    pub rock_density: f64,
-    /// Noise frequency for rock seeding.
-    pub rock_frequency: f64,
-    /// Fraction of water tiles that get decorative rocks.
-    pub water_rock_density: f32,
-}
-
-impl Default for TerrainConfig {
-    fn default() -> Self {
-        Self {
-            elevation_scale: 0.04,
-            water_threshold: -0.3,
-            hill_threshold: 0.45,
-            tree_density: 0.3,
-            bush_density: 0.04,
-            rock_density: 0.03,
-            rock_frequency: 0.06,
-            water_rock_density: 0.12,
-        }
-    }
-}
+// Terrain generation constants
+const ELEVATION_SCALE: f64 = 0.04;
+const WATER_THRESHOLD: f64 = -0.3;
+const HILL_THRESHOLD: f64 = 0.45;
+const TREE_DENSITY: f64 = 0.3;
+const BUSH_DENSITY: f64 = 0.04;
+const ROCK_DENSITY: f64 = 0.03;
+const WATER_ROCK_DENSITY: f32 = 0.12;
 
 /// Returns true if the tile is within the border ring (outside the playable area).
 fn in_border(x: u32, y: u32) -> bool {
@@ -161,11 +135,6 @@ fn in_border(x: u32, y: u32) -> bool {
 
 /// Generate a procedural battlefield grid with BSP layout.
 pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
-    generate_battlefield_with_config(seed, &TerrainConfig::default())
-}
-
-/// Generate a battlefield with custom configuration.
-pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> (Grid, MapLayout) {
     let mut rng = Rng::new(seed);
     let w = GRID_SIZE;
     let h = GRID_SIZE;
@@ -176,8 +145,8 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> (G
     for y in 0..h {
         for x in 0..w {
             let val = noise.octave(
-                x as f64 * config.elevation_scale,
-                y as f64 * config.elevation_scale,
+                x as f64 * ELEVATION_SCALE,
+                y as f64 * ELEVATION_SCALE,
                 4,
                 0.5,
             );
@@ -197,9 +166,9 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> (G
 
             let effective_val = val + edge_bias;
 
-            if effective_val < config.water_threshold {
+            if effective_val < WATER_THRESHOLD {
                 grid.set(x, y, TileKind::Water);
-            } else if effective_val > config.hill_threshold {
+            } else if effective_val > HILL_THRESHOLD {
                 grid.set_elevation(x, y, 2);
             }
             // else: remains Grass, elevation 0
@@ -210,7 +179,7 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> (G
 
     // Trees: seeded from simplex noise at offset, placed on grass
     let tree_seed = run_cellular_automaton(
-        &seed_from_noise(&noise, w, h, 100.0, 0.07, config.tree_density),
+        &seed_from_noise(&noise, w, h, 100.0, 0.07, TREE_DENSITY),
         w,
         h,
         5,
@@ -232,7 +201,7 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> (G
     // Rocks: sparse random scatter on grass
     for y in 0..h {
         for x in 0..w {
-            if rng.chance(config.rock_density as f32)
+            if rng.chance(ROCK_DENSITY as f32)
                 && grid.get(x, y) == TileKind::Grass
                 && (grid.elevation(x, y) == 0 || in_border(x, y))
             {
@@ -244,7 +213,7 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> (G
     // Bushes: sparse random scatter on grass
     for y in 0..h {
         for x in 0..w {
-            if rng.chance(config.bush_density as f32)
+            if rng.chance(BUSH_DENSITY as f32)
                 && grid.get(x, y) == TileKind::Grass
                 && (grid.elevation(x, y) == 0 || in_border(x, y))
             {
@@ -256,7 +225,7 @@ pub fn generate_battlefield_with_config(seed: u32, config: &TerrainConfig) -> (G
     // Water rocks: simple random chance on water tiles
     for y in 0..h {
         for x in 0..w {
-            if grid.get(x, y) == TileKind::Water && rng.chance(config.water_rock_density) {
+            if grid.get(x, y) == TileKind::Water && rng.chance(WATER_ROCK_DENSITY) {
                 grid.set_decoration(x, y, Some(Decoration::WaterRock));
             }
         }
@@ -452,19 +421,6 @@ fn clear_rect(grid: &mut Grid, x: u32, y: u32, w: u32, h: u32) {
             }
         }
     }
-}
-
-/// Fallback player spawn position (Blue base).
-pub fn blue_spawn_area() -> (u32, u32) {
-    (BORDER_SIZE + 5, BORDER_SIZE + 5)
-}
-
-/// Fallback enemy spawn area center (Red base).
-pub fn red_spawn_area() -> (u32, u32) {
-    (
-        BORDER_SIZE + PLAYABLE_SIZE - 6,
-        BORDER_SIZE + PLAYABLE_SIZE - 6,
-    )
 }
 
 #[cfg(test)]

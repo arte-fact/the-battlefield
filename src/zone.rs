@@ -147,7 +147,6 @@ impl ZoneManager {
                     match unit.faction {
                         Faction::Blue => zone.blue_count += 1,
                         Faction::Red => zone.red_count += 1,
-                        _ => {}
                     }
                 }
             }
@@ -218,14 +217,6 @@ impl ZoneManager {
         }
     }
 
-    /// Count zones controlled by a given faction.
-    pub fn zones_controlled_by(&self, faction: Faction) -> u32 {
-        self.zones
-            .iter()
-            .filter(|z| z.state == ZoneState::Controlled(faction))
-            .count() as u32
-    }
-
     /// Return the best zone target for AI of the given faction.
     /// Priority: contested zones first, then nearest uncontrolled zone to own spawn.
     /// Returns None if all zones are controlled by this faction.
@@ -291,41 +282,6 @@ impl ZoneManager {
         } else {
             0.0
         }
-    }
-
-    /// Return the most advanced (frontline) zone controlled by a faction.
-    /// For Blue: the controlled zone farthest from Blue base (highest index).
-    /// For Red: the controlled zone farthest from Red base (lowest index).
-    pub fn most_advanced_zone(&self, faction: Faction) -> Option<&CaptureZone> {
-        let controlled: Vec<&CaptureZone> = self
-            .zones
-            .iter()
-            .filter(|z| z.state == ZoneState::Controlled(faction))
-            .collect();
-        if controlled.is_empty() {
-            return None;
-        }
-        let (own_x, own_y): (f32, f32) = match faction {
-            Faction::Blue => (self.blue_base.0 as f32, self.blue_base.1 as f32),
-            _ => (self.red_base.0 as f32, self.red_base.1 as f32),
-        };
-        // Pick the controlled zone farthest from own base
-        controlled.into_iter().max_by_key(|z| {
-            let dx = z.center_gx as f32 - own_x;
-            let dy = z.center_gy as f32 - own_y;
-            (dx * dx + dy * dy) as i32
-        })
-    }
-
-    /// Return the zone whose center is closest to the given world position.
-    pub fn nearest_zone(&self, wx: f32, wy: f32) -> Option<&CaptureZone> {
-        self.zones.iter().min_by(|a, b| {
-            let da =
-                (a.center_wx - wx) * (a.center_wx - wx) + (a.center_wy - wy) * (a.center_wy - wy);
-            let db =
-                (b.center_wx - wx) * (b.center_wx - wx) + (b.center_wy - wy) * (b.center_wy - wy);
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-        })
     }
 
     /// Return the best retreat zone for a faction: a controlled zone that is
@@ -526,16 +482,6 @@ mod tests {
     fn empty_zones_no_victory() {
         let mgr = ZoneManager::empty();
         assert_eq!(mgr.all_zones_controlled_by(), None);
-    }
-
-    #[test]
-    fn zones_controlled_count() {
-        let mut mgr = test_zones();
-        mgr.zones[0].state = ZoneState::Controlled(Faction::Blue);
-        mgr.zones[1].state = ZoneState::Controlled(Faction::Blue);
-        mgr.zones[2].state = ZoneState::Controlled(Faction::Red);
-        assert_eq!(mgr.zones_controlled_by(Faction::Blue), 2);
-        assert_eq!(mgr.zones_controlled_by(Faction::Red), 1);
     }
 
     #[test]
