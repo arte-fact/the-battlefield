@@ -155,7 +155,8 @@ impl Game {
         let dx = monk_x - ally_x;
         let dy = monk_y - ally_y;
         let dist = (dx * dx + dy * dy).sqrt();
-        if dist < MONK_FOLLOW_DIST {
+        // Avoid division by zero when monk and ally overlap exactly
+        if dist < 0.01 || dist < MONK_FOLLOW_DIST {
             return (monk_x, monk_y);
         }
         let ratio = MONK_FOLLOW_DIST / dist;

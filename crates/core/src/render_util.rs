@@ -54,11 +54,14 @@ pub fn tile_flip(gx: u32, gy: u32) -> bool {
 }
 
 /// Pick a variant index from a set of `count` options, deterministically
-/// seeded by grid position. Used for bush/rock/tree variant selection.
+/// seeded by grid position. Uses a proper hash to avoid diagonal stripe patterns.
 pub fn variant_index(gx: u32, gy: u32, count: usize, seed_x: u32, seed_y: u32) -> usize {
-    (gx.wrapping_mul(seed_x)
-        .wrapping_add(gy.wrapping_mul(seed_y))) as usize
-        % count
+    // xorshift-style hash to break linear patterns
+    let mut h = gx.wrapping_mul(seed_x) ^ gy.wrapping_mul(seed_y);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0x5bd1e995);
+    h ^= h >> 15;
+    (h as usize) % count
 }
 
 /// Compute the visible tile range from the camera frustum, clamped to the grid.

@@ -31,10 +31,16 @@ impl Game {
 
         let mut acknowledged = 0usize;
         for idx in eligible {
-            // Deterministic ~85% follow chance based on unit id
+            // ~85% follow chance — mix unit id with position so the result
+            // varies each time an order is issued (not always the same units refusing)
             let follows = {
-                let hash = self.units[idx].id.wrapping_mul(2654435761);
-                (hash % 100) < 85
+                let ux = (self.units[idx].x * 100.0) as u32;
+                let uy = (self.units[idx].y * 100.0) as u32;
+                let mut h =
+                    self.units[idx].id.wrapping_mul(2654435761) ^ ux ^ uy.wrapping_mul(40503);
+                h ^= h >> 13;
+                h = h.wrapping_mul(0x5bd1e995);
+                (h % 100) < 85
             };
 
             if !follows {

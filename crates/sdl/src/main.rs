@@ -42,8 +42,8 @@ fn main() {
 
     canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
 
-    // Enable linear filtering for texture scaling (smooth fog interpolation)
-    sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "1");
+    // Nearest-neighbor scaling for pixel art sprites (no blurring)
+    sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "0");
 
     let texture_creator = canvas.texture_creator();
     let mut assets = renderer::Assets::load(&texture_creator);
@@ -159,20 +159,31 @@ fn main() {
                 if game.winner.is_none() {
                     game.tick(&player_input, dt as f32);
 
-                    if player_input.attack || player_input.attack_held {
-                        game.player_attack();
+                    if (player_input.attack || player_input.attack_held) && game.player_attack() {
+                        // Rumble on successful hit
+                        if let Some(ref mut gc) = active_controller {
+                            let _ = gc.set_rumble(0x4000, 0x8000, 80);
+                        }
                     }
-                    if player_input.order_hold {
-                        game.issue_order("hold");
+                    if player_input.order_hold && game.issue_order("hold") > 0 {
+                        if let Some(ref mut gc) = active_controller {
+                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
+                        }
                     }
-                    if player_input.order_go {
-                        game.issue_order("go");
+                    if player_input.order_go && game.issue_order("go") > 0 {
+                        if let Some(ref mut gc) = active_controller {
+                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
+                        }
                     }
-                    if player_input.order_retreat {
-                        game.issue_order("retreat");
+                    if player_input.order_retreat && game.issue_order("retreat") > 0 {
+                        if let Some(ref mut gc) = active_controller {
+                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
+                        }
                     }
-                    if player_input.order_follow {
-                        game.issue_order("follow");
+                    if player_input.order_follow && game.issue_order("follow") > 0 {
+                        if let Some(ref mut gc) = active_controller {
+                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
+                        }
                     }
                 }
 

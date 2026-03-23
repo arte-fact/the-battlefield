@@ -225,6 +225,8 @@ impl Unit {
             self.hp = 0;
             self.alive = false;
             self.death_fade = DEATH_FADE_DURATION;
+            self.order = None;
+            self.set_anim(UnitAnim::Idle);
         }
     }
 

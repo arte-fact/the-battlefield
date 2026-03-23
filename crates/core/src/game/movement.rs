@@ -1,37 +1,59 @@
 use super::*;
 
 impl Game {
-    /// Move a unit continuously in a direction with split-axis terrain collision.
+    /// Move a unit continuously in a direction with wall-sliding collision.
+    /// Tries full diagonal → X-only → Y-only, matching `try_push()` pattern.
+    /// If completely stuck, nudges toward tile center to escape corners.
     pub(super) fn move_unit(&mut self, idx: usize, dir_x: f32, dir_y: f32, dt: f32) {
         let speed = self.units[idx].move_speed()
             * self
                 .grid
                 .speed_factor_at(self.units[idx].x, self.units[idx].y)
-                .max(0.25); // never freeze a unit (e.g. edge of water)
+                .max(0.25);
         let vx = dir_x * speed * dt;
         let vy = dir_y * speed * dt;
 
         let old_x = self.units[idx].x;
         let old_y = self.units[idx].y;
 
-        // Split-axis collision: try X first
-        let new_x = old_x + vx;
-        if self.grid.is_circle_passable(new_x, old_y, UNIT_RADIUS) {
-            self.units[idx].x = new_x;
+        // 1. Try full diagonal
+        if self
+            .grid
+            .is_circle_passable(old_x + vx, old_y + vy, UNIT_RADIUS)
+        {
+            self.units[idx].x = old_x + vx;
+            self.units[idx].y = old_y + vy;
+        }
+        // 2. Wall-slide X
+        else if vx.abs() > 0.001 && self.grid.is_circle_passable(old_x + vx, old_y, UNIT_RADIUS) {
+            self.units[idx].x = old_x + vx;
+        }
+        // 3. Wall-slide Y
+        else if vy.abs() > 0.001 && self.grid.is_circle_passable(old_x, old_y + vy, UNIT_RADIUS) {
+            self.units[idx].y = old_y + vy;
+        }
+        // 4. Completely stuck — nudge toward current tile center to escape corners
+        else {
+            let (gx, gy) = self.units[idx].grid_cell();
+            let (cx, cy) = grid::grid_to_world(gx, gy);
+            let nudge_x = (cx - old_x) * 0.1;
+            let nudge_y = (cy - old_y) * 0.1;
+            if (nudge_x.abs() > 0.01 || nudge_y.abs() > 0.01)
+                && self
+                    .grid
+                    .is_circle_passable(old_x + nudge_x, old_y + nudge_y, UNIT_RADIUS)
+            {
+                self.units[idx].x = old_x + nudge_x;
+                self.units[idx].y = old_y + nudge_y;
+            }
         }
 
-        // Then try Y
-        let cur_x = self.units[idx].x;
-        let new_y = old_y + vy;
-        if self.grid.is_circle_passable(cur_x, new_y, UNIT_RADIUS) {
-            self.units[idx].y = new_y;
-        }
-
-        // Update facing from movement (player facing is managed by the game loop)
-        if !self.units[idx].is_player {
-            if vx > 0.01 {
+        // Update facing only when horizontal movement is dominant.
+        // Prevents flickering when moving vertically with tiny vx oscillations.
+        if !self.units[idx].is_player && vx.abs() > vy.abs() * 0.5 {
+            if vx > 0.0 {
                 self.units[idx].facing = Facing::Right;
-            } else if vx < -0.01 {
+            } else {
                 self.units[idx].facing = Facing::Left;
             }
         }
@@ -60,7 +82,6 @@ impl Game {
     }
 
     /// Resolve circle-circle collisions between all alive units.
-    /// Uses wall-sliding so units don't get trapped in corners.
     pub fn resolve_collisions(&mut self) {
         let min_dist = UNIT_RADIUS * 2.0;
 
@@ -80,7 +101,6 @@ impl Game {
                     let nx = dx / dist;
                     let ny = dy / dist;
 
-                    // Softer push between same-faction units to avoid corner-trapping
                     let strength = if self.units[i].faction == self.units[j].faction {
                         0.4
                     } else {

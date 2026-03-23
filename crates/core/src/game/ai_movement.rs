@@ -23,13 +23,9 @@ impl Game {
             let gx = gx.max(0) as u32;
             let gy = gy.max(0) as u32;
 
-            // First try pathing around occupied tiles
-            let path = self.grid.find_path(ax, ay, gx, gy, 40, |x, y| {
-                self.ai_occupied_cache.contains(&(x, y))
-            });
-
-            // If that fails (blocked by friendlies), path ignoring them
-            let path = path.or_else(|| self.grid.find_path(ax, ay, gx, gy, 40, |_, _| false));
+            // Path ignoring occupied tiles — unit radius is wider than 1 tile
+            // so occupied-cell avoidance causes more problems than it solves
+            let path = self.grid.find_path(ax, ay, gx, gy, 40, |_, _| false);
 
             if let Some(steps) = path {
                 self.units[ai_idx].ai_waypoints = steps
@@ -37,11 +33,12 @@ impl Game {
                     .map(|&(x, y)| grid::grid_to_world(x, y))
                     .collect();
                 self.units[ai_idx].ai_waypoint_idx = 0;
+                self.units[ai_idx].ai_path_cooldown = 0.5;
             } else {
                 self.units[ai_idx].ai_waypoints.clear();
                 self.units[ai_idx].ai_waypoint_idx = 0;
+                self.units[ai_idx].ai_path_cooldown = 0.1;
             }
-            self.units[ai_idx].ai_path_cooldown = 0.5;
         }
 
         // Follow current waypoint
@@ -93,6 +90,12 @@ impl Game {
         let (gx, gy) = grid::world_to_grid(objective.0, objective.1);
         let gx = gx.max(0) as u32;
         let gy = gy.max(0) as u32;
+        // If goal is impassable, search nearby for a passable tile
+        let (gx, gy) = if self.grid.is_passable(gx, gy) {
+            (gx, gy)
+        } else {
+            self.find_nearest_passable(gx, gy).unwrap_or((gx, gy))
+        };
         let field = crate::flowfield::FlowField::generate(&self.grid, gx, gy);
         let state = match faction {
             Faction::Blue => &mut self.blue_flow,

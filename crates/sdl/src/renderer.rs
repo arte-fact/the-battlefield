@@ -694,12 +694,18 @@ impl<'a> Assets<'a> {
             ui_wood_table,
             fog_texture: {
                 use battlefield_core::grid::GRID_SIZE;
-                tc.create_texture_streaming(Some(PixelFormatEnum::ABGR8888), GRID_SIZE, GRID_SIZE)
+                // Linear filtering for fog only (smooth bilinear interpolation)
+                sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "1");
+                let tex = tc
+                    .create_texture_streaming(Some(PixelFormatEnum::ABGR8888), GRID_SIZE, GRID_SIZE)
                     .ok()
                     .map(|mut t| {
                         t.set_blend_mode(BlendMode::Blend);
                         t
-                    })
+                    });
+                // Restore nearest-neighbor for all other textures
+                sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "0");
+                tex
             },
             text: TextRenderer::new(),
         }
@@ -710,9 +716,16 @@ impl<'a> Assets<'a> {
 // Coordinate helpers
 // ───────────────────────────────────────────────────────────────────────────
 
+/// Convert world coordinates to screen pixel coordinates.
+/// The camera offset is snapped to integer pixels so all elements in the same
+/// frame use a consistent sub-pixel shift — preventing jitter between layers.
 fn world_to_screen(wx: f32, wy: f32, cam: &Camera) -> (i32, i32) {
-    let sx = ((wx - cam.x) * cam.zoom + cam.viewport_w * 0.5) as i32;
-    let sy = ((wy - cam.y) * cam.zoom + cam.viewport_h * 0.5) as i32;
+    // Snap camera offset to integer (computed once per frame in practice,
+    // but recalculated here for simplicity — the rounding is deterministic)
+    let offset_x = (cam.viewport_w * 0.5 - cam.x * cam.zoom).round();
+    let offset_y = (cam.viewport_h * 0.5 - cam.y * cam.zoom).round();
+    let sx = (wx * cam.zoom + offset_x) as i32;
+    let sy = (wy * cam.zoom + offset_y) as i32;
     (sx, sy)
 }
 
@@ -1062,7 +1075,7 @@ fn draw_water(
     max_gx: u32,
     max_gy: u32,
 ) {
-    let tsi = ts as u32;
+    let tsi = ts.ceil() as u32;
     let water_tex = match assets.water_texture.as_ref() {
         Some(t) => t,
         None => {
@@ -1118,7 +1131,7 @@ fn draw_terrain(
     max_gx: u32,
     max_gy: u32,
 ) {
-    let tsi = ts as u32;
+    let tsi = ts.ceil() as u32;
     let w = game.grid.width;
     let h = game.grid.height;
 
@@ -1201,12 +1214,14 @@ fn draw_terrain(
         }
     }
 
-    // Elevation
+    // Elevation — extend scan 1 tile above visible range because cliffs/shadows
+    // at gy+1 from an elevated tile at gy would be culled otherwise
+    let elev_min_gy = min_gy.saturating_sub(1);
     for level in 2..=2u8 {
         // Shadow below elevated edges
         if let Some(ref mut shadow_tex) = assets.shadow_texture {
             shadow_tex.set_alpha_mod(128);
-            for gy in min_gy..max_gy {
+            for gy in elev_min_gy..max_gy {
                 for gx in min_gx..max_gx {
                     if game.grid.elevation(gx, gy) < level {
                         continue;
@@ -1239,7 +1254,7 @@ fn draw_terrain(
             assets.tilemap_texture.as_ref()
         };
         if let Some(tilemap_tex) = elev_tex {
-            for gy in min_gy..max_gy {
+            for gy in elev_min_gy..max_gy {
                 for gx in min_gx..max_gx {
                     if game.grid.elevation(gx, gy) < level {
                         continue;
@@ -1334,7 +1349,7 @@ fn draw_bushes(
     game: &Game,
     assets: &mut Assets,
     cam: &Camera,
-    ts: f32,
+    _ts: f32,
     min_gx: u32,
     min_gy: u32,
     max_gx: u32,
@@ -1344,7 +1359,6 @@ fn draw_bushes(
     if assets.bush_textures.is_empty() {
         return;
     }
-    let tsi = ts as u32;
 
     for gy in min_gy..max_gy {
         for gx in min_gx..max_gx {
@@ -1358,12 +1372,20 @@ fn draw_bushes(
             let frame = render_util::compute_wave_frame(elapsed, gx, gy, frame_count, 0.15);
             let sx = frame * fw;
 
-            let wx = gx as f32 * TILE_SIZE;
-            let wy = gy as f32 * TILE_SIZE;
-            let (screen_x, screen_y) = world_to_screen(wx, wy, cam);
+            // Draw at native sprite size × zoom (centered on tile)
+            let draw_w = (fw as f32 * cam.zoom) as u32;
+            let draw_h = (fh as f32 * cam.zoom) as u32;
+            let center_wx = gx as f32 * TILE_SIZE + TILE_SIZE * 0.5;
+            let center_wy = gy as f32 * TILE_SIZE + TILE_SIZE * 0.5;
+            let (scx, scy) = world_to_screen(center_wx, center_wy, cam);
 
             let src = Rect::new(sx as i32, 0, fw, fh);
-            let dst = Rect::new(screen_x, screen_y, tsi, tsi);
+            let dst = Rect::new(
+                scx - draw_w as i32 / 2,
+                scy - draw_h as i32 / 2,
+                draw_w,
+                draw_h,
+            );
             let flip_h = render_util::tile_flip(gx, gy);
             let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip_h, false);
         }
@@ -1388,7 +1410,7 @@ fn draw_rocks(
     if assets.rock_textures.is_empty() {
         return;
     }
-    let tsi = ts as u32;
+    let tsi = ts.ceil() as u32;
 
     for gy in min_gy..max_gy {
         for gx in min_gx..max_gx {
@@ -1587,8 +1609,11 @@ fn draw_foreground(
         drawables.push((u.y as f64 + ts_f64 * 0.5, Drawable::Unit(i)));
     }
 
-    // Trees and water rocks (visible range)
-    for gy in min_gy..max_gy {
+    // Trees and water rocks — trees are up to 4 tiles tall (bottom-anchored),
+    // so a tree rooted below the viewport can have its canopy visible.
+    // Extend scan range downward (max_gy) to catch those roots.
+    let tree_max_gy = (max_gy + 4).min(game.grid.height);
+    for gy in min_gy..tree_max_gy {
         for gx in min_gx..max_gx {
             let tile = game.grid.get(gx, gy);
             let foot_y = ((gy + 1) as f64) * ts_f64;
@@ -1743,9 +1768,9 @@ fn draw_tree(
     let dst = Rect::new(dst_x, dst_y, draw_w as u32, draw_h as u32);
     let src = Rect::new(sx as i32, 0, fw, fh);
 
-    // Fade trees near player
+    // Fade trees near player — use visual center (canopy), not root tile
     let tree_cx = gx as f64 * ts_f64 + ts_f64 * 0.5;
-    let tree_cy = gy as f64 * ts_f64 + ts_f64 * 0.5;
+    let tree_cy = gy as f64 * ts_f64 - ts_f64 * 1.0; // canopy center ~2 tiles above root
     let alpha_f = render_util::tree_alpha(tree_cx, tree_cy, player_pos, ts_f64);
     let alpha = (alpha_f * 255.0) as u8;
     tex.set_alpha_mod(alpha);
@@ -1771,7 +1796,7 @@ fn draw_water_rock(
     let frame = render_util::compute_wave_frame(elapsed, gx, gy, frame_count, 0.2);
     let sx = frame * fw;
 
-    let tsi = ts as u32;
+    let tsi = ts.ceil() as u32;
     let wx = gx as f32 * TILE_SIZE;
     let wy = gy as f32 * TILE_SIZE;
     let (screen_x, screen_y) = world_to_screen(wx, wy, cam);
@@ -1898,6 +1923,7 @@ fn draw_particle(
 // ───────────────────────────────────────────────────────────────────────────
 
 fn draw_projectiles(canvas: &mut Canvas<Window>, game: &Game, assets: &mut Assets, cam: &Camera) {
+    let zoom = cam.zoom;
     for proj in &game.projectiles {
         if proj.finished {
             continue;
@@ -1905,12 +1931,17 @@ fn draw_projectiles(canvas: &mut Canvas<Window>, game: &Game, assets: &mut Asset
         let (sx, sy) = world_to_screen(proj.current_x, proj.current_y, cam);
 
         if let Some(ref tex) = assets.arrow_texture {
-            let dst = Rect::new(sx - 16, sy - 8, 32, 16);
+            // Arrow sprite is 64x64 — draw at native size × zoom
+            let arrow_size = (64.0 * zoom) as u32;
+            let half = arrow_size as i32 / 2;
+            let dst = Rect::new(sx - half, sy - half, arrow_size, arrow_size);
             let angle_deg = proj.angle.to_degrees() as f64;
             let _ = canvas.copy_ex(tex, None, dst, angle_deg, None, false, false);
         } else {
+            let w = (8.0 * zoom) as u32;
+            let h = (4.0 * zoom) as u32;
             canvas.set_draw_color(Color::RGB(200, 180, 120));
-            let _ = canvas.fill_rect(Rect::new(sx - 4, sy - 2, 8, 4));
+            let _ = canvas.fill_rect(Rect::new(sx - w as i32 / 2, sy - h as i32 / 2, w, h));
         }
     }
 }
@@ -1931,10 +1962,11 @@ fn draw_hp_bars(canvas: &mut Canvas<Window>, game: &Game, cam: &Camera) {
             continue;
         }
 
+        let zoom = game.camera.zoom;
         let (sx, sy) = world_to_screen(unit.x, unit.y, cam);
-        let bar_w = 36_i32;
-        let bar_h = 4_i32;
-        let bar_y = sy - (TILE_SIZE * game.camera.zoom * 0.7) as i32;
+        let bar_w = (36.0 * zoom) as i32;
+        let bar_h = (4.0 * zoom).max(2.0) as i32;
+        let bar_y = sy - (TILE_SIZE * zoom * 0.7) as i32;
         let bar_x = sx - bar_w / 2;
 
         canvas.set_draw_color(Color::RGBA(40, 40, 40, 200));
@@ -1973,13 +2005,14 @@ fn draw_order_labels(
         let (sx, sy) = world_to_screen(unit.x, unit.y, cam);
         let label_y = sy - (TILE_SIZE * game.camera.zoom) as i32;
 
+        let font_size = 14.0 * game.camera.zoom;
         assets.text.draw_text_centered(
             canvas,
             tc,
             label,
             sx,
-            label_y - 6,
-            14.0,
+            label_y - (6.0 * game.camera.zoom) as i32,
+            font_size,
             Color::RGBA(255, 215, 0, alpha),
         );
     }

@@ -15,10 +15,14 @@ impl Game {
         defender_id: UnitId,
         target_snapshot_pos: Option<(f32, f32)>,
     ) {
+        // Guard: no self-attack, no attacking dead units
+        if attacker_id == defender_id {
+            return;
+        }
         let attacker_idx = self.units.iter().position(|u| u.id == attacker_id);
         let defender_idx = self.units.iter().position(|u| u.id == defender_id);
         let (attacker_idx, defender_idx) = match (attacker_idx, defender_idx) {
-            (Some(a), Some(d)) => (a, d),
+            (Some(a), Some(d)) if self.units[a].alive && self.units[d].alive => (a, d),
             _ => return,
         };
 

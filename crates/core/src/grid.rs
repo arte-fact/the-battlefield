@@ -92,6 +92,29 @@ impl Grid {
         self.building_occupied[(y * self.width + x) as usize] = true;
     }
 
+    /// Check if a tile is passable for a wide unit (radius > half tile).
+    /// A wide unit at tile (x,y) overlaps into all 4 cardinal neighbors,
+    /// so those must also be passable for the unit to stand there.
+    pub fn is_wide_passable(&self, x: u32, y: u32) -> bool {
+        if !self.is_passable(x, y) {
+            return false;
+        }
+        // Check cardinal neighbors — a unit centered on this tile
+        // extends into adjacent tiles due to its radius
+        for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+            let nx = x as i32 + dx;
+            let ny = y as i32 + dy;
+            if self.in_bounds(nx, ny) {
+                if !self.is_passable(nx as u32, ny as u32) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Check if diagonal movement from (fx, fy) by (dx, dy) is allowed.
     /// Both adjacent cardinal tiles must be passable to prevent corner-cutting.
     pub fn can_move_diagonal(&self, fx: u32, fy: u32, dx: i32, dy: i32) -> bool {
@@ -190,6 +213,14 @@ impl Grid {
         if !self.in_bounds(gx as i32, gy as i32) || !self.is_passable(gx, gy) {
             return None;
         }
+        // Use wide passability check: unit radius (28px) is nearly as wide as
+        // a tile (32px), so units overlap into cardinal neighbors. A* must only
+        // route through tiles where all neighbors are also passable.
+        let passable = |x: u32, y: u32| -> bool { self.is_wide_passable(x, y) };
+        // Allow start and goal even if not wide-passable (unit may already be there)
+        let is_node_passable = |x: u32, y: u32| -> bool {
+            (x == sx && y == sy) || (x == gx && y == gy) || passable(x, y)
+        };
 
         let w = self.width;
         let h = self.height;
@@ -260,7 +291,7 @@ impl Grid {
                 }
                 let nx = nx as u32;
                 let ny = ny as u32;
-                if !self.is_passable(nx, ny) {
+                if !is_node_passable(nx, ny) {
                     continue;
                 }
                 // Prevent corner-cutting for diagonal moves
@@ -415,12 +446,13 @@ mod tests {
     #[test]
     fn find_path_straight_line() {
         let grid = Grid::new_grass(16, 16);
-        let path = grid.find_path(0, 0, 5, 0, 30, |_, _| false);
+        // Use interior tiles (wide passability requires all cardinal neighbors passable)
+        let path = grid.find_path(2, 2, 7, 2, 30, |_, _| false);
         assert!(path.is_some());
         let path = path.unwrap();
         assert_eq!(path.len(), 5);
-        assert_eq!(path[0], (1, 0));
-        assert_eq!(path[4], (5, 0));
+        assert_eq!(path[0], (3, 2));
+        assert_eq!(path[4], (7, 2));
     }
 
     #[test]
@@ -484,21 +516,21 @@ mod tests {
     #[test]
     fn find_path_diagonal() {
         let grid = Grid::new_grass(16, 16);
-        // Diagonal path from (0,0) to (5,5) should use diagonals
-        let path = grid.find_path(0, 0, 5, 5, 30, |_, _| false).unwrap();
+        // Use interior tiles for wide passability
+        let path = grid.find_path(3, 3, 8, 8, 30, |_, _| false).unwrap();
         assert_eq!(path.len(), 5); // 5 diagonal steps
-        assert_eq!(*path.last().unwrap(), (5, 5));
+        assert_eq!(*path.last().unwrap(), (8, 8));
     }
 
     #[test]
     fn find_path_no_corner_cutting() {
-        let mut grid = Grid::new_grass(8, 8);
-        // Create an L-shaped wall: water at (2,1) and (1,2)
-        // Moving from (1,1) to (2,2) diagonally would cut the corner
-        grid.set(2, 1, TileKind::Water);
-        grid.set(1, 2, TileKind::Water);
-        let path = grid.find_path(1, 1, 2, 2, 30, |_, _| false).unwrap();
-        // Path must not go directly (1,1)->(2,2), it must route around
+        let mut grid = Grid::new_grass(16, 16);
+        // Create an L-shaped wall in interior: water at (6,5) and (5,6)
+        // Moving from (5,5) to (6,6) diagonally would cut the corner
+        grid.set(6, 5, TileKind::Water);
+        grid.set(5, 6, TileKind::Water);
+        let path = grid.find_path(5, 5, 6, 6, 30, |_, _| false).unwrap();
+        // Path must not go directly (5,5)->(6,6), it must route around
         assert!(path.len() > 1);
         // No step should cut a corner past water
         let mut prev = (1u32, 1u32);

@@ -302,6 +302,11 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
         clear_circle(&mut grid, cx, cy, 6);
     }
 
+    // Post-processing: widen narrow passages so units (radius ~1 tile) can fit.
+    // Any passable tile that has an impassable neighbor within 1 tile gets its
+    // impassable neighbors cleared — ensuring all corridors are at least 3 tiles wide.
+    widen_narrow_passages(&mut grid);
+
     let layout = MapLayout {
         blue_base,
         red_base,
@@ -309,6 +314,64 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
     };
 
     (grid, layout)
+}
+
+/// Widen narrow passages so units with large collision radius can navigate.
+/// Scans every passable tile: if it doesn't have wide passability (all 4 cardinal
+/// neighbors passable), clear the impassable neighbors. Run multiple passes to
+/// propagate the widening. Only affects the playable area.
+fn widen_narrow_passages(grid: &mut Grid) {
+    let b = BORDER_SIZE;
+    let p = PLAYABLE_SIZE;
+
+    // Run 2 passes to propagate widening through tight corridors
+    for _pass in 0..2 {
+        // Collect tiles that need widening (can't mutate during scan)
+        let mut to_clear: Vec<(u32, u32)> = Vec::new();
+
+        for gy in b..(b + p) {
+            for gx in b..(b + p) {
+                if !grid.is_passable(gx, gy) {
+                    continue;
+                }
+                // Check if this passable tile has an impassable cardinal neighbor
+                for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+                    let nx = gx as i32 + dx;
+                    let ny = gy as i32 + dy;
+                    if !grid.in_bounds(nx, ny) {
+                        continue;
+                    }
+                    let nx = nx as u32;
+                    let ny = ny as u32;
+                    if nx < b || nx >= b + p || ny < b || ny >= b + p {
+                        continue; // don't widen into the border
+                    }
+                    if !grid.is_passable(nx, ny) {
+                        // This passable tile is adjacent to impassable — mark the
+                        // impassable neighbor for clearing
+                        to_clear.push((nx, ny));
+                    }
+                }
+            }
+        }
+
+        // Clear marked tiles
+        for (x, y) in to_clear {
+            let tile = grid.get(x, y);
+            if tile == TileKind::Water {
+                grid.set(x, y, TileKind::Grass);
+            }
+            // Clear elevation that blocks movement (level 2+)
+            if grid.elevation(x, y) > 1 {
+                grid.set_elevation(x, y, 0);
+            }
+            // Remove decorations and trees at widened tiles
+            grid.set_decoration(x, y, None);
+            if tile == TileKind::Forest {
+                grid.set(x, y, TileKind::Grass);
+            }
+        }
+    }
 }
 
 /// Clear a circular area to grass.

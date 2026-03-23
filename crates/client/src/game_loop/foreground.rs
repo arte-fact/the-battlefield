@@ -58,8 +58,10 @@ pub(super) fn draw_foreground(
         drawables.push((u.y as f64 + ts * 0.5, Drawable::Unit(i)));
     }
 
-    // Trees and rocks (visible range only)
-    for gy in min_gy..max_gy {
+    // Trees are up to 4 tiles tall (bottom-anchored), so roots below the viewport
+    // can have visible canopies. Extend scan range downward.
+    let tree_max_gy = (max_gy + 4).min(game.grid.height);
+    for gy in min_gy..tree_max_gy {
         for gx in min_gx..max_gx {
             let tile = game.grid.get(gx, gy);
             let foot_y = ((gy + 1) as f64) * ts;
@@ -235,9 +237,9 @@ fn draw_tree(
         let dx = (gx as f64) * ts + ts / 2.0 - draw_w / 2.0;
         let dy = (gy as f64) * ts + ts - draw_h;
 
-        // Tree center in world coords
+        // Tree visual center (canopy), not root tile — trees are ~4 tiles tall
         let tree_cx = (gx as f64) * ts + ts / 2.0;
-        let tree_cy = (gy as f64) * ts + ts / 2.0;
+        let tree_cy = (gy as f64) * ts - ts * 1.0;
 
         // Semi-transparent when near the player to avoid hiding them
         let alpha = render_util::tree_alpha(tree_cx, tree_cy, player_pos, ts);

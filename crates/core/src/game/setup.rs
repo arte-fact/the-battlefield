@@ -42,7 +42,7 @@ impl Game {
     }
 
     /// Spiral search for the nearest passable tile around (cx, cy).
-    fn find_nearest_passable(&self, cx: u32, cy: u32) -> Option<(u32, u32)> {
+    pub(super) fn find_nearest_passable(&self, cx: u32, cy: u32) -> Option<(u32, u32)> {
         for radius in 1..16i32 {
             for dy in -radius..=radius {
                 for dx in -radius..=radius {
