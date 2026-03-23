@@ -547,6 +547,116 @@ pub(super) fn draw_overlays(
     Ok(())
 }
 
+/// Draw the authority bar in screen space (below the HP bar), same sprite style as HP bar.
+pub(super) fn draw_authority_bar(
+    r: &Canvas2dRenderer,
+    game: &Game,
+    loaded: &LoadedTextures,
+    dpr: f64,
+) -> Result<(), JsValue> {
+    if game.player_unit().is_none() {
+        return Ok(());
+    }
+
+    let bar_x = 10.0 * dpr;
+    let bar_y = (8.0 + 24.0 + 6.0) * dpr; // below the HP bar
+    let bar_w = 140.0 * dpr;
+    let bar_h = 24.0 * dpr; // same height as HP bar
+
+    let auth_ratio = game.authority as f64 / 100.0;
+    let inset_x = 24.0 * dpr;
+    let inset_y = 6.0 * dpr;
+    let inner_w = bar_w - inset_x * 2.0;
+    let fill_w = (inner_w * auth_ratio).max(0.0);
+
+    // 1. Fill (behind the frame)
+    if fill_w > 0.0 {
+        let (ar, ag, ab) = if game.authority >= 80.0 {
+            (255u8, 200u8, 50u8)
+        } else if game.authority >= 40.0 {
+            (100, 200, 80)
+        } else {
+            (150, 150, 160)
+        };
+        if let Some(tex) = loaded.ui_bar_fill {
+            r.draw_texture(
+                tex,
+                0.0,
+                0.0,
+                64.0,
+                64.0,
+                bar_x + inset_x,
+                bar_y + inset_y,
+                fill_w,
+                bar_h - inset_y * 2.0,
+            )?;
+            r.set_fill_color(&format!("rgba({ar},{ag},{ab},0.7)"));
+            r.set_composite_op("multiply");
+            r.fill_rect(
+                bar_x + inset_x,
+                bar_y + inset_y,
+                fill_w,
+                bar_h - inset_y * 2.0,
+            );
+            r.set_composite_op("source-over");
+        } else {
+            r.set_fill_color(&format!("rgb({ar},{ag},{ab})"));
+            r.fill_rect(
+                bar_x + inset_x,
+                bar_y + inset_y,
+                fill_w,
+                bar_h - inset_y * 2.0,
+            );
+        }
+    }
+
+    // 2. Bar frame (3-part, on top of fill)
+    if let Some(tex) = loaded.ui_bar_base {
+        let cap_w = 28.0 * dpr;
+        let cap = cap_w.min(bar_w / 2.0);
+        let mid_w = (bar_w - cap * 2.0).max(0.0);
+
+        let (lsx, lsy, lsw, lsh) = render_util::BAR_LEFT;
+        let (csx, csy, csw, csh) = render_util::BAR_CENTER;
+        let (rsx, rsy, rsw, rsh) = render_util::BAR_RIGHT;
+
+        r.draw_texture(tex, lsx, lsy, lsw, lsh, bar_x, bar_y, cap, bar_h)?;
+        if mid_w > 0.0 {
+            r.draw_texture(tex, csx, csy, csw, csh, bar_x + cap, bar_y, mid_w, bar_h)?;
+        }
+        r.draw_texture(
+            tex,
+            rsx,
+            rsy,
+            rsw,
+            rsh,
+            bar_x + cap + mid_w,
+            bar_y,
+            cap,
+            bar_h,
+        )?;
+    } else {
+        r.set_stroke_color("rgba(255,255,255,0.5)");
+        r.set_line_width(1.0);
+        r.stroke_rect(bar_x, bar_y, bar_w, bar_h);
+    }
+
+    // Rank name + follower count (on top of everything)
+    let rank = game.authority_rank_name();
+    let followers = game.follower_count();
+    let max_followers = game.authority_max_followers();
+    let label = format!("{rank} — {followers}/{max_followers}");
+
+    let font_size = 10.0 * dpr;
+    r.set_font(&format!("bold {font_size}px sans-serif"));
+    r.set_fill_color("rgba(255,255,255,0.86)");
+    r.set_text_align("center");
+    r.set_text_baseline("middle");
+    r.fill_text(&label, bar_x + bar_w / 2.0, bar_y + bar_h / 2.0);
+
+    Ok(())
+}
+
 /// Draw a sprite-based player HP bar in screen space (top-left corner).
 ///
 /// Uses the BigBar_Base (3-slice frame) and BigBar_Fill (colored fill) textures

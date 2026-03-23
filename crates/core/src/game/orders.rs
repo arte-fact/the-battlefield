@@ -1,8 +1,5 @@
 use super::*;
 
-/// Radius around the player within which units receive orders (~7 tiles).
-const ORDER_RADIUS: f32 = TILE_SIZE * 7.0;
-
 /// Duration of the order flash indicator in seconds.
 pub const ORDER_FLASH_DURATION: f32 = 1.0;
 
@@ -15,6 +12,8 @@ impl Game {
             None => return 0,
         };
 
+        let order_radius = self.authority_command_radius();
+
         // Collect eligible unit indices
         let eligible: Vec<usize> = self
             .units
@@ -24,15 +23,21 @@ impl Game {
                 u.alive
                     && !u.is_player
                     && u.faction == player_faction
-                    && u.distance_to_pos(player_x, player_y) <= ORDER_RADIUS
+                    && u.distance_to_pos(player_x, player_y) <= order_radius
             })
             .map(|(i, _)| i)
             .collect();
 
+        let follow_chance = self.authority_follow_chance();
         let mut acknowledged = 0usize;
         for idx in eligible {
-            // ~85% follow chance — mix unit id with position so the result
-            // varies each time an order is issued (not always the same units refusing)
+            // Check follower cap before assigning more orders
+            if self.follower_count() >= self.authority_max_followers() {
+                break;
+            }
+
+            // Follow chance based on authority — mix unit id with position so the
+            // result varies each time an order is issued (not always the same units refusing)
             let follows = {
                 let ux = (self.units[idx].x * 100.0) as u32;
                 let uy = (self.units[idx].y * 100.0) as u32;
@@ -40,7 +45,7 @@ impl Game {
                     self.units[idx].id.wrapping_mul(2654435761) ^ ux ^ uy.wrapping_mul(40503);
                 h ^= h >> 13;
                 h = h.wrapping_mul(0x5bd1e995);
-                (h % 100) < 85
+                (h % 100) < (follow_chance * 100.0) as u32
             };
 
             if !follows {
@@ -226,12 +231,19 @@ impl Game {
             }
         }
 
-        // Follow the player — move toward them, idle when close
+        // Follow the player — spread out in a ring around them instead of piling up.
+        // Each follower targets a unique offset based on its unit ID.
         let dist = self.units[ai_idx].distance_to_pos(player_x, player_y);
-        if dist < TILE_SIZE * 2.0 {
+        let follow_dist = TILE_SIZE * 2.0;
+        if dist < follow_dist {
             self.units[ai_idx].set_anim(UnitAnim::Idle);
         } else {
-            self.ai_move_toward_continuous(ai_idx, player_x, player_y, dt);
+            // Offset target position around the player in a circle based on unit ID
+            let slot = self.units[ai_idx].id as f32;
+            let angle = slot * 2.39996; // golden angle (~137.5°) for even spacing
+            let offset_x = angle.cos() * follow_dist * 0.7;
+            let offset_y = angle.sin() * follow_dist * 0.7;
+            self.ai_move_toward_continuous(ai_idx, player_x + offset_x, player_y + offset_y, dt);
         }
     }
 }

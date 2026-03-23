@@ -62,8 +62,30 @@ impl Game {
 
     /// Tick capture zone progress based on unit positions.
     pub fn tick_zones(&mut self, dt: f32) {
+        let blue_before = self
+            .zone_manager
+            .zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(Faction::Blue))
+            .count();
+
         self.zone_manager.count_units(&self.units);
         self.zone_manager.tick_capture(dt);
+
+        let blue_after = self
+            .zone_manager
+            .zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(Faction::Blue))
+            .count();
+
+        if blue_after > blue_before {
+            self.on_zone_captured();
+        }
+        if blue_after < blue_before {
+            self.on_zone_lost();
+        }
+
         if self.winner.is_none() {
             if let Some(faction) = self.zone_manager.tick_victory(dt) {
                 self.winner = Some(faction);

@@ -3,8 +3,8 @@ use super::environment::{draw_bushes, draw_foam, draw_rocks, draw_water};
 use super::fog::update_fog_canvas;
 use super::foreground::draw_foreground;
 use super::hud::{
-    draw_minimap, draw_overlays, draw_player_hp_bar, draw_unit_bars, draw_victory_progress,
-    draw_zone_hud, draw_zone_overlays,
+    draw_authority_bar, draw_minimap, draw_overlays, draw_player_hp_bar, draw_unit_bars,
+    draw_victory_progress, draw_zone_hud, draw_zone_overlays,
 };
 use super::screens::{draw_death_screen, draw_main_menu, draw_result_screen, GameScreen};
 use super::terrain::{render_terrain_chunk, CHUNK_TILES};
@@ -195,9 +195,10 @@ pub(super) fn render_frame(
         input.is_touch_device,
     )?;
 
-    // Draw sprite-based player HP bar (screen-space, top-left)
+    // Draw sprite-based player HP bar and authority bar (screen-space, top-left)
     if state.screen == GameScreen::Playing {
         draw_player_hp_bar(r, game, loaded, r.dpr())?;
+        draw_authority_bar(r, game, loaded, r.dpr())?;
     }
 
     // Draw victory progress bar (only during gameplay)

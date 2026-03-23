@@ -1,5 +1,6 @@
 mod ai;
 mod ai_movement;
+mod authority;
 mod combat;
 mod fov;
 mod movement;
@@ -19,7 +20,7 @@ use crate::player_input::PlayerInput;
 use crate::unit::{
     Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS,
 };
-use crate::zone::{ZoneManager, MAX_UNITS_PER_FACTION};
+use crate::zone::{ZoneManager, ZoneState, MAX_UNITS_PER_FACTION};
 use std::collections::HashSet;
 
 pub use orders::ORDER_FLASH_DURATION;
@@ -64,6 +65,8 @@ pub struct Game {
     blue_flow: FactionFlowState,
     /// Flow field for Red faction objective marching.
     red_flow: FactionFlowState,
+    /// Player authority level (0..100), governing order radius, follow chance, and rank.
+    pub authority: f32,
 }
 
 impl Game {
@@ -98,6 +101,7 @@ impl Game {
             ai_occupied_cache: HashSet::new(),
             blue_flow: FactionFlowState::new(),
             red_flow: FactionFlowState::new(),
+            authority: 0.0,
         }
     }
 
@@ -197,5 +201,6 @@ impl Game {
 
         self.resolve_collisions();
         self.update_movement_anims(&old_positions);
+        self.tick_authority();
     }
 }

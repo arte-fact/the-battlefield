@@ -101,16 +101,22 @@ impl Game {
                     let nx = dx / dist;
                     let ny = dy / dist;
 
-                    let strength = if self.units[i].faction == self.units[j].faction {
-                        0.4
-                    } else {
-                        1.0
-                    };
+                    let same_faction = self.units[i].faction == self.units[j].faction;
+                    let strength = if same_faction { 0.4 } else { 1.0 };
                     let push = overlap * strength;
 
+                    let i_is_player = self.units[i].is_player;
+                    let j_is_player = self.units[j].is_player;
+
                     let (left, right) = self.units.split_at_mut(j);
-                    Self::try_push(&self.grid, &mut left[i], -nx * push, -ny * push);
-                    Self::try_push(&self.grid, &mut right[0], nx * push, ny * push);
+                    // Player is not pushed by same-faction units (prevents followers
+                    // from shoving the player around). The other unit gets full push.
+                    if !(i_is_player && same_faction) {
+                        Self::try_push(&self.grid, &mut left[i], -nx * push, -ny * push);
+                    }
+                    if !(j_is_player && same_faction) {
+                        Self::try_push(&self.grid, &mut right[0], nx * push, ny * push);
+                    }
                 }
             }
         }

@@ -109,6 +109,61 @@ impl TextRenderer {
         blit_pixels(canvas, tc, &mut pixels, text_w, text_h, x, y);
     }
 
+    /// Measure text dimensions without rendering, returning `(width, height)`.
+    fn measure_text(&self, text: &str, size: f32) -> (u32, u32) {
+        let scale = Scale::uniform(size);
+        let v_metrics = self.font.v_metrics(scale);
+        let glyphs: Vec<_> = self
+            .font
+            .layout(text, scale, point(0.0, v_metrics.ascent))
+            .collect();
+
+        if glyphs.is_empty() {
+            return (0, 0);
+        }
+
+        let min_x = glyphs
+            .first()
+            .and_then(|g| g.pixel_bounding_box())
+            .map(|bb| bb.min.x)
+            .unwrap_or(0);
+        let max_x = glyphs
+            .last()
+            .and_then(|g| g.pixel_bounding_box())
+            .map(|bb| bb.max.x)
+            .unwrap_or(0);
+        let text_w = (max_x - min_x) as u32;
+        let text_h = (v_metrics.ascent - v_metrics.descent).ceil() as u32;
+        (text_w, text_h)
+    }
+
+    /// Draw text centered at `(cx, cy)` with a dark semi-transparent background for readability.
+    fn draw_text_centered_with_bg(
+        &self,
+        canvas: &mut Canvas<Window>,
+        tc: &TextureCreator<WindowContext>,
+        text: &str,
+        cx: i32,
+        cy: i32,
+        size: f32,
+        color: Color,
+        bg_color: Color,
+        pad_x: i32,
+        pad_y: i32,
+    ) {
+        let (tw, th) = self.measure_text(text, size);
+        if tw > 0 && th > 0 {
+            let bg_w = tw as i32 + pad_x * 2;
+            let bg_h = th as i32 + pad_y * 2;
+            let bg_x = cx - bg_w / 2;
+            let bg_y = cy - bg_h / 2;
+            canvas.set_blend_mode(BlendMode::Blend);
+            canvas.set_draw_color(bg_color);
+            let _ = canvas.fill_rect(Rect::new(bg_x, bg_y, bg_w as u32, bg_h as u32));
+        }
+        self.draw_text_centered(canvas, tc, text, cx, cy, size, color);
+    }
+
     /// Rasterize text into an RGBA pixel buffer, returning `(width, height, pixels)`.
     fn rasterize(&self, text: &str, size: f32, color: Color) -> Option<(u32, u32, Vec<u8>)> {
         let scale = Scale::uniform(size);
@@ -1002,7 +1057,7 @@ pub fn render_frame(
     );
 
     // 5. Zone overlays (in world space)
-    draw_zones(canvas, game, cam, ts);
+    draw_zones(canvas, tc, assets, game, cam, ts);
 
     // 6. Bushes (ground level, behind units)
     draw_bushes(
@@ -1035,7 +1090,7 @@ pub fn render_frame(
     );
 
     // 13. Screen-space HUD
-    draw_hud(canvas, game, assets);
+    draw_hud(canvas, tc, game, assets);
 
     // 14. Victory progress bar
     draw_victory_progress(canvas, tc, assets, game);
@@ -1437,7 +1492,14 @@ fn draw_rocks(
 // Zone overlays (world space)
 // ───────────────────────────────────────────────────────────────────────────
 
-fn draw_zones(canvas: &mut Canvas<Window>, game: &Game, cam: &Camera, ts: f32) {
+fn draw_zones(
+    canvas: &mut Canvas<Window>,
+    tc: &TextureCreator<WindowContext>,
+    assets: &Assets,
+    game: &Game,
+    cam: &Camera,
+    ts: f32,
+) {
     canvas.set_blend_mode(BlendMode::Blend);
     for zone in &game.zone_manager.zones {
         let (sx, sy) = world_to_screen(zone.center_wx, zone.center_wy, cam);
@@ -1451,7 +1513,22 @@ fn draw_zones(canvas: &mut Canvas<Window>, game: &Game, cam: &Camera, ts: f32) {
         canvas.set_draw_color(Color::RGBA(br, bg, bb, ba));
         stroke_circle(canvas, sx, sy, radius);
 
-        // Progress bar above zone
+        // Zone name label above progress bar
+        let name_y = sy - radius - 22;
+        assets.text.draw_text_centered_with_bg(
+            canvas,
+            tc,
+            zone.name,
+            sx,
+            name_y,
+            14.0,
+            Color::RGBA(255, 255, 255, 200),
+            Color::RGBA(0, 0, 0, 140),
+            5,
+            2,
+        );
+
+        // Progress bar above zone (below name label)
         let bar_w = radius;
         let bar_h = 4_i32;
         let bar_x = sx - bar_w / 2;
@@ -2002,18 +2079,23 @@ fn draw_order_labels(
         };
 
         let alpha = ((unit.order_flash / ORDER_FLASH_DURATION) * 255.0) as u8;
+        let bg_alpha = ((unit.order_flash / ORDER_FLASH_DURATION) * 140.0) as u8;
         let (sx, sy) = world_to_screen(unit.x, unit.y, cam);
         let label_y = sy - (TILE_SIZE * game.camera.zoom) as i32;
 
-        let font_size = 14.0 * game.camera.zoom;
-        assets.text.draw_text_centered(
+        let font_size = 16.0 * game.camera.zoom;
+        let label_cy = label_y - (6.0 * game.camera.zoom) as i32;
+        assets.text.draw_text_centered_with_bg(
             canvas,
             tc,
             label,
             sx,
-            label_y - (6.0 * game.camera.zoom) as i32,
+            label_cy,
             font_size,
             Color::RGBA(255, 215, 0, alpha),
+            Color::RGBA(0, 0, 0, bg_alpha),
+            4,
+            2,
         );
     }
 }
@@ -2063,7 +2145,12 @@ fn draw_fog(
 // Screen-space HUD
 // ───────────────────────────────────────────────────────────────────────────
 
-fn draw_hud(canvas: &mut Canvas<Window>, game: &Game, assets: &mut Assets) {
+fn draw_hud(
+    canvas: &mut Canvas<Window>,
+    tc: &TextureCreator<WindowContext>,
+    game: &Game,
+    assets: &mut Assets,
+) {
     let (w, _h) = canvas.output_size().unwrap_or((960, 640));
 
     // Player HP bar at top-left
@@ -2127,6 +2214,86 @@ fn draw_hud(canvas: &mut Canvas<Window>, game: &Game, assets: &mut Assets) {
                 bar_h as u32,
             ));
         }
+
+        // Authority bar (below HP bar, same sprite style)
+        let auth_x = bar_x;
+        let auth_y = bar_y + bar_h + 6.0;
+        let auth_w = bar_w;
+        let auth_h = bar_h; // same height as HP bar
+
+        // 1. Bar base frame first
+        if let Some((ref tex, bw, bh)) = assets.ui_bar_base {
+            draw_bar_3slice(
+                canvas, tex, bw as f64, bh as f64, auth_x, auth_y, auth_w, auth_h, 24.0,
+            );
+        }
+
+        // 2. Authority fill ON TOP (same insets as HP bar)
+        let auth_ratio = game.authority as f64 / 100.0;
+        let auth_fill_left = 10.0_f64;
+        let auth_fill_right = 10.0_f64;
+        let auth_fill_top = 12.0_f64;
+        let auth_fill_bottom = 12.0_f64;
+        let auth_inner_w = auth_w - auth_fill_left - auth_fill_right;
+        let auth_fill_w = (auth_inner_w * auth_ratio).max(0.0);
+        let auth_fill_h = (auth_h - auth_fill_top - auth_fill_bottom).max(1.0);
+        if auth_fill_w > 0.0 {
+            let (ar, ag, ab) = if game.authority >= 80.0 {
+                (255u8, 200u8, 50u8) // gold
+            } else if game.authority >= 40.0 {
+                (100, 200, 80) // green
+            } else {
+                (150, 150, 160) // grey
+            };
+            if let Some(ref mut fill_tex) = assets.ui_bar_fill {
+                fill_tex.set_color_mod(ar, ag, ab);
+                let _ = canvas.copy(
+                    fill_tex,
+                    Rect::new(0, 20, 64, 24),
+                    Rect::new(
+                        (auth_x + auth_fill_left) as i32,
+                        (auth_y + auth_fill_top) as i32,
+                        auth_fill_w as u32,
+                        auth_fill_h as u32,
+                    ),
+                );
+                fill_tex.set_color_mod(255, 255, 255);
+            } else {
+                canvas.set_draw_color(Color::RGB(ar, ag, ab));
+                let _ = canvas.fill_rect(Rect::new(
+                    (auth_x + auth_fill_left) as i32,
+                    (auth_y + auth_fill_top) as i32,
+                    auth_fill_w as u32,
+                    auth_fill_h as u32,
+                ));
+            }
+        }
+
+        // Fallback border if no bar texture
+        if assets.ui_bar_base.is_none() {
+            canvas.set_draw_color(Color::RGBA(255, 255, 255, 60));
+            let _ = canvas.draw_rect(Rect::new(
+                auth_x as i32,
+                auth_y as i32,
+                auth_w as u32,
+                auth_h as u32,
+            ));
+        }
+
+        // Rank name + follower count (on top of everything)
+        let rank = game.authority_rank_name();
+        let followers = game.follower_count();
+        let max_followers = game.authority_max_followers();
+        let label = format!("{rank} — {followers}/{max_followers}");
+        assets.text.draw_text_centered(
+            canvas,
+            tc,
+            &label,
+            (auth_x + auth_w / 2.0) as i32,
+            (auth_y + auth_h / 2.0) as i32,
+            13.0,
+            Color::RGBA(255, 255, 255, 220),
+        );
     }
 
     // Zone control pips at top-center
@@ -2137,6 +2304,17 @@ fn draw_hud(canvas: &mut Canvas<Window>, game: &Game, assets: &mut Assets) {
         let total_w = zone_count * pip_size + (zone_count - 1) * gap;
         let start_x = (w / 2 - total_w / 2) as i32;
         let pip_y = 10_i32;
+
+        // Dark semi-transparent background panel behind all pips
+        let bg_pad = 6_i32;
+        canvas.set_blend_mode(BlendMode::Blend);
+        canvas.set_draw_color(Color::RGBA(0, 0, 0, 140));
+        let _ = canvas.fill_rect(Rect::new(
+            start_x - bg_pad,
+            pip_y - bg_pad,
+            total_w + bg_pad as u32 * 2,
+            pip_size + bg_pad as u32 * 2,
+        ));
 
         for (i, zone) in game.zone_manager.zones.iter().enumerate() {
             let px = start_x + (i as u32 * (pip_size + gap)) as i32;
@@ -2196,11 +2374,11 @@ fn draw_victory_progress(
         );
     }
 
-    // 2. Fill ON TOP inside the inner area
-    let fill_left = 22.0_f64;
-    let fill_right = 22.0_f64;
-    let fill_top = 9.0_f64;
-    let fill_bottom = 4.0_f64;
+    // 2. Fill ON TOP inside the inner area (same insets as HP bar)
+    let fill_left = 10.0_f64;
+    let fill_right = 10.0_f64;
+    let fill_top = 12.0_f64;
+    let fill_bottom = 12.0_f64;
     let inner_w = bar_w - fill_left - fill_right;
     let fill_w = (inner_w * progress as f64).max(0.0);
     let fill_h = (bar_h - fill_top - fill_bottom).max(1.0);
@@ -2260,7 +2438,7 @@ fn draw_victory_progress(
         &msg,
         cx as i32,
         (bar_y - 16.0) as i32,
-        14.0,
+        16.0,
         Color::RGBA(255, 255, 255, 180),
     );
 }
