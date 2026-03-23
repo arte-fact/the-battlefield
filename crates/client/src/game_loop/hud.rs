@@ -1,9 +1,11 @@
-use crate::animation::TurnAnimator;
-use crate::game::{Game, ATTACK_CONE_HALF_ANGLE, ORDER_FLASH_DURATION};
-use crate::grid::{self, Decoration, TileKind, TILE_SIZE};
+use super::assets::LoadedTextures;
 use crate::renderer::{Canvas2dRenderer, Renderer};
-use crate::unit::{Faction, OrderKind};
-use crate::zone::ZoneState;
+use battlefield_core::animation::TurnAnimator;
+use battlefield_core::game::{Game, ATTACK_CONE_HALF_ANGLE, ORDER_FLASH_DURATION};
+use battlefield_core::grid::{self, Decoration, TileKind, TILE_SIZE};
+use battlefield_core::render_util;
+use battlefield_core::unit::Faction;
+use battlefield_core::zone::ZoneState;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -24,12 +26,10 @@ pub(super) fn draw_unit_bars(
             continue;
         }
         // Hide enemy HP bars outside friendly line of sight
-        if unit.faction != Faction::Blue {
-            let (gx, gy) = unit.grid_cell();
-            let idx = (gy * game.grid.width + gx) as usize;
-            if !game.visible[idx] {
-                continue;
-            }
+        let (gx, gy) = unit.grid_cell();
+        if !render_util::is_visible_to_player(unit.faction, gx, gy, &game.visible, game.grid.width)
+        {
+            continue;
         }
         let (wx, wy) = (unit.x, unit.y);
         let bar_width = 48.0_f64;
@@ -67,11 +67,8 @@ pub(super) fn draw_unit_bars(
         if !unit.alive || unit.order_flash <= 0.0 {
             continue;
         }
-        let label = match unit.order {
-            Some(OrderKind::Hold { .. }) => "HOLD",
-            Some(OrderKind::Go { .. }) => "GO",
-            Some(OrderKind::Retreat { .. }) => "RETREAT",
-            Some(OrderKind::Follow) => "FOLLOW",
+        let label = match render_util::order_label(unit.order.as_ref()) {
+            Some(l) => l,
             None => continue,
         };
 
@@ -135,7 +132,6 @@ pub(super) fn draw_zone_overlays(
                 ("rgba(60,120,255,0.12)", "rgba(60,120,255,0.5)")
             }
             ZoneState::Controlled(Faction::Red) => ("rgba(255,60,60,0.12)", "rgba(255,60,60,0.5)"),
-            _ => ("rgba(200,200,200,0.06)", "rgba(200,200,200,0.25)"),
         };
 
         // Semi-transparent circular fill
@@ -159,7 +155,7 @@ pub(super) fn draw_zone_overlays(
         r.set_text_align("center");
         r.set_text_baseline("bottom");
         r.set_fill_color("rgba(255,255,255,0.7)");
-        r.fill_text(&zone.name, cx, label_y);
+        r.fill_text(zone.name, cx, label_y);
 
         // Progress bar (just below the label, above circle)
         let bar_w = radius;
@@ -233,7 +229,6 @@ pub(super) fn draw_zone_hud(
             ZoneState::Capturing(Faction::Red) | ZoneState::Controlled(Faction::Red) => {
                 ("rgba(255,60,60,0.8)", zone.progress.abs() as f64)
             }
-            _ => ("rgba(150,150,150,0.5)", 0.0),
         };
 
         if fill_ratio > 0.01 {
@@ -490,7 +485,7 @@ pub(super) fn draw_victory_progress(
     r.set_fill_color("white");
     r.set_text_align("center");
     r.set_text_baseline("middle");
-    let remaining = ((1.0 - progress) * crate::zone::VICTORY_HOLD_TIME) as u32;
+    let remaining = ((1.0 - progress) * battlefield_core::zone::VICTORY_HOLD_TIME) as u32;
     let label = match faction {
         Faction::Blue => format!("Blue holds all zones - Victory in {remaining}s"),
         _ => format!("Red holds all zones - Victory in {remaining}s"),
@@ -548,6 +543,103 @@ pub(super) fn draw_overlays(
     }
 
     r.set_alpha(1.0);
+
+    Ok(())
+}
+
+/// Draw a sprite-based player HP bar in screen space (top-left corner).
+///
+/// Uses the BigBar_Base (3-slice frame) and BigBar_Fill (colored fill) textures
+/// when available, falling back to plain colored rects.
+pub(super) fn draw_player_hp_bar(
+    r: &Canvas2dRenderer,
+    game: &Game,
+    loaded: &LoadedTextures,
+    dpr: f64,
+) -> Result<(), JsValue> {
+    let player = match game.player_unit() {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+
+    let bar_x = 10.0 * dpr;
+    let bar_y = 8.0 * dpr;
+    let bar_w = 140.0 * dpr;
+    let bar_h = 24.0 * dpr;
+
+    let ratio = player.hp as f64 / player.stats.max_hp as f64;
+    let inset_x = 24.0 * dpr;
+    let inset_y = 6.0 * dpr;
+    let inner_w = bar_w - inset_x * 2.0;
+    let fill_w = (inner_w * ratio).max(0.0);
+
+    // 1. Draw fill (behind the frame)
+    if fill_w > 0.0 {
+        let (hr, hg, hb) = render_util::hp_bar_color(ratio);
+        if let Some(tex) = loaded.ui_bar_fill {
+            r.draw_texture(
+                tex,
+                0.0,
+                0.0,
+                64.0,
+                64.0,
+                bar_x + inset_x,
+                bar_y + inset_y,
+                fill_w,
+                bar_h - inset_y * 2.0,
+            )?;
+            // Tint the fill by overlaying a colored rect with multiply compositing.
+            // Canvas2D does not support color mod like SDL, so this approximates it.
+            r.set_fill_color(&format!("rgba({hr},{hg},{hb},0.7)"));
+            r.set_composite_op("multiply");
+            r.fill_rect(
+                bar_x + inset_x,
+                bar_y + inset_y,
+                fill_w,
+                bar_h - inset_y * 2.0,
+            );
+            r.set_composite_op("source-over");
+        } else {
+            r.set_fill_color(&format!("rgb({hr},{hg},{hb})"));
+            r.fill_rect(
+                bar_x + inset_x,
+                bar_y + inset_y,
+                fill_w,
+                bar_h - inset_y * 2.0,
+            );
+        }
+    }
+
+    // 2. Draw bar frame (3-part, exact source rects, on top of fill)
+    if let Some(tex) = loaded.ui_bar_base {
+        let cap_w = 28.0 * dpr;
+        let cap = cap_w.min(bar_w / 2.0);
+        let mid_w = (bar_w - cap * 2.0).max(0.0);
+
+        let (lsx, lsy, lsw, lsh) = render_util::BAR_LEFT;
+        let (csx, csy, csw, csh) = render_util::BAR_CENTER;
+        let (rsx, rsy, rsw, rsh) = render_util::BAR_RIGHT;
+
+        r.draw_texture(tex, lsx, lsy, lsw, lsh, bar_x, bar_y, cap, bar_h)?;
+        if mid_w > 0.0 {
+            r.draw_texture(tex, csx, csy, csw, csh, bar_x + cap, bar_y, mid_w, bar_h)?;
+        }
+        r.draw_texture(
+            tex,
+            rsx,
+            rsy,
+            rsw,
+            rsh,
+            bar_x + cap + mid_w,
+            bar_y,
+            cap,
+            bar_h,
+        )?;
+    } else {
+        r.set_stroke_color("rgba(255,255,255,0.5)");
+        r.set_line_width(1.0);
+        r.stroke_rect(bar_x, bar_y, bar_w, bar_h);
+    }
 
     Ok(())
 }

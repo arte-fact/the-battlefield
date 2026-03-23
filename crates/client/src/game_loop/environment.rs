@@ -1,9 +1,8 @@
 use super::assets::LoadedTextures;
-use super::helpers::compute_wave_frame;
-use super::terrain::tile_flip;
-use crate::game::Game;
-use crate::grid::{Decoration, TileKind, TILE_SIZE};
 use crate::renderer::{Canvas2dRenderer, Renderer};
+use battlefield_core::game::Game;
+use battlefield_core::grid::{Decoration, TileKind, TILE_SIZE};
+use battlefield_core::render_util;
 use wasm_bindgen::prelude::*;
 
 /// Draw water background tiles (visible range only, per-frame).
@@ -58,17 +57,16 @@ pub(super) fn draw_foam(
     let ts = TILE_SIZE as f64;
 
     if let Some(foam_tex_id) = loaded.foam_texture {
-        let foam_fps = 8.0;
-        let global_frame = (elapsed * foam_fps) as u32;
-
         for gy in min_gy..max_gy {
             for gx in min_gx..max_gx {
                 let idx = (gy * game.grid.width + gx) as usize;
                 if !game.water_adjacency.get(idx).copied().unwrap_or(false) {
                     continue;
                 }
-                let tile_offset = (gx.wrapping_mul(7).wrapping_add(gy.wrapping_mul(13))) % 16;
-                let frame = (global_frame + tile_offset) % 16;
+                let frame = match render_util::foam_frame(elapsed, gx, gy) {
+                    Some(f) => f,
+                    None => continue, // wind calm — skip foam
+                };
                 let foam_size = 192.0_f64;
                 let sx = (frame as f64) * foam_size;
                 let dx = (gx as f64) * ts + ts / 2.0 - foam_size / 2.0;
@@ -112,21 +110,22 @@ pub(super) fn draw_bushes(
             if game.grid.decoration(gx, gy) != Some(Decoration::Bush) {
                 continue;
             }
-            let variant_idx = (gx.wrapping_mul(41).wrapping_add(gy.wrapping_mul(23))) as usize
-                % loaded.bush_textures.len();
+            let variant_idx =
+                render_util::variant_index(gx, gy, loaded.bush_textures.len(), 41, 23);
             let (tex_id, frame_w, frame_h) = loaded.bush_textures[variant_idx];
 
             if let Some(info) = r.texture_info(tex_id) {
                 let fw = frame_w as f64;
                 let fh = frame_h as f64;
 
-                let frame = compute_wave_frame(elapsed, gx, gy, info.frame_count, 0.15);
+                let frame =
+                    render_util::compute_wave_frame(elapsed, gx, gy, info.frame_count, 0.15);
                 let sx = frame as f64 * fw;
 
                 let dx = (gx as f64) * ts;
                 let dy = (gy as f64) * ts;
 
-                if tile_flip(gx, gy) {
+                if render_util::tile_flip(gx, gy) {
                     if let Some((flipped, _, _)) = loaded.bush_textures_flipped.get(variant_idx) {
                         let sheet_w = info.frame_count as f64 * fw;
                         let flipped_sx = sheet_w - sx - fw;
@@ -161,14 +160,14 @@ pub(super) fn draw_rocks(
             if game.grid.get(gx, gy) != TileKind::Rock {
                 continue;
             }
-            let variant_idx = (gx.wrapping_mul(13).wrapping_add(gy.wrapping_mul(29))) as usize
-                % loaded.rock_textures.len();
+            let variant_idx =
+                render_util::variant_index(gx, gy, loaded.rock_textures.len(), 13, 29);
             let tex_id = loaded.rock_textures[variant_idx];
 
             let dx = (gx as f64) * ts;
             let dy = (gy as f64) * ts;
 
-            if tile_flip(gx, gy) {
+            if render_util::tile_flip(gx, gy) {
                 if let Some(flipped) = loaded.rock_textures_flipped.get(variant_idx) {
                     r.draw_canvas_region(flipped, 0.0, 0.0, 64.0, 64.0, dx, dy, ts, ts)?;
                 }

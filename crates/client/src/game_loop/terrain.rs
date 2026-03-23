@@ -1,8 +1,9 @@
 use super::assets::LoadedTextures;
-use crate::autotile;
-use crate::game::Game;
-use crate::grid::{self, TileKind, TILE_SIZE};
 use crate::renderer::Canvas2dRenderer;
+use battlefield_core::autotile;
+use battlefield_core::game::Game;
+use battlefield_core::grid::{self, TileKind, TILE_SIZE};
+use battlefield_core::render_util;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -30,8 +31,8 @@ impl TerrainChunks {
         grid_w: u32,
         grid_h: u32,
     ) -> Result<Self, JsValue> {
-        let cols = (grid_w + CHUNK_TILES - 1) / CHUNK_TILES;
-        let rows = (grid_h + CHUNK_TILES - 1) / CHUNK_TILES;
+        let cols = grid_w.div_ceil(CHUNK_TILES);
+        let rows = grid_h.div_ceil(CHUNK_TILES);
         let count = (cols * rows) as usize;
         let chunk_px = CHUNK_TILES * (TILE_SIZE as u32);
 
@@ -66,12 +67,6 @@ impl TerrainChunks {
             *d = true;
         }
     }
-}
-
-/// Deterministic pseudo-random flip based on grid position.
-/// Returns true for ~50% of tiles in a spatially uniform pattern.
-pub(super) fn tile_flip(gx: u32, gy: u32) -> bool {
-    gx.wrapping_mul(48271).wrapping_add(gy.wrapping_mul(16807)) & 1 == 0
 }
 
 /// Draw a tile-sized image horizontally flipped.
@@ -173,7 +168,7 @@ pub(super) fn render_terrain_chunk(
                     let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
                     let dx = (gx as f64) * ts - ox;
                     let dy = (gy as f64) * ts - oy;
-                    if col == 1 && row == 1 && tile_flip(gx, gy) {
+                    if col == 1 && row == 1 && render_util::tile_flip(gx, gy) {
                         draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
                     } else {
                         ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
@@ -197,7 +192,7 @@ pub(super) fn render_terrain_chunk(
                     let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
                     let dx = (gx as f64) * ts - ox;
                     let dy = (gy as f64) * ts - oy;
-                    if col == 1 && row == 1 && tile_flip(gx, gy) {
+                    if col == 1 && row == 1 && render_util::tile_flip(gx, gy) {
                         draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
                     } else {
                         ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
@@ -259,7 +254,7 @@ pub(super) fn render_terrain_chunk(
                         let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
                         let dx = (gx as f64) * ts - ox;
                         let dy = (gy as f64) * ts - oy;
-                        if col == 6 && row == 1 && tile_flip(gx, gy) {
+                        if col == 6 && row == 1 && render_util::tile_flip(gx, gy) {
                             draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
                         } else {
                             ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
@@ -270,7 +265,7 @@ pub(super) fn render_terrain_chunk(
                         if let Some((ccol, crow)) = autotile::cliff_src(&game.grid, gx, gy, level) {
                             let (csx, csy, csw, csh) = grid::tilemap_src_rect(ccol, crow);
                             let cdy = ((gy + 1) as f64) * ts - oy;
-                            if tile_flip(gx, gy.wrapping_add(1000)) {
+                            if render_util::tile_flip(gx, gy.wrapping_add(1000)) {
                                 draw_tile_flipped(ctx, img, csx, csy, csw, csh, dx, cdy, ts, ts)?;
                             } else {
                                 ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(

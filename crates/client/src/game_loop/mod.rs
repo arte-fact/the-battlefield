@@ -9,13 +9,13 @@ mod screens;
 mod terrain;
 mod touch;
 
-use crate::animation::TurnAnimator;
-use crate::game::Game;
-use crate::grid::{GRID_SIZE, TILE_SIZE};
 use crate::input::Input;
-use crate::particle::Particle;
 use crate::renderer::{Canvas2dRenderer, Renderer};
-use crate::unit::{Facing, Faction};
+use battlefield_core::animation::TurnAnimator;
+use battlefield_core::game::Game;
+use battlefield_core::grid::{GRID_SIZE, TILE_SIZE};
+use battlefield_core::particle::Particle;
+use battlefield_core::unit::{Facing, Faction};
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
@@ -151,7 +151,8 @@ pub fn run(
     }
 
     // Game loop
-    let f: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
+    type RafClosure = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
+    let f: RafClosure = Rc::new(RefCell::new(None));
     let g = f.clone();
 
     *g.borrow_mut() = Some(Closure::wrap(Box::new(move |timestamp: f64| {

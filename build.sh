@@ -3,10 +3,10 @@
 set -e
 
 echo "Building wasm..."
-wasm-pack build --target web
+wasm-pack build crates/client --target web --out-dir ../../pkg
 
 # Generate cache-busting hash from the wasm binary
-HASH=$(sha256sum pkg/the_battlefield_bg.wasm | cut -c1-8)
+HASH=$(sha256sum pkg/battlefield_client_bg.wasm | cut -c1-8)
 CACHE_NAME="battlefield-${HASH}"
 
 # Update CACHE_NAME in sw.js (the browser byte-diffs sw.js on each navigation;

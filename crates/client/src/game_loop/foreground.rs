@@ -1,14 +1,13 @@
 use super::assets::{LoadedTextures, UnitTextureKey};
-use super::helpers::compute_wave_frame;
-use super::terrain::tile_flip;
-use crate::animation::TurnAnimator;
-use crate::building::BuildingKind;
-use crate::game::Game;
-use crate::grid::{Decoration, TileKind, TILE_SIZE};
 use crate::renderer::{Canvas2dRenderer, Renderer};
-use crate::sprite::SpriteSheet;
-use crate::unit::{Facing, Faction, UnitAnim, UnitKind, DEATH_FADE_DURATION};
-use crate::zone::ZoneState;
+use battlefield_core::animation::TurnAnimator;
+use battlefield_core::building::BuildingKind;
+use battlefield_core::game::Game;
+use battlefield_core::grid::{Decoration, TileKind, TILE_SIZE};
+use battlefield_core::render_util;
+use battlefield_core::sprite::SpriteSheet;
+use battlefield_core::unit::{Facing, Faction, UnitAnim, UnitKind};
+use battlefield_core::zone::ZoneState;
 use wasm_bindgen::prelude::*;
 
 /// A drawable entity for Y-sorted rendering.
@@ -52,12 +51,9 @@ pub(super) fn draw_foreground(
             continue;
         }
         // Hide enemy units on non-visible tiles
-        if u.faction != Faction::Blue {
-            let (gx, gy) = u.grid_cell();
-            let idx = (gy * game.grid.width + gx) as usize;
-            if !game.visible[idx] {
-                continue;
-            }
+        let (gx, gy) = u.grid_cell();
+        if !render_util::is_visible_to_player(u.faction, gx, gy, &game.visible, game.grid.width) {
+            continue;
         }
         drawables.push((u.y as f64 + ts * 0.5, Drawable::Unit(i)));
     }
@@ -185,20 +181,14 @@ fn draw_unit(
         // Archer idle uses wind wave pattern to sync with trees/bushes
         let anim_frame = if unit.kind == UnitKind::Archer && unit.current_anim == UnitAnim::Idle {
             let (gx, gy) = unit.grid_cell();
-            compute_wave_frame(elapsed, gx, gy, unit.animation.frame_count, 0.15)
+            render_util::compute_wave_frame(elapsed, gx, gy, unit.animation.frame_count, 0.15)
         } else {
             unit.animation.current_frame
         };
         let (sx, sy, sw, sh) = sheet.frame_src_rect(anim_frame);
         let sprite_size = unit.kind.frame_size() as f64;
 
-        let opacity = if !unit.alive {
-            (unit.death_fade / DEATH_FADE_DURATION).clamp(0.0, 1.0) as f64
-        } else if unit.hit_flash > 0.0 && (unit.hit_flash * 30.0) as i32 % 2 == 0 {
-            0.3
-        } else {
-            1.0
-        };
+        let opacity = render_util::unit_opacity(unit.alive, unit.death_fade, unit.hit_flash);
 
         let dx = (unit.x as f64) - sprite_size / 2.0;
         let dy = (unit.y as f64) - sprite_size / 2.0;
@@ -230,15 +220,14 @@ fn draw_tree(
     ts: f64,
     player_pos: Option<(f64, f64)>,
 ) -> Result<(), JsValue> {
-    let variant_idx = (gx.wrapping_mul(31).wrapping_add(gy.wrapping_mul(17))) as usize
-        % loaded.tree_textures.len();
+    let variant_idx = render_util::variant_index(gx, gy, loaded.tree_textures.len(), 31, 17);
     let (tex_id, frame_w, frame_h) = loaded.tree_textures[variant_idx];
 
     if let Some(info) = r.texture_info(tex_id) {
         let fw = frame_w as f64;
         let fh = frame_h as f64;
 
-        let frame = compute_wave_frame(elapsed, gx, gy, info.frame_count, 0.15);
+        let frame = render_util::compute_wave_frame(elapsed, gx, gy, info.frame_count, 0.15);
         let sx = frame as f64 * fw;
 
         let draw_w = ts * 3.0;
@@ -251,29 +240,13 @@ fn draw_tree(
         let tree_cy = (gy as f64) * ts + ts / 2.0;
 
         // Semi-transparent when near the player to avoid hiding them
-        let alpha = if let Some((px, py)) = player_pos {
-            let dist_x = (tree_cx - px).abs();
-            let dist_y = (tree_cy - py).abs();
-            let dist = (dist_x * dist_x + dist_y * dist_y).sqrt();
-            let fade_start = ts * 2.5; // start fading at 2.5 tiles
-            let fade_end = ts * 1.0; // fully transparent at 1 tile
-            if dist < fade_end {
-                0.3
-            } else if dist < fade_start {
-                let t = (dist - fade_end) / (fade_start - fade_end);
-                0.3 + t * 0.7
-            } else {
-                1.0
-            }
-        } else {
-            1.0
-        };
+        let alpha = render_util::tree_alpha(tree_cx, tree_cy, player_pos, ts);
 
         if (alpha - 1.0).abs() > 0.001 {
             r.set_alpha(alpha);
         }
 
-        if tile_flip(gx, gy) {
+        if render_util::tile_flip(gx, gy) {
             if let Some((flipped, _, _)) = loaded.tree_textures_flipped.get(variant_idx) {
                 let sheet_w = info.frame_count as f64 * fw;
                 let flipped_sx = sheet_w - sx - fw;
@@ -298,21 +271,20 @@ fn draw_water_rock(
     elapsed: f64,
     ts: f64,
 ) -> Result<(), JsValue> {
-    let variant_idx = (gx.wrapping_mul(37).wrapping_add(gy.wrapping_mul(19))) as usize
-        % loaded.water_rock_textures.len();
+    let variant_idx = render_util::variant_index(gx, gy, loaded.water_rock_textures.len(), 37, 19);
     let (tex_id, frame_w, frame_h) = loaded.water_rock_textures[variant_idx];
 
     if let Some(info) = r.texture_info(tex_id) {
         let fw = frame_w as f64;
         let fh = frame_h as f64;
 
-        let frame = compute_wave_frame(elapsed, gx, gy, info.frame_count, 0.2);
+        let frame = render_util::compute_wave_frame(elapsed, gx, gy, info.frame_count, 0.2);
         let sx = frame as f64 * fw;
 
         let dx = (gx as f64) * ts;
         let dy = (gy as f64) * ts;
 
-        if tile_flip(gx, gy) {
+        if render_util::tile_flip(gx, gy) {
             if let Some((flipped, _, _)) = loaded.water_rock_textures_flipped.get(variant_idx) {
                 let sheet_w = info.frame_count as f64 * fw;
                 let flipped_sx = sheet_w - sx - fw;

@@ -1,13 +1,15 @@
 use super::LoopState;
-use crate::building::BuildingKind;
 use crate::renderer::load_image;
 use crate::renderer::TextureId;
-use crate::unit::{Faction, UnitAnim, UnitKind};
+use battlefield_core::building::BuildingKind;
+use battlefield_core::render_util;
+use battlefield_core::unit::{Faction, UnitAnim, UnitKind};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement};
 
 use super::ASSET_BASE;
 
@@ -49,6 +51,24 @@ pub(super) struct LoadedTextures {
     /// Base building textures: indexed by kind_index * 2 + faction_index
     /// kind: 0=Barracks, 1=Archery, 2=Monastery; faction: 0=Blue, 1=Red
     pub(super) building_textures: Vec<(TextureId, u32, u32)>,
+    /// UI 9-slice panel background (SpecialPaper.png, 320x320, 3x3 grid of 106px cells)
+    pub(super) ui_special_paper: Option<TextureId>,
+    /// UI blue button (BigBlueButton_Regular.png, 320x320)
+    pub(super) ui_blue_btn: Option<TextureId>,
+    /// UI red button (BigRedButton_Regular.png, 320x320)
+    pub(super) ui_red_btn: Option<TextureId>,
+    /// Pre-processed gapless 9-slice atlas for SpecialPaper (canvas, width, height)
+    pub(super) ui_panel_atlas: Option<(web_sys::HtmlCanvasElement, u32, u32)>,
+    /// Pre-processed gapless 9-slice atlas for BigBlueButton (canvas, width, height)
+    pub(super) ui_blue_btn_atlas: Option<(web_sys::HtmlCanvasElement, u32, u32)>,
+    /// Pre-processed gapless 9-slice atlas for BigRedButton (canvas, width, height)
+    pub(super) ui_red_btn_atlas: Option<(web_sys::HtmlCanvasElement, u32, u32)>,
+    /// UI bar base frame (BigBar_Base.png, 320x64)
+    pub(super) ui_bar_base: Option<TextureId>,
+    /// UI bar fill (BigBar_Fill.png, 64x64)
+    pub(super) ui_bar_fill: Option<TextureId>,
+    /// UI ribbon sprite sheet (BigRibbons.png, 448x640, 3 cols x 5 rows of 149x128)
+    pub(super) ui_big_ribbons: Option<TextureId>,
 }
 
 impl LoadedTextures {
@@ -72,6 +92,15 @@ impl LoadedTextures {
             water_rock_textures_flipped: Vec::new(),
             tower_textures: Vec::new(),
             building_textures: Vec::new(),
+            ui_special_paper: None,
+            ui_blue_btn: None,
+            ui_red_btn: None,
+            ui_panel_atlas: None,
+            ui_blue_btn_atlas: None,
+            ui_red_btn_atlas: None,
+            ui_bar_base: None,
+            ui_bar_fill: None,
+            ui_big_ribbons: None,
         }
     }
 }
@@ -108,6 +137,38 @@ pub(super) async fn load_texture(
     };
 
     Ok(id)
+}
+
+/// Create a gapless 9-slice atlas canvas by blitting 9 source cells from the
+/// original image into a tightly packed layout. Returns `(canvas, width, height)`.
+fn create_9slice_atlas(
+    img: &HtmlImageElement,
+    cells: &[[f64; 4]; 9],
+) -> Result<(HtmlCanvasElement, u32, u32), JsValue> {
+    let (aw, ah) = render_util::nine_cell_atlas_size(cells);
+    let positions = render_util::nine_cell_atlas_positions(cells);
+
+    let document = web_sys::window().unwrap().document().unwrap();
+    let canvas: HtmlCanvasElement = document
+        .create_element("canvas")?
+        .dyn_into::<HtmlCanvasElement>()?;
+    canvas.set_width(aw);
+    canvas.set_height(ah);
+
+    let ctx: CanvasRenderingContext2d = canvas
+        .get_context("2d")?
+        .unwrap()
+        .dyn_into::<CanvasRenderingContext2d>()?;
+
+    for (i, cell) in cells.iter().enumerate() {
+        let (sx, sy, sw, sh) = (cell[0], cell[1], cell[2], cell[3]);
+        let (dx, dy) = positions[i];
+        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+            img, sx, sy, sw, sh, dx, dy, sw, sh,
+        )?;
+    }
+
+    Ok((canvas, aw, ah))
 }
 
 pub(super) async fn load_textures(
@@ -295,6 +356,61 @@ pub(super) async fn load_textures(
                 loaded.borrow_mut().building_textures.push((tex_id, sw, sh));
             }
         }
+    }
+
+    // UI textures (9-slice panels, buttons, bars, ribbons)
+    let ui_base = format!("{ASSET_BASE}/UI Elements/UI Elements");
+    {
+        let url = format!("{ui_base}/Papers/SpecialPaper.png");
+        loaded.borrow_mut().ui_special_paper = load_texture(state, &url, 106, 106, 9).await.ok();
+    }
+    {
+        let url = format!("{ui_base}/Buttons/BigBlueButton_Regular.png");
+        loaded.borrow_mut().ui_blue_btn = load_texture(state, &url, 106, 106, 9).await.ok();
+    }
+    {
+        let url = format!("{ui_base}/Buttons/BigRedButton_Regular.png");
+        loaded.borrow_mut().ui_red_btn = load_texture(state, &url, 106, 106, 9).await.ok();
+    }
+    {
+        let url = format!("{ui_base}/Bars/BigBar_Base.png");
+        loaded.borrow_mut().ui_bar_base = load_texture(state, &url, 106, 64, 3).await.ok();
+    }
+    {
+        let url = format!("{ui_base}/Bars/BigBar_Fill.png");
+        loaded.borrow_mut().ui_bar_fill = load_texture(state, &url, 64, 64, 1).await.ok();
+    }
+    {
+        let url = format!("{ui_base}/Ribbons/BigRibbons.png");
+        loaded.borrow_mut().ui_big_ribbons = load_texture(state, &url, 149, 128, 15).await.ok();
+    }
+
+    // Build gapless 9-slice atlases from the loaded UI images
+    {
+        let guard = state.borrow();
+        let tm = guard.renderer.texture_manager();
+        let loaded_ref = loaded.borrow();
+
+        let panel_atlas = loaded_ref.ui_special_paper.and_then(|tex_id| {
+            let (img, _, _, _) = tm.get_image(tex_id)?;
+            create_9slice_atlas(img, &render_util::SPECIAL_PAPER_CELLS).ok()
+        });
+        let blue_atlas = loaded_ref.ui_blue_btn.and_then(|tex_id| {
+            let (img, _, _, _) = tm.get_image(tex_id)?;
+            create_9slice_atlas(img, &render_util::BUTTON_CELLS).ok()
+        });
+        let red_atlas = loaded_ref.ui_red_btn.and_then(|tex_id| {
+            let (img, _, _, _) = tm.get_image(tex_id)?;
+            create_9slice_atlas(img, &render_util::BUTTON_CELLS).ok()
+        });
+
+        drop(loaded_ref);
+        drop(guard);
+
+        let mut loaded_mut = loaded.borrow_mut();
+        loaded_mut.ui_panel_atlas = panel_atlas;
+        loaded_mut.ui_blue_btn_atlas = blue_atlas;
+        loaded_mut.ui_red_btn_atlas = red_atlas;
     }
 
     // Pre-flip tree and rock textures at load time (eliminates per-frame save/translate/scale/restore)

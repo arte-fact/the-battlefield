@@ -1,7 +1,7 @@
 use crate::sprite::AnimationState;
 use crate::unit::Faction;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ParticleKind {
     Dust,
     ExplosionLarge,

@@ -1,27 +1,11 @@
-pub mod animation;
-pub mod autotile;
-pub mod building;
-pub mod camera;
-pub mod combat;
-pub mod flowfield;
-pub mod game;
-pub mod grid;
-pub mod input;
-pub mod mapgen;
-pub mod particle;
-pub mod sprite;
-pub mod unit;
-pub mod zone;
+#![allow(clippy::too_many_arguments)]
 
-#[cfg(target_arch = "wasm32")]
 mod game_loop;
-#[cfg(target_arch = "wasm32")]
+mod input;
 mod renderer;
 
-#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub async fn start() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
@@ -36,7 +20,6 @@ pub async fn start() -> Result<(), JsValue> {
         .ok_or("no canvas element")?
         .dyn_into::<web_sys::HtmlCanvasElement>()?;
 
-    // DPR-aware canvas sizing: scale backing store for sharp rendering on high-DPI screens
     let dpr = window.device_pixel_ratio() as f32;
     let css_w = canvas.client_width() as f32;
     let css_h = canvas.client_height() as f32;
@@ -50,8 +33,9 @@ pub async fn start() -> Result<(), JsValue> {
 
     let renderer = renderer::Canvas2dRenderer::new(&canvas, dpr as f64)?;
 
-    let mut game_state = game::Game::new(canvas_w as f32, canvas_h as f32);
-    let initial_seed = game_state.setup_demo_battle();
+    let mut game_state = battlefield_core::game::Game::new(canvas_w as f32, canvas_h as f32);
+    let initial_seed = (js_sys::Math::random() * u32::MAX as f64) as u32;
+    game_state.setup_demo_battle_with_seed(initial_seed);
 
     game_loop::run(renderer, game_state, &canvas, initial_seed)?;
 

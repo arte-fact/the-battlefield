@@ -3,16 +3,17 @@ use super::environment::{draw_bushes, draw_foam, draw_rocks, draw_water};
 use super::fog::update_fog_canvas;
 use super::foreground::draw_foreground;
 use super::hud::{
-    draw_minimap, draw_overlays, draw_unit_bars, draw_victory_progress, draw_zone_hud,
-    draw_zone_overlays,
+    draw_minimap, draw_overlays, draw_player_hp_bar, draw_unit_bars, draw_victory_progress,
+    draw_zone_hud, draw_zone_overlays,
 };
 use super::screens::{draw_death_screen, draw_main_menu, draw_result_screen, GameScreen};
 use super::terrain::{render_terrain_chunk, CHUNK_TILES};
 use super::touch::draw_touch_controls;
 use super::LoopState;
-use crate::grid::TILE_SIZE;
 use crate::input::Input;
 use crate::renderer::Renderer;
+use battlefield_core::grid::TILE_SIZE;
+use battlefield_core::render_util;
 use wasm_bindgen::prelude::*;
 
 pub(super) fn render_frame(
@@ -53,11 +54,8 @@ pub(super) fn render_frame(
     r.scale(zoom, zoom)?;
 
     // Visible tile range
-    let (vl, vt, vr, vb) = game.camera.visible_rect();
-    let min_gx = ((vl / TILE_SIZE).floor() as i32).max(0) as u32;
-    let min_gy = ((vt / TILE_SIZE).floor() as i32).max(0) as u32;
-    let max_gx = ((vr / TILE_SIZE).ceil() as i32).min(game.grid.width as i32) as u32;
-    let max_gy = ((vb / TILE_SIZE).ceil() as i32).min(game.grid.height as i32) as u32;
+    let (min_gx, min_gy, max_gx, max_gy) =
+        render_util::visible_tile_range(&game.camera, game.grid.width, game.grid.height);
 
     // 3. Water -> foam -> cached terrain chunks (only visible chunks drawn)
     draw_water(r, game, loaded, min_gx, min_gy, max_gx, max_gy)?;
@@ -76,8 +74,8 @@ pub(super) fn render_frame(
     {
         let min_cx = min_gx / CHUNK_TILES;
         let min_cy = min_gy / CHUNK_TILES;
-        let max_cx = ((max_gx + CHUNK_TILES - 1) / CHUNK_TILES).min(state.terrain_chunks.cols);
-        let max_cy = ((max_gy + CHUNK_TILES - 1) / CHUNK_TILES).min(state.terrain_chunks.rows);
+        let max_cx = max_gx.div_ceil(CHUNK_TILES).min(state.terrain_chunks.cols);
+        let max_cy = max_gy.div_ceil(CHUNK_TILES).min(state.terrain_chunks.rows);
 
         for cy in min_cy..max_cy {
             for cx in min_cx..max_cx {
@@ -197,6 +195,11 @@ pub(super) fn render_frame(
         input.is_touch_device,
     )?;
 
+    // Draw sprite-based player HP bar (screen-space, top-left)
+    if state.screen == GameScreen::Playing {
+        draw_player_hp_bar(r, game, loaded, r.dpr())?;
+    }
+
     // Draw victory progress bar (only during gameplay)
     if state.screen == GameScreen::Playing {
         draw_victory_progress(r, game, canvas_w, canvas_h, r.dpr())?;
@@ -211,14 +214,29 @@ pub(super) fn render_frame(
     state.overlay_buttons.clear();
     match state.screen {
         GameScreen::MainMenu => {
-            draw_main_menu(r, canvas_w, canvas_h, r.dpr(), &mut state.overlay_buttons)?;
+            draw_main_menu(
+                r,
+                loaded,
+                canvas_w,
+                canvas_h,
+                r.dpr(),
+                &mut state.overlay_buttons,
+            )?;
         }
         GameScreen::PlayerDeath => {
-            draw_death_screen(r, canvas_w, canvas_h, r.dpr(), &mut state.overlay_buttons)?;
+            draw_death_screen(
+                r,
+                loaded,
+                canvas_w,
+                canvas_h,
+                r.dpr(),
+                &mut state.overlay_buttons,
+            )?;
         }
         GameScreen::GameWon => {
             draw_result_screen(
                 r,
+                loaded,
                 canvas_w,
                 canvas_h,
                 r.dpr(),
@@ -229,6 +247,7 @@ pub(super) fn render_frame(
         GameScreen::GameLost => {
             draw_result_screen(
                 r,
+                loaded,
                 canvas_w,
                 canvas_h,
                 r.dpr(),

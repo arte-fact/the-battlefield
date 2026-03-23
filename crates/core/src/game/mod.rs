@@ -15,6 +15,7 @@ use crate::flowfield::FactionFlowState;
 use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::mapgen;
 use crate::particle::{Particle, Projectile};
+use crate::player_input::PlayerInput;
 use crate::unit::{
     Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS,
 };
@@ -155,5 +156,46 @@ impl Game {
 
         // Recompute FOV every frame (friendly units move continuously)
         self.compute_fov();
+    }
+
+    /// Run one simulation tick: process player input, AI, combat, physics, zones.
+    ///
+    /// Attack and order commands are deliberately excluded so the client can
+    /// inspect their return values (e.g. for haptic feedback). Call
+    /// `player_attack()` and `issue_order()` separately after this method.
+    pub fn tick(&mut self, input: &PlayerInput, dt: f32) {
+        if self.winner.is_some() {
+            return;
+        }
+
+        let old_positions: Vec<(f32, f32)> = self.units.iter().map(|u| (u.x, u.y)).collect();
+
+        self.tick_cooldowns(dt);
+        self.tick_ai(dt);
+        self.tick_zones(dt);
+        self.tick_production(dt);
+
+        // Player movement
+        if input.move_x != 0.0 || input.move_y != 0.0 {
+            if !input.attack_held {
+                self.player_aim_dir = input.move_y.atan2(input.move_x);
+            }
+            self.try_player_move(input.move_x, input.move_y, dt);
+        }
+
+        // Player facing from aim (skip when attack held to lock facing)
+        if !input.attack_held {
+            let aim_cos = self.player_aim_dir.cos();
+            if let Some(player) = self.player_unit_mut() {
+                if aim_cos > 0.01 {
+                    player.facing = Facing::Right;
+                } else if aim_cos < -0.01 {
+                    player.facing = Facing::Left;
+                }
+            }
+        }
+
+        self.resolve_collisions();
+        self.update_movement_anims(&old_positions);
     }
 }

@@ -130,12 +130,6 @@ impl Game {
         }
     }
 
-    pub fn setup_demo_battle(&mut self) -> u32 {
-        let seed = (js_sys::Math::random() * u32::MAX as f64) as u32;
-        self.setup_demo_battle_with_seed(seed);
-        seed
-    }
-
     pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
         let (gen_grid, layout) = mapgen::generate_battlefield(seed);
         self.grid = gen_grid;

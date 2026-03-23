@@ -3,10 +3,6 @@ use super::*;
 /// Radius around the player within which units receive orders (~7 tiles).
 const ORDER_RADIUS: f32 = TILE_SIZE * 7.0;
 
-/// Probability that a unit follows a player order.
-#[cfg(target_arch = "wasm32")]
-const ORDER_FOLLOW_CHANCE: f64 = 0.85;
-
 /// Duration of the order flash indicator in seconds.
 pub const ORDER_FLASH_DURATION: f32 = 1.0;
 
@@ -35,11 +31,11 @@ impl Game {
 
         let mut acknowledged = 0usize;
         for idx in eligible {
-            // Dice roll: ~85% chance to follow
-            #[cfg(target_arch = "wasm32")]
-            let follows = js_sys::Math::random() < ORDER_FOLLOW_CHANCE;
-            #[cfg(not(target_arch = "wasm32"))]
-            let follows = true;
+            // Deterministic ~85% follow chance based on unit id
+            let follows = {
+                let hash = self.units[idx].id.wrapping_mul(2654435761);
+                (hash % 100) < 85
+            };
 
             if !follows {
                 continue;

@@ -1,4 +1,4 @@
-use crate::game::Game;
+use battlefield_core::game::Game;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -47,25 +47,5 @@ pub(super) fn haptic(duration_ms: u32) {
                     js_sys::Function::from(vibrate_fn).call1(nav_js, &JsValue::from(duration_ms));
             }
         }
-    }
-}
-
-/// Compute a wave-gated animation frame.
-///
-/// Uses a sine wave that sweeps across the grid to decide whether to animate.
-/// When the wave is active at (gx, gy), returns a cycling frame index at 10 FPS;
-/// otherwise returns frame 0 (idle).
-pub(super) fn compute_wave_frame(
-    elapsed: f64,
-    gx: u32,
-    gy: u32,
-    frame_count: u32,
-    speed: f64,
-) -> u32 {
-    let wave_pos = elapsed * speed + gx as f64 * 0.06 + gy as f64 * 0.04 + (gx ^ gy) as f64 * 0.01;
-    if (wave_pos * std::f64::consts::TAU).sin() > 0.3 {
-        ((elapsed * 10.0) as u32) % frame_count
-    } else {
-        0
     }
 }

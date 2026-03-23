@@ -1,0 +1,16 @@
+[package]
+name = "battlefield-sdl"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "battlefield"
+path = "src/main.rs"
+
+[dependencies]
+battlefield-core = { path = "../core" }
+sdl2 = { version = "0.37", features = ["bundled"] }
+rusttype = "0.9"
+png = "0.17"
+log = "0.4"
+env_logger = "0.11"
