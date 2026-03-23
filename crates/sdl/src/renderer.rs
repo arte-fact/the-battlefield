@@ -138,6 +138,7 @@ impl TextRenderer {
     }
 
     /// Draw text centered at `(cx, cy)` with a dark semi-transparent background for readability.
+    #[allow(dead_code)]
     fn draw_text_centered_with_bg(
         &self,
         canvas: &mut Canvas<Window>,
@@ -266,7 +267,7 @@ pub struct Assets<'a> {
     ui_bar_fill: Option<Texture<'a>>,
     // Ribbons
     ui_big_ribbons: Option<Texture<'a>>,
-    _ui_small_ribbons: Option<Texture<'a>>,
+    ui_small_ribbons: Option<Texture<'a>>,
     // Swords
     _ui_swords: Option<Texture<'a>>,
     // Wood table frame for minimap
@@ -744,7 +745,7 @@ impl<'a> Assets<'a> {
             ui_bar_base,
             ui_bar_fill,
             ui_big_ribbons,
-            _ui_small_ribbons: ui_small_ribbons,
+            ui_small_ribbons,
             _ui_swords: ui_swords,
             ui_wood_table,
             fog_texture: {
@@ -952,6 +953,79 @@ fn draw_ribbon(
     let (rsx, rsy, rsw, rsh) = render_util::RIBBON_RIGHT;
 
     // Left end (floor pos, ceil size to prevent gaps)
+    let _ = canvas.copy(
+        tex,
+        Rect::new(
+            lsx as i32,
+            (row_y + lsy) as i32,
+            lsw.ceil() as u32,
+            lsh.ceil() as u32,
+        ),
+        Rect::new(
+            dx.floor() as i32,
+            dy.floor() as i32,
+            cap.ceil() as u32,
+            dh.ceil() as u32,
+        ),
+    );
+    // Center (stretch)
+    if mid_w > 0.0 {
+        let _ = canvas.copy(
+            tex,
+            Rect::new(
+                csx as i32,
+                (row_y + csy) as i32,
+                csw.ceil() as u32,
+                csh.ceil() as u32,
+            ),
+            Rect::new(
+                (dx + cap).floor() as i32,
+                dy.floor() as i32,
+                mid_w.ceil() as u32,
+                dh.ceil() as u32,
+            ),
+        );
+    }
+    // Right end
+    let _ = canvas.copy(
+        tex,
+        Rect::new(
+            rsx as i32,
+            (row_y + rsy) as i32,
+            rsw.ceil() as u32,
+            rsh.ceil() as u32,
+        ),
+        Rect::new(
+            (dx + cap + mid_w).floor() as i32,
+            dy.floor() as i32,
+            cap.ceil() as u32,
+            dh.ceil() as u32,
+        ),
+    );
+}
+
+/// Draw a horizontal 3-part ribbon from the SmallRibbons sprite sheet.
+/// `color_row` selects the row (Blue=1, Red=3, Yellow=5, Purple=7, Black=9).
+/// Uses exact pixel boundaries from render_util SMALL_RIBBON_* constants.
+fn draw_small_ribbon(
+    canvas: &mut Canvas<Window>,
+    tex: &Texture,
+    color_row: u32,
+    dx: f64,
+    dy: f64,
+    dw: f64,
+    dh: f64,
+    cap_w: f64,
+) {
+    let cap = cap_w.min(dw / 2.0);
+    let mid_w = (dw - cap * 2.0).max(0.0);
+    let row_y = color_row as f64 * render_util::SMALL_RIBBON_CELL_H;
+
+    let (lsx, lsy, lsw, lsh) = render_util::SMALL_RIBBON_LEFT;
+    let (csx, csy, csw, csh) = render_util::SMALL_RIBBON_CENTER;
+    let (rsx, rsy, rsw, rsh) = render_util::SMALL_RIBBON_RIGHT;
+
+    // Left end
     let _ = canvas.copy(
         tex,
         Rect::new(
@@ -1513,19 +1587,34 @@ fn draw_zones(
         canvas.set_draw_color(Color::RGBA(br, bg, bb, ba));
         stroke_circle(canvas, sx, sy, radius);
 
-        // Zone name label above progress bar
-        let name_y = sy - radius - 22;
-        assets.text.draw_text_centered_with_bg(
+        // Zone name label above progress bar (with Black ribbon, row 9)
+        let zone_font = 16.0 * cam.zoom;
+        let ribbon_h = 54.0 * cam.zoom as f64;
+        let name_y = sy - radius - (ribbon_h / 2.0) as i32 - 4;
+
+        if let Some(ref tex) = assets.ui_small_ribbons {
+            let (tw, _th) = assets.text.measure_text(zone.name, zone_font);
+            let rw = tw as f64 + 16.0 * cam.zoom as f64;
+            draw_small_ribbon(
+                canvas,
+                tex,
+                9, // Black row
+                sx as f64 - rw / 2.0,
+                name_y as f64 - ribbon_h / 2.0,
+                rw,
+                ribbon_h,
+                ribbon_h,
+            );
+        }
+
+        assets.text.draw_text_centered(
             canvas,
             tc,
             zone.name,
             sx,
             name_y,
-            14.0,
-            Color::RGBA(255, 255, 255, 200),
-            Color::RGBA(0, 0, 0, 140),
-            5,
-            2,
+            zone_font,
+            Color::RGBA(255, 255, 255, 220),
         );
 
         // Progress bar above zone (below name label)
@@ -2069,6 +2158,7 @@ fn draw_order_labels(
     cam: &Camera,
 ) {
     canvas.set_blend_mode(BlendMode::Blend);
+    let zoom = game.camera.zoom;
     for unit in &game.units {
         if !unit.alive || unit.order_flash <= 0.0 {
             continue;
@@ -2079,13 +2169,30 @@ fn draw_order_labels(
         };
 
         let alpha = ((unit.order_flash / ORDER_FLASH_DURATION) * 255.0) as u8;
-        let bg_alpha = ((unit.order_flash / ORDER_FLASH_DURATION) * 140.0) as u8;
         let (sx, sy) = world_to_screen(unit.x, unit.y, cam);
-        let label_y = sy - (TILE_SIZE * game.camera.zoom) as i32;
+        let label_y = sy - (TILE_SIZE * zoom) as i32;
 
-        let font_size = 16.0 * game.camera.zoom;
-        let label_cy = label_y - (6.0 * game.camera.zoom) as i32;
-        assets.text.draw_text_centered_with_bg(
+        let font_size = 20.0 * zoom;
+        let ribbon_h = 54.0 * zoom as f64;
+        let label_cy = label_y - (ribbon_h / 2.0) as i32;
+
+        // Yellow ribbon (row 5) behind label, scaled with zoom
+        if let Some(ref tex) = assets.ui_small_ribbons {
+            let (tw, _th) = assets.text.measure_text(label, font_size);
+            let rw = tw as f64 + 20.0 * zoom as f64;
+            draw_small_ribbon(
+                canvas,
+                tex,
+                5, // Yellow row
+                sx as f64 - rw / 2.0,
+                label_cy as f64 - ribbon_h / 2.0,
+                rw,
+                ribbon_h,
+                ribbon_h,
+            );
+        }
+
+        assets.text.draw_text_centered(
             canvas,
             tc,
             label,
@@ -2093,9 +2200,6 @@ fn draw_order_labels(
             label_cy,
             font_size,
             Color::RGBA(255, 215, 0, alpha),
-            Color::RGBA(0, 0, 0, bg_alpha),
-            4,
-            2,
         );
     }
 }
@@ -2280,18 +2384,36 @@ fn draw_hud(
             ));
         }
 
-        // Rank name + follower count (on top of everything)
+        // Rank name + follower count (below authority bar, with Blue ribbon)
         let rank = game.authority_rank_name();
         let followers = game.follower_count();
         let max_followers = game.authority_max_followers();
         let label = format!("{rank} — {followers}/{max_followers}");
+        let rank_font = 20.0_f32;
+        let (tw, _th) = assets.text.measure_text(&label, rank_font);
+        let ribbon_h = 54.0;
+        let rank_cx = (auth_x + auth_w / 2.0) as i32;
+        let rank_ry = auth_y + auth_h + 4.0;
+        let rank_rw = tw as f64 + 24.0;
+        if let Some(ref tex) = assets.ui_small_ribbons {
+            draw_small_ribbon(
+                canvas,
+                tex,
+                1, // Blue row
+                rank_cx as f64 - rank_rw / 2.0,
+                rank_ry,
+                rank_rw,
+                ribbon_h,
+                ribbon_h,
+            );
+        }
         assets.text.draw_text_centered(
             canvas,
             tc,
             &label,
-            (auth_x + auth_w / 2.0) as i32,
-            (auth_y + auth_h / 2.0) as i32,
-            13.0,
+            rank_cx,
+            (rank_ry + ribbon_h / 2.0) as i32,
+            rank_font,
             Color::RGBA(255, 255, 255, 220),
         );
     }
@@ -2303,18 +2425,35 @@ fn draw_hud(
         let gap = 4_u32;
         let total_w = zone_count * pip_size + (zone_count - 1) * gap;
         let start_x = (w / 2 - total_w / 2) as i32;
-        let pip_y = 10_i32;
+        let ribbon_h = 54.0; // native ribbon height
+        let pip_y_ribbon = 0.0_f64; // ribbon starts at top
+        let pip_y = ((ribbon_h - pip_size as f64) / 2.0) as i32; // center pips vertically
 
-        // Dark semi-transparent background panel behind all pips
+        // SmallRibbon background (Black, row 9) behind all pips
         let bg_pad = 6_i32;
-        canvas.set_blend_mode(BlendMode::Blend);
-        canvas.set_draw_color(Color::RGBA(0, 0, 0, 140));
-        let _ = canvas.fill_rect(Rect::new(
-            start_x - bg_pad,
-            pip_y - bg_pad,
-            total_w + bg_pad as u32 * 2,
-            pip_size + bg_pad as u32 * 2,
-        ));
+        let pip_bg_x = (start_x - bg_pad) as f64;
+        let pip_bg_w = (total_w + bg_pad as u32 * 2) as f64;
+        if let Some(ref tex) = assets.ui_small_ribbons {
+            draw_small_ribbon(
+                canvas,
+                tex,
+                9,
+                pip_bg_x,
+                pip_y_ribbon,
+                pip_bg_w,
+                ribbon_h,
+                ribbon_h,
+            );
+        } else {
+            canvas.set_blend_mode(BlendMode::Blend);
+            canvas.set_draw_color(Color::RGBA(0, 0, 0, 140));
+            let _ = canvas.fill_rect(Rect::new(
+                start_x - bg_pad,
+                pip_y - bg_pad,
+                total_w + bg_pad as u32 * 2,
+                pip_size + bg_pad as u32 * 2,
+            ));
+        }
 
         for (i, zone) in game.zone_manager.zones.iter().enumerate() {
             let px = start_x + (i as u32 * (pip_size + gap)) as i32;
@@ -2432,14 +2571,35 @@ fn draw_victory_progress(
         "{} holds all zones — Victory in {}s",
         faction_name, remaining
     );
+    let victory_font = 18.0_f32;
+    let ribbon_h = 54.0;
+    let victory_cy = (bar_y - ribbon_h / 2.0 - 2.0) as i32;
+
+    // Faction-colored SmallRibbon behind victory text
+    if let Some(ref tex) = assets.ui_small_ribbons {
+        let (tw, _th) = assets.text.measure_text(&msg, victory_font);
+        let rw = tw as f64 + 24.0;
+        let color_row = render_util::small_ribbon_row(faction);
+        draw_small_ribbon(
+            canvas,
+            tex,
+            color_row,
+            cx - rw / 2.0,
+            victory_cy as f64 - ribbon_h / 2.0,
+            rw,
+            ribbon_h,
+            ribbon_h,
+        );
+    }
+
     assets.text.draw_text_centered(
         canvas,
         tc,
         &msg,
         cx as i32,
-        (bar_y - 16.0) as i32,
-        16.0,
-        Color::RGBA(255, 255, 255, 180),
+        victory_cy,
+        victory_font,
+        Color::RGBA(255, 255, 255, 220),
     );
 }
 

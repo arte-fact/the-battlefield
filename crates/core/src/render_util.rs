@@ -410,6 +410,22 @@ pub const RIBBON_LEFT: (f64, f64, f64, f64) = (30.0, 20.0, 98.0, 103.0); // sx, 
 pub const RIBBON_CENTER: (f64, f64, f64, f64) = (192.0, 22.0, 64.0, 89.0);
 pub const RIBBON_RIGHT: (f64, f64, f64, f64) = (320.0, 20.0, 97.0, 101.0);
 
+/// SmallRibbons.png (320x640, 10 rows of 64px each).
+/// Small variants at rows 1,3,5,7,9. Colors: Blue=1, Red=3, Yellow=5, Purple=7, Black=9.
+pub const SMALL_RIBBON_CELL_H: f64 = 64.0;
+pub const SMALL_RIBBON_LEFT: (f64, f64, f64, f64) = (3.0, 4.0, 61.0, 54.0);
+pub const SMALL_RIBBON_CENTER: (f64, f64, f64, f64) = (128.0, 4.0, 64.0, 54.0);
+pub const SMALL_RIBBON_RIGHT: (f64, f64, f64, f64) = (256.0, 4.0, 61.0, 54.0);
+
+/// Map a faction to SmallRibbon small-variant row index.
+/// Blue=1, Red=3. Yellow=5 for neutral/orders.
+pub fn small_ribbon_row(faction: Faction) -> u32 {
+    match faction {
+        Faction::Blue => 1,
+        Faction::Red => 3,
+    }
+}
+
 /// Source rects for BigBar_Base.png (320x64, 3-part horizontal).
 pub const BAR_LEFT: (f64, f64, f64, f64) = (40.0, 9.0, 24.0, 51.0);
 pub const BAR_CENTER: (f64, f64, f64, f64) = (128.0, 9.0, 64.0, 51.0);
