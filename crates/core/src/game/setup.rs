@@ -1,19 +1,34 @@
 use super::*;
 
 impl Game {
-    /// Reinforcement wave composition — spawned all at once per wave.
-    const REINFORCE_WAVE: &'static [UnitKind] = &[
-        UnitKind::Warrior,
+    /// Wave composition — 21 units interleaved so all buildings produce continuously.
+    /// 7 Warriors, 4 Lancers, 8 Archers, 2 Monks.
+    const WAVE: &'static [UnitKind] = &[
         UnitKind::Warrior,
         UnitKind::Lancer,
-        UnitKind::Lancer,
-        UnitKind::Archer,
         UnitKind::Archer,
         UnitKind::Monk,
+        UnitKind::Warrior,
+        UnitKind::Lancer,
+        UnitKind::Archer,
+        UnitKind::Warrior,
+        UnitKind::Lancer,
+        UnitKind::Archer,
+        UnitKind::Monk,
+        UnitKind::Warrior,
+        UnitKind::Lancer,
+        UnitKind::Archer,
+        UnitKind::Warrior,
+        UnitKind::Archer,
+        UnitKind::Warrior,
+        UnitKind::Archer,
+        UnitKind::Warrior,
+        UnitKind::Archer,
+        UnitKind::Archer,
     ];
 
-    /// Seconds between reinforcement waves.
-    const REINFORCE_INTERVAL: f32 = 20.0;
+    /// Seconds between individual unit spawns within a wave.
+    const SPAWN_INTERVAL: f32 = 1.5;
 
     pub fn spawn_unit(
         &mut self,
@@ -93,60 +108,65 @@ impl Game {
         }
     }
 
-    /// Spawn a full wave of reinforcements at base when under unit cap.
+    /// Spawn units one-by-one from the queue at the rally point (base center).
+    /// When a wave is complete, release all rallying units to march.
     pub fn tick_production(&mut self, dt: f32) {
         let factions = [(0usize, Faction::Blue), (1, Faction::Red)];
         for &(fi, faction) in &factions {
-            let alive_count = self
-                .units
-                .iter()
-                .filter(|u| u.alive && u.faction == faction)
-                .count();
-            if alive_count >= MAX_UNITS_PER_FACTION {
+            // Refill queue if empty and under unit cap
+            if self.spawn_queue[fi].is_empty() {
+                let alive_count = self
+                    .units
+                    .iter()
+                    .filter(|u| u.alive && u.faction == faction)
+                    .count();
+                if alive_count < MAX_UNITS_PER_FACTION {
+                    let slots = MAX_UNITS_PER_FACTION.saturating_sub(alive_count);
+                    let wave_size = slots.min(Self::WAVE.len());
+                    self.spawn_queue[fi] = Self::WAVE[..wave_size].to_vec();
+                    self.spawn_timer[fi] = 0.0;
+                }
+            }
+
+            if self.spawn_queue[fi].is_empty() {
                 continue;
             }
 
-            self.reinforce_timer[fi] += dt;
-            if self.reinforce_timer[fi] >= Self::REINFORCE_INTERVAL {
-                self.reinforce_timer[fi] -= Self::REINFORCE_INTERVAL;
+            self.spawn_timer[fi] += dt;
+            if self.spawn_timer[fi] >= Self::SPAWN_INTERVAL {
+                self.spawn_timer[fi] -= Self::SPAWN_INTERVAL;
 
-                let slots = MAX_UNITS_PER_FACTION.saturating_sub(alive_count);
-                let wave_size = slots.min(Self::REINFORCE_WAVE.len());
+                let kind = self.spawn_queue[fi].remove(0);
+                // Spawn at the production building for this unit type
+                let target_bk = building::building_for_unit(kind);
+                let (sx, sy) = self
+                    .buildings
+                    .iter()
+                    .find(|b| b.faction == faction && b.kind == target_bk)
+                    .map(|b| {
+                        // Spawn 1 tile in front of the building (toward battlefield)
+                        match faction {
+                            Faction::Blue => (b.grid_x, b.grid_y + 1),
+                            _ => (b.grid_x, b.grid_y.saturating_sub(1)),
+                        }
+                    })
+                    .unwrap_or_else(|| match faction {
+                        Faction::Blue => self.zone_manager.blue_base,
+                        _ => self.zone_manager.red_base,
+                    });
+                let id = self.spawn_unit(kind, faction, sx, sy, false);
+                // Set rally hold — unit waits at base until wave is complete
+                if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
+                    u.rally_hold = true;
+                }
 
-                for i in 0..wave_size {
-                    let kind = Self::REINFORCE_WAVE[i];
-                    let target_bk = building::building_for_unit(kind);
-                    let (sx, sy) = self
-                        .buildings
-                        .iter()
-                        .find(|b| b.faction == faction && b.kind == target_bk)
-                        .map(|b| {
-                            // Spawn 3 tiles toward the battlefield from the building
-                            let candidate = match faction {
-                                Faction::Blue => (b.grid_x, b.grid_y + 3),
-                                _ => (b.grid_x, b.grid_y.saturating_sub(3)),
-                            };
-                            if self.grid.is_passable(candidate.0, candidate.1) {
-                                candidate
-                            } else if self.grid.is_passable(candidate.0 + 1, candidate.1) {
-                                (candidate.0 + 1, candidate.1)
-                            } else if self
-                                .grid
-                                .is_passable(candidate.0.saturating_sub(1), candidate.1)
-                            {
-                                (candidate.0.saturating_sub(1), candidate.1)
-                            } else {
-                                match faction {
-                                    Faction::Blue => self.zone_manager.blue_base,
-                                    _ => self.zone_manager.red_base,
-                                }
-                            }
-                        })
-                        .unwrap_or_else(|| match faction {
-                            Faction::Blue => self.zone_manager.blue_base,
-                            _ => self.zone_manager.red_base,
-                        });
-                    self.spawn_unit(kind, faction, sx, sy, false);
+                // Wave complete — release all rallying units
+                if self.spawn_queue[fi].is_empty() {
+                    for u in &mut self.units {
+                        if u.alive && u.faction == faction && u.rally_hold {
+                            u.rally_hold = false;
+                        }
+                    }
                 }
             }
         }
@@ -177,6 +197,17 @@ impl Game {
         // Place production buildings at both bases
         let mut buildings = building::base_buildings(Faction::Blue, blue_cx, blue_cy);
         buildings.extend(building::base_buildings(Faction::Red, red_cx, red_cy));
+        // Place defensive buildings (castle, towers, houses) at both bases
+        buildings.extend(building::base_defense_buildings(
+            Faction::Blue,
+            blue_cx,
+            blue_cy,
+        ));
+        buildings.extend(building::base_defense_buildings(
+            Faction::Red,
+            red_cx,
+            red_cy,
+        ));
         for b in &buildings {
             for &(dx, dy) in b.kind.footprint_offsets() {
                 let fx = b.grid_x as i32 + dx;
@@ -188,170 +219,26 @@ impl Game {
         }
         self.buildings = buildings;
 
-        // Blue army — spawn in front of base (toward center)
-        let bx = blue_cx;
-        let by = blue_cy + 5;
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by, true);
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by + 1, false);
-        self.spawn_unit(
-            UnitKind::Warrior,
-            Faction::Blue,
-            bx + 1,
-            by.saturating_sub(1),
-            false,
-        );
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, bx + 1, by + 2, false);
-        self.spawn_unit(
-            UnitKind::Warrior,
-            Faction::Blue,
-            bx + 1,
-            by.saturating_sub(2),
-            false,
-        );
-        for i in 0..3u32 {
-            self.spawn_unit(UnitKind::Lancer, Faction::Blue, bx, by + i, false);
-            self.spawn_unit(
-                UnitKind::Lancer,
-                Faction::Blue,
-                bx,
-                by.saturating_sub(1 + i),
-                false,
-            );
-        }
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Blue,
-            bx.saturating_sub(1),
-            by + 1,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Blue,
-            bx.saturating_sub(1),
-            by.saturating_sub(1),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Blue,
-            bx.saturating_sub(1),
-            by,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Blue,
-            bx.saturating_sub(2),
-            by + 2,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Blue,
-            bx.saturating_sub(2),
-            by.saturating_sub(2),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Blue,
-            bx.saturating_sub(2),
-            by,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Monk,
-            Faction::Blue,
-            bx.saturating_sub(2),
-            by + 1,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Monk,
-            Faction::Blue,
-            bx.saturating_sub(2),
-            by.saturating_sub(1),
-            false,
-        );
+        // Spawn player at base center
+        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_cx, blue_cy, true);
 
-        // Red army — spawn in front of base (toward center)
-        let rx = red_cx;
-        let ry = red_cy.saturating_sub(5);
-        self.spawn_unit(
-            UnitKind::Warrior,
-            Faction::Red,
-            rx.saturating_sub(1),
-            ry,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Warrior,
-            Faction::Red,
-            rx.saturating_sub(1),
-            ry + 1,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Warrior,
-            Faction::Red,
-            rx.saturating_sub(1),
-            ry.saturating_sub(1),
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Warrior,
-            Faction::Red,
-            rx.saturating_sub(1),
-            ry + 2,
-            false,
-        );
-        self.spawn_unit(
-            UnitKind::Warrior,
-            Faction::Red,
-            rx.saturating_sub(1),
-            ry.saturating_sub(2),
-            false,
-        );
-        for i in 0..3u32 {
-            self.spawn_unit(UnitKind::Lancer, Faction::Red, rx, ry + i, false);
-            self.spawn_unit(
-                UnitKind::Lancer,
-                Faction::Red,
-                rx,
-                ry.saturating_sub(1 + i),
-                false,
-            );
+        // Spawn starting armies around each base — same composition as a wave, no rally hold
+        for (faction, base_cx, base_cy) in [
+            (Faction::Blue, blue_cx, blue_cy),
+            (Faction::Red, red_cx, red_cy),
+        ] {
+            for (i, &kind) in Self::WAVE.iter().enumerate() {
+                // Spread units in a grid around the base center
+                let col = (i % 5) as u32;
+                let row = (i / 5) as u32;
+                let sx = base_cx.saturating_sub(2) + col;
+                let sy = base_cy.saturating_sub(1) + row;
+                self.spawn_unit(kind, faction, sx, sy, false);
+            }
         }
-        self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 1, ry + 1, false);
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Red,
-            rx + 1,
-            ry.saturating_sub(1),
-            false,
-        );
-        self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 1, ry, false);
-        self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 2, ry + 2, false);
-        self.spawn_unit(
-            UnitKind::Archer,
-            Faction::Red,
-            rx + 2,
-            ry.saturating_sub(2),
-            false,
-        );
-        self.spawn_unit(UnitKind::Archer, Faction::Red, rx + 2, ry, false);
-        self.spawn_unit(UnitKind::Monk, Faction::Red, rx + 2, ry + 1, false);
-        self.spawn_unit(
-            UnitKind::Monk,
-            Faction::Red,
-            rx + 2,
-            ry.saturating_sub(1),
-            false,
-        );
 
-        // Camera starts centered on player
-        let (cx, cy) = grid::grid_to_world(bx, by);
+        // Camera starts centered on player (base center)
+        let (cx, cy) = grid::grid_to_world(blue_cx, blue_cy);
         self.camera.x = cx;
         self.camera.y = cy;
         self.camera.zoom = self.camera.ideal_zoom();

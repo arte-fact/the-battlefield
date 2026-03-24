@@ -49,7 +49,7 @@ pub(super) struct LoadedTextures {
     /// Tower building textures: index 0=Black(neutral), 1=Blue, 2=Red (128x256 each)
     pub(super) tower_textures: Vec<TextureId>,
     /// Base building textures: indexed by kind_index * 2 + faction_index
-    /// kind: 0=Barracks, 1=Archery, 2=Monastery; faction: 0=Blue, 1=Red
+    /// kind: 0=Barracks, 1=Archery, 2=Monastery, 3=Castle, 4=DefenseTower, 5=House; faction: 0=Blue, 1=Red
     pub(super) building_textures: Vec<(TextureId, u32, u32)>,
     /// UI 9-slice panel background (SpecialPaper.png, 320x320, 3x3 grid of 106px cells)
     pub(super) ui_special_paper: Option<TextureId>,
@@ -342,6 +342,9 @@ pub(super) async fn load_textures(
             (BuildingKind::Barracks, 192u32, 256u32),
             (BuildingKind::Archery, 192, 256),
             (BuildingKind::Monastery, 192, 320),
+            (BuildingKind::Castle, 320, 256),
+            (BuildingKind::DefenseTower, 128, 256),
+            (BuildingKind::House, 128, 192),
         ];
         let faction_folders = ["Blue Buildings", "Red Buildings"];
         for &(kind, sw, sh) in &kinds {

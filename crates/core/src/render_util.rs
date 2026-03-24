@@ -146,10 +146,9 @@ pub fn hp_bar_color(ratio: f64) -> (u8, u8, u8) {
 /// Order label text for the given order kind.
 pub fn order_label(order: Option<&OrderKind>) -> Option<&'static str> {
     match order {
-        Some(OrderKind::Hold { .. }) => Some("HOLD"),
-        Some(OrderKind::Go { .. }) => Some("GO"),
-        Some(OrderKind::Retreat { .. }) => Some("RETREAT"),
         Some(OrderKind::Follow) => Some("FOLLOW"),
+        Some(OrderKind::Charge { .. }) => Some("CHARGE"),
+        Some(OrderKind::Defend { .. }) => Some("DEFEND"),
         None => None,
     }
 }

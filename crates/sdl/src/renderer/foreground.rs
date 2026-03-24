@@ -446,14 +446,14 @@ fn draw_base_building(
     game: &Game,
     assets: &mut Assets,
     cam: &Camera,
-    ts: f32,
+    _ts: f32,
     idx: usize,
 ) {
     let building = &game.buildings[idx];
     let key = (building.faction, building.kind);
     if let Some((ref tex, sw, sh)) = assets.building_textures.get(&key) {
-        let draw_w = ts * 3.0;
-        let draw_h = draw_w * (*sh as f32 / *sw as f32);
+        let draw_w = *sw as f32 * cam.zoom;
+        let draw_h = *sh as f32 * cam.zoom;
         let wx = building.grid_x as f32 * TILE_SIZE + TILE_SIZE * 0.5;
         let wy = building.grid_y as f32 * TILE_SIZE + TILE_SIZE;
         let (scx, sby) = world_to_screen(wx, wy, cam);
@@ -557,6 +557,42 @@ pub(super) fn draw_hp_bars(canvas: &mut Canvas<Window>, game: &Game, cam: &Camer
         let (hr, hg, hb) = render_util::hp_bar_color(ratio as f64);
         canvas.set_draw_color(Color::RGB(hr, hg, hb));
         let _ = canvas.fill_rect(Rect::new(bar_x, bar_y, fill_w, bar_h as u32));
+    }
+}
+
+pub(super) fn draw_unit_markers(canvas: &mut Canvas<Window>, game: &Game, cam: &Camera) {
+    canvas.set_blend_mode(BlendMode::Blend);
+    let zoom = game.camera.zoom;
+    let dot_r = (4.0 * zoom).max(2.0) as i32;
+
+    for unit in &game.units {
+        if !unit.alive {
+            continue;
+        }
+        let (gx, gy) = unit.grid_cell();
+        if !render_util::is_visible_to_player(unit.faction, gx, gy, &game.visible, game.grid.width)
+        {
+            continue;
+        }
+
+        let color = if unit.is_player {
+            // Green dot for player
+            Color::RGBA(50, 220, 50, 220)
+        } else if game.recruited.contains(&unit.id) {
+            // Yellow dot for recruited units
+            Color::RGBA(255, 220, 50, 220)
+        } else {
+            continue;
+        };
+
+        let (sx, sy) = world_to_screen(unit.x, unit.y, cam);
+        let marker_y = sy - (TILE_SIZE * zoom * 0.95) as i32;
+        canvas.set_draw_color(color);
+        // Draw a small filled circle
+        for dy in -dot_r..=dot_r {
+            let dx = ((dot_r * dot_r - dy * dy) as f32).sqrt() as i32;
+            let _ = canvas.draw_line((sx - dx, marker_y + dy), (sx + dx, marker_y + dy));
+        }
     }
 }
 

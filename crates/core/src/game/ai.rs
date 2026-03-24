@@ -7,6 +7,9 @@ const MONK_SAFE_DIST: f32 = TILE_SIZE * 3.0;
 const MONK_FOLLOW_DIST: f32 = TILE_SIZE * 2.0;
 
 impl Game {
+    /// Interval for recomputing macro objectives (seconds).
+    const OBJECTIVE_INTERVAL: f32 = 2.0;
+
     /// Real-time AI tick: all units get decisions every frame, pathfinding is rate-limited.
     pub fn tick_ai(&mut self, dt: f32) {
         // Build occupied set once per frame (shared across all pathfinding calls)
@@ -17,9 +20,17 @@ impl Game {
             .map(|u| u.grid_cell())
             .collect();
 
+        // Recompute macro objectives periodically
+        self.objective_timer += dt;
+        if self.objective_timer >= Self::OBJECTIVE_INTERVAL || self.macro_objectives[0].is_empty() {
+            self.objective_timer = 0.0;
+            self.macro_objectives[0] = self.zone_manager.score_top3_zones(Faction::Blue);
+            self.macro_objectives[1] = self.zone_manager.score_top3_zones(Faction::Red);
+        }
+
         // Update flow fields for both factions before unit loop
-        self.update_flow_field_if_needed(Faction::Blue);
-        self.update_flow_field_if_needed(Faction::Red);
+        self.update_flow_fields(Faction::Blue);
+        self.update_flow_fields(Faction::Red);
 
         let ai_indices: Vec<usize> = self
             .units
@@ -44,20 +55,49 @@ impl Game {
             return;
         }
 
-        // Player orders take priority (orders cancel rally state)
+        // Rally hold: walk to rally point (base center), then idle. Fight in self-defense.
+        if self.units[ai_idx].rally_hold && self.units[ai_idx].order.is_none() {
+            // Self-defense
+            if let Some((_ex, _ey, enemy_id, dist)) = self.find_nearest_enemy(ai_idx) {
+                let reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
+                let reach = reach.max(MELEE_RANGE);
+                if self.units[ai_idx].can_act() && dist <= reach {
+                    let ai_id = self.units[ai_idx].id;
+                    self.execute_attack(ai_id, enemy_id, None);
+                    return;
+                }
+            }
+            // Walk toward rally point (base center)
+            let faction = self.units[ai_idx].faction;
+            let (rx, ry) = match faction {
+                Faction::Blue => self.zone_manager.blue_base,
+                _ => self.zone_manager.red_base,
+            };
+            let (rwx, rwy) = grid::grid_to_world(rx, ry);
+            let dist = self.units[ai_idx].distance_to_pos(rwx, rwy);
+            if dist > TILE_SIZE * 2.0 {
+                self.ai_move_toward_continuous(ai_idx, rwx, rwy, dt);
+            } else {
+                self.units[ai_idx].set_anim(UnitAnim::Idle);
+            }
+            return;
+        }
+
+        // Player orders take priority
         if let Some(order) = self.units[ai_idx].order {
             match order {
-                OrderKind::Hold { target_x, target_y } => {
-                    self.ai_order_hold_tick(ai_idx, target_x, target_y, dt);
-                }
-                OrderKind::Go { target_x, target_y } => {
-                    self.ai_order_go_tick(ai_idx, target_x, target_y, dt);
-                }
-                OrderKind::Retreat { target_x, target_y } => {
-                    self.ai_order_retreat_tick(ai_idx, target_x, target_y, dt);
-                }
                 OrderKind::Follow => {
                     self.ai_order_follow_tick(ai_idx, dt);
+                }
+                OrderKind::Charge { target_x, target_y } => {
+                    self.ai_order_charge_tick(ai_idx, target_x, target_y, dt);
+                }
+                OrderKind::Defend {
+                    anchor_x,
+                    anchor_y,
+                    facing_dir,
+                } => {
+                    self.ai_order_defend_tick(ai_idx, anchor_x, anchor_y, facing_dir, dt);
                 }
             }
             return;

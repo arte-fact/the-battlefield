@@ -139,8 +139,9 @@ pub fn render_frame(
     // 10. Projectiles (fly above everything)
     foreground::draw_projectiles(canvas, game, assets, cam);
 
-    // 11. HP bars and order labels
+    // 11. HP bars, unit markers, and order labels
     foreground::draw_hp_bars(canvas, game, cam);
+    foreground::draw_unit_markers(canvas, game, cam);
     foreground::draw_order_labels(canvas, tc, assets, game, cam, dpi_scale);
 
     // 12. Fog of war

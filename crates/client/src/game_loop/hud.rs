@@ -88,6 +88,33 @@ pub(super) fn draw_unit_bars(
     }
     r.set_alpha(1.0);
 
+    // Dot markers: green for player, yellow for recruited units
+    for unit in &game.units {
+        if !unit.alive {
+            continue;
+        }
+        let (gx, gy) = unit.grid_cell();
+        if !render_util::is_visible_to_player(unit.faction, gx, gy, &game.visible, game.grid.width)
+        {
+            continue;
+        }
+
+        let color = if unit.is_player {
+            "rgba(50,220,50,0.85)"
+        } else if game.recruited.contains(&unit.id) {
+            "rgba(255,220,50,0.85)"
+        } else {
+            continue;
+        };
+
+        let wx = unit.x as f64;
+        let wy = unit.y as f64 - (TILE_SIZE as f64) * 0.95;
+        r.set_fill_color(color);
+        r.begin_path();
+        r.arc(wx, wy, 4.0, 0.0, std::f64::consts::TAU)?;
+        r.fill();
+    }
+
     Ok(())
 }
 

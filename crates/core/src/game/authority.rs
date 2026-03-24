@@ -31,11 +31,11 @@ impl Game {
         }
     }
 
-    /// Count units currently following player orders.
+    /// Count alive recruited units.
     pub fn follower_count(&self) -> usize {
-        self.units
+        self.recruited
             .iter()
-            .filter(|u| u.alive && !u.is_player && u.faction == Faction::Blue && u.order.is_some())
+            .filter(|id| self.units.iter().any(|u| u.alive && u.id == **id))
             .count()
     }
 

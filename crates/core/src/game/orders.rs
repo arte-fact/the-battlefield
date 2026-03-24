@@ -3,18 +3,126 @@ use super::*;
 /// Duration of the order flash indicator in seconds.
 pub const ORDER_FLASH_DURATION: f32 = 1.0;
 
+/// How far ahead of the player charge targets are placed (in world units).
+const CHARGE_DISTANCE: f32 = TILE_SIZE * 8.0;
+/// How close a unit must be to the charge target to consider it arrived.
+const CHARGE_ARRIVAL: f32 = TILE_SIZE * 1.5;
+/// Follow distance — how close followers stay to the player.
+const FOLLOW_DISTANCE: f32 = TILE_SIZE * 1.5;
+/// Follow/charge leash — max distance from anchor to engage enemies.
+const ORDER_LEASH: f32 = TILE_SIZE * 4.0;
+
+// Defend formation: line distances behind the anchor point.
+const DEFEND_LINE_WARRIOR: f32 = TILE_SIZE * 2.0;
+const DEFEND_LINE_LANCER: f32 = TILE_SIZE * 3.5;
+const DEFEND_LINE_ARCHER: f32 = TILE_SIZE * 5.0;
+const DEFEND_LINE_MONK: f32 = TILE_SIZE * 6.5;
+/// Perpendicular spacing between units in the same line.
+const DEFEND_SPACING: f32 = TILE_SIZE;
+/// Defend units engage enemies within this distance of their post.
+/// Large enough for archers (5 tiles back, 7 tile range) to fire at approaching enemies.
+const DEFEND_LEASH: f32 = TILE_SIZE * 8.0;
+
+/// Monks flee when enemies are closer than this (mirrors MONK_SAFE_DIST in ai.rs).
+const MONK_SAFE_DIST: f32 = TILE_SIZE * 3.0;
+
 impl Game {
-    /// Issue a player order to nearby friendly units.
-    /// Returns the number of units that acknowledged the order.
-    pub fn issue_order(&mut self, order_type: &str) -> usize {
+    // ── Shared combat helper ─────────────────────────────────────────────
+
+    /// Type-aware combat for ordered units. Returns true if the unit is busy
+    /// with combat and the caller should skip positioning.
+    ///
+    /// Mirrors the per-type logic from `ai_melee_tick`, `ai_archer_tick`, and
+    /// `ai_monk_tick` but with a leash: enemies beyond `leash` distance from
+    /// `(leash_x, leash_y)` are ignored.
+    fn ai_order_combat(
+        &mut self,
+        ai_idx: usize,
+        leash_x: f32,
+        leash_y: f32,
+        leash: f32,
+        dt: f32,
+    ) -> bool {
+        let kind = self.units[ai_idx].kind;
+
+        // Monks don't fight — they flee from nearby enemies instead.
+        // (Healing is already handled by try_monk_heal in ai_unit_tick.)
+        if kind == UnitKind::Monk {
+            if let Some((ex, ey, _, dist)) = self.find_nearest_enemy(ai_idx) {
+                if dist < MONK_SAFE_DIST {
+                    let ax = self.units[ai_idx].x;
+                    let ay = self.units[ai_idx].y;
+                    let flee_x = ax + (ax - ex);
+                    let flee_y = ay + (ay - ey);
+                    self.ai_move_toward_continuous(ai_idx, flee_x, flee_y, dt);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        let enemy = match self.find_nearest_enemy(ai_idx) {
+            Some(e) => e,
+            None => return false,
+        };
+        let (ex, ey, enemy_id, dist) = enemy;
+
+        // Check leash — ignore enemies too far from the anchor point
+        let enemy_leash_dx = ex - leash_x;
+        let enemy_leash_dy = ey - leash_y;
+        let enemy_leash_dist =
+            (enemy_leash_dx * enemy_leash_dx + enemy_leash_dy * enemy_leash_dy).sqrt();
+        if enemy_leash_dist > leash {
+            // Exception: always allow melee self-defense
+            let melee_reach = MELEE_RANGE;
+            if dist <= melee_reach && self.units[ai_idx].can_act() {
+                let ai_id = self.units[ai_idx].id;
+                self.execute_attack(ai_id, enemy_id, None);
+                return true;
+            }
+            return false;
+        }
+
+        let attack_range = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
+        let attack_range = attack_range.max(MELEE_RANGE);
+        let ai_id = self.units[ai_idx].id;
+
+        if self.units[ai_idx].can_act() && dist <= attack_range {
+            // In range and ready — attack
+            self.execute_attack(ai_id, enemy_id, None);
+            return true;
+        }
+
+        if dist <= attack_range {
+            // In range but on cooldown — hold position (don't move)
+            return true;
+        }
+
+        // Out of range — melee units chase, ranged units only approach to their attack range
+        if kind == UnitKind::Archer {
+            // Archers approach to firing range, not into melee
+            self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
+        } else {
+            // Warriors and Lancers close the distance
+            self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
+        }
+        true
+    }
+
+    // ── Recruitment ────────────────────────────────────────────────────
+
+    /// Recruit nearby friendly units into the persistent follower list.
+    /// Returns the number of newly recruited units.
+    pub fn recruit_units(&mut self) -> usize {
         let (player_x, player_y, player_faction) = match self.player_unit() {
             Some(p) => (p.x, p.y, p.faction),
             None => return 0,
         };
 
-        let order_radius = self.authority_command_radius();
+        let recruit_radius = self.authority_command_radius();
+        let follow_chance = self.authority_follow_chance();
 
-        // Collect eligible unit indices
+        // Collect eligible unit indices (not already recruited)
         let eligible: Vec<usize> = self
             .units
             .iter()
@@ -23,22 +131,20 @@ impl Game {
                 u.alive
                     && !u.is_player
                     && u.faction == player_faction
-                    && u.distance_to_pos(player_x, player_y) <= order_radius
+                    && !self.recruited.contains(&u.id)
+                    && u.distance_to_pos(player_x, player_y) <= recruit_radius
             })
             .map(|(i, _)| i)
             .collect();
 
-        let follow_chance = self.authority_follow_chance();
-        let mut acknowledged = 0usize;
+        let mut count = 0usize;
         for idx in eligible {
-            // Check follower cap before assigning more orders
             if self.follower_count() >= self.authority_max_followers() {
                 break;
             }
 
-            // Follow chance based on authority — mix unit id with position so the
-            // result varies each time an order is issued (not always the same units refusing)
-            let follows = {
+            // Probabilistic acceptance based on authority
+            let accepts = {
                 let ux = (self.units[idx].x * 100.0) as u32;
                 let uy = (self.units[idx].y * 100.0) as u32;
                 let mut h =
@@ -48,55 +154,63 @@ impl Game {
                 (h % 100) < (follow_chance * 100.0) as u32
             };
 
-            if !follows {
+            if !accepts {
                 continue;
             }
 
-            let unit_x = self.units[idx].x;
-            let unit_y = self.units[idx].y;
-            let faction = self.units[idx].faction;
+            self.recruited.insert(self.units[idx].id);
+            // Newly recruited units default to Follow
+            self.units[idx].order = Some(OrderKind::Follow);
+            self.units[idx].order_flash = ORDER_FLASH_DURATION;
+            self.units[idx].ai_waypoints.clear();
+            self.units[idx].ai_waypoint_idx = 0;
+            self.units[idx].ai_path_cooldown = 0.0;
+            count += 1;
+        }
+        count
+    }
 
+    // ── Order issuance ───────────────────────────────────────────────────
+
+    /// Issue an order to all recruited units.
+    /// Returns the number of units that received the order.
+    pub fn issue_order(&mut self, order_type: &str) -> usize {
+        let player_x = match self.player_unit() {
+            Some(p) => p.x,
+            None => return 0,
+        };
+        let player_y = self.player_unit().map(|p| p.y).unwrap_or(0.0);
+
+        // Collect indices of alive recruited units
+        let recruited_indices: Vec<usize> = self
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| u.alive && self.recruited.contains(&u.id))
+            .map(|(i, _)| i)
+            .collect();
+
+        let mut acknowledged = 0usize;
+        for idx in recruited_indices {
             let order = match order_type {
-                "hold" => OrderKind::Hold {
-                    target_x: unit_x,
-                    target_y: unit_y,
-                },
-                "go" => {
-                    let (tx, ty) = self
-                        .zone_manager
-                        .best_target_zone(faction)
-                        .map(|z| (z.center_wx, z.center_wy))
-                        .unwrap_or_else(|| self.faction_objective(faction));
-                    OrderKind::Go {
-                        target_x: tx,
-                        target_y: ty,
-                    }
-                }
-                "retreat" => {
-                    let (tx, ty) = self
-                        .zone_manager
-                        .retreat_zone(faction, unit_x, unit_y)
-                        .map(|z| (z.center_wx, z.center_wy))
-                        .unwrap_or_else(|| {
-                            // Fallback: base spawn point
-                            let (sx, sy) = match faction {
-                                Faction::Blue => self.zone_manager.blue_base,
-                                _ => self.zone_manager.red_base,
-                            };
-                            grid::grid_to_world(sx, sy)
-                        });
-                    OrderKind::Retreat {
-                        target_x: tx,
-                        target_y: ty,
-                    }
-                }
                 "follow" => OrderKind::Follow,
+                "charge" => {
+                    let aim = self.player_aim_dir;
+                    OrderKind::Charge {
+                        target_x: player_x + aim.cos() * CHARGE_DISTANCE,
+                        target_y: player_y + aim.sin() * CHARGE_DISTANCE,
+                    }
+                }
+                "defend" => OrderKind::Defend {
+                    anchor_x: player_x,
+                    anchor_y: player_y,
+                    facing_dir: self.player_aim_dir,
+                },
                 _ => continue,
             };
 
             self.units[idx].order = Some(order);
             self.units[idx].order_flash = ORDER_FLASH_DURATION;
-            // Clear pathfinding state so the unit re-paths toward the order target
             self.units[idx].ai_waypoints.clear();
             self.units[idx].ai_waypoint_idx = 0;
             self.units[idx].ai_path_cooldown = 0.0;
@@ -105,145 +219,121 @@ impl Game {
         acknowledged
     }
 
-    /// Hold order AI: defend current position, fight enemies within leash.
-    pub(super) fn ai_order_hold_tick(&mut self, ai_idx: usize, hold_x: f32, hold_y: f32, dt: f32) {
-        let ai_id = self.units[ai_idx].id;
-        let leash = TILE_SIZE * 5.0;
-
-        if let Some((ex, ey, enemy_id, dist)) = self.find_nearest_enemy(ai_idx) {
-            let melee_reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
-            let melee_reach = melee_reach.max(MELEE_RANGE);
-
-            // Always fight enemies within attack range (self-defense)
-            if self.units[ai_idx].can_act() && dist <= melee_reach {
-                self.execute_attack(ai_id, enemy_id, None);
-                return;
-            }
-
-            // Chase enemies within leash of the hold point
-            let enemy_hold_dx = ex - hold_x;
-            let enemy_hold_dy = ey - hold_y;
-            let enemy_hold_dist =
-                (enemy_hold_dx * enemy_hold_dx + enemy_hold_dy * enemy_hold_dy).sqrt();
-
-            if enemy_hold_dist <= leash {
-                self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
-                return;
-            }
-        }
-
-        // Walk to hold point, idle when close
-        let dist = self.units[ai_idx].distance_to_pos(hold_x, hold_y);
-        if dist < TILE_SIZE * 1.5 {
-            self.units[ai_idx].set_anim(UnitAnim::Idle);
-        } else {
-            self.ai_move_toward_continuous(ai_idx, hold_x, hold_y, dt);
-        }
-    }
-
-    /// Go order AI: advance to target zone, fight enemies on the way.
-    pub(super) fn ai_order_go_tick(
-        &mut self,
-        ai_idx: usize,
-        target_x: f32,
-        target_y: f32,
-        dt: f32,
-    ) {
-        let ai_id = self.units[ai_idx].id;
-
-        // Fight enemies encountered along the way
-        if let Some((ex, ey, enemy_id, dist)) = self.find_nearest_enemy(ai_idx) {
-            let melee_reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
-            let melee_reach = melee_reach.max(MELEE_RANGE);
-            if self.units[ai_idx].can_act() && dist <= melee_reach {
-                self.execute_attack(ai_id, enemy_id, None);
-                return;
-            }
-            if dist < TILE_SIZE * 4.0 {
-                self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
-                return;
-            }
-        }
-
-        // Move toward target zone
-        let dist = self.units[ai_idx].distance_to_pos(target_x, target_y);
-        if dist < TILE_SIZE * 2.0 {
-            // Arrived — clear order, resume normal AI
-            self.units[ai_idx].order = None;
-        } else {
-            self.ai_move_toward_continuous(ai_idx, target_x, target_y, dt);
-        }
-    }
-
-    /// Retreat order AI: fall back to target, only fight in melee self-defense.
-    pub(super) fn ai_order_retreat_tick(
-        &mut self,
-        ai_idx: usize,
-        target_x: f32,
-        target_y: f32,
-        dt: f32,
-    ) {
-        let ai_id = self.units[ai_idx].id;
-
-        // Only fight if enemy is in melee reach (self-defense)
-        if let Some((_ex, _ey, enemy_id, dist)) = self.find_nearest_enemy(ai_idx) {
-            let melee_reach = MELEE_RANGE;
-            if self.units[ai_idx].can_act() && dist <= melee_reach {
-                self.execute_attack(ai_id, enemy_id, None);
-            }
-        }
-
-        // Always move toward retreat target
-        let dist = self.units[ai_idx].distance_to_pos(target_x, target_y);
-        if dist < TILE_SIZE * 2.0 {
-            // Arrived — switch to Hold
-            self.units[ai_idx].order = Some(OrderKind::Hold { target_x, target_y });
-        } else {
-            self.ai_move_toward_continuous(ai_idx, target_x, target_y, dt);
-        }
-    }
+    // ── Order tick functions ─────────────────────────────────────────────
 
     /// Follow order AI: stay near the player, fight enemies encountered nearby.
     pub(super) fn ai_order_follow_tick(&mut self, ai_idx: usize, dt: f32) {
-        let ai_id = self.units[ai_idx].id;
-
-        // Look up player position
         let (player_x, player_y) = match self.player_unit() {
             Some(p) => (p.x, p.y),
             None => {
-                // Player dead — clear order, resume normal AI
                 self.units[ai_idx].order = None;
                 return;
             }
         };
 
-        // Fight enemies within range
-        if let Some((ex, ey, enemy_id, dist)) = self.find_nearest_enemy(ai_idx) {
-            let melee_reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
-            let melee_reach = melee_reach.max(MELEE_RANGE);
-            if self.units[ai_idx].can_act() && dist <= melee_reach {
-                self.execute_attack(ai_id, enemy_id, None);
-                return;
-            }
-            if dist < TILE_SIZE * 4.0 {
-                self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
-                return;
-            }
+        // Combat (leashed to player position)
+        if self.ai_order_combat(ai_idx, player_x, player_y, ORDER_LEASH, dt) {
+            return;
         }
 
-        // Follow the player — spread out in a ring around them instead of piling up.
-        // Each follower targets a unique offset based on its unit ID.
+        // Follow the player — spread out in a ring
         let dist = self.units[ai_idx].distance_to_pos(player_x, player_y);
-        let follow_dist = TILE_SIZE * 2.0;
-        if dist < follow_dist {
+        if dist < FOLLOW_DISTANCE {
             self.units[ai_idx].set_anim(UnitAnim::Idle);
         } else {
-            // Offset target position around the player in a circle based on unit ID
             let slot = self.units[ai_idx].id as f32;
-            let angle = slot * 2.39996; // golden angle (~137.5°) for even spacing
-            let offset_x = angle.cos() * follow_dist * 0.7;
-            let offset_y = angle.sin() * follow_dist * 0.7;
+            let angle = slot * 2.39996; // golden angle for even spacing
+            let offset_x = angle.cos() * FOLLOW_DISTANCE * 0.7;
+            let offset_y = angle.sin() * FOLLOW_DISTANCE * 0.7;
             self.ai_move_toward_continuous(ai_idx, player_x + offset_x, player_y + offset_y, dt);
+        }
+    }
+
+    /// Charge order AI: rush to target, fight enemies on the way, then switch to Follow.
+    pub(super) fn ai_order_charge_tick(
+        &mut self,
+        ai_idx: usize,
+        target_x: f32,
+        target_y: f32,
+        dt: f32,
+    ) {
+        // Combat (leashed to charge target)
+        if self.ai_order_combat(ai_idx, target_x, target_y, ORDER_LEASH, dt) {
+            return;
+        }
+
+        // Move toward charge target
+        let dist = self.units[ai_idx].distance_to_pos(target_x, target_y);
+        if dist < CHARGE_ARRIVAL {
+            // Arrived — transition to Follow
+            self.units[ai_idx].order = Some(OrderKind::Follow);
+            self.units[ai_idx].ai_waypoints.clear();
+            self.units[ai_idx].ai_waypoint_idx = 0;
+        } else {
+            self.ai_move_toward_continuous(ai_idx, target_x, target_y, dt);
+        }
+    }
+
+    /// Defend order AI: hold formation behind the anchor point.
+    pub(super) fn ai_order_defend_tick(
+        &mut self,
+        ai_idx: usize,
+        anchor_x: f32,
+        anchor_y: f32,
+        facing_dir: f32,
+        dt: f32,
+    ) {
+        let kind = self.units[ai_idx].kind;
+
+        // Determine which line this unit belongs to
+        let row_dist = match kind {
+            UnitKind::Warrior => DEFEND_LINE_WARRIOR,
+            UnitKind::Lancer => DEFEND_LINE_LANCER,
+            UnitKind::Archer => DEFEND_LINE_ARCHER,
+            UnitKind::Monk => DEFEND_LINE_MONK,
+        };
+
+        // Assign a slot within the line based on unit ID among same-kind defenders
+        let unit_id = self.units[ai_idx].id;
+        let mut same_kind_ids: Vec<UnitId> = self
+            .units
+            .iter()
+            .filter(|u| {
+                u.alive && u.kind == kind && matches!(u.order, Some(OrderKind::Defend { .. }))
+            })
+            .map(|u| u.id)
+            .collect();
+        same_kind_ids.sort_unstable();
+        let slot = same_kind_ids
+            .iter()
+            .position(|&id| id == unit_id)
+            .unwrap_or(0) as f32;
+        let count = same_kind_ids.len() as f32;
+
+        // Behind direction (opposite of facing)
+        let behind_dir = facing_dir + std::f32::consts::PI;
+        // Perpendicular axis (90° from facing direction)
+        let perp_x = -facing_dir.sin();
+        let perp_y = facing_dir.cos();
+
+        // Position: anchor + behind offset + perpendicular spread
+        let behind_x = behind_dir.cos() * row_dist;
+        let behind_y = behind_dir.sin() * row_dist;
+        let lateral_offset = (slot - (count - 1.0) / 2.0) * DEFEND_SPACING;
+        let post_x = anchor_x + behind_x + perp_x * lateral_offset;
+        let post_y = anchor_y + behind_y + perp_y * lateral_offset;
+
+        // Combat (leashed to formation post)
+        if self.ai_order_combat(ai_idx, post_x, post_y, DEFEND_LEASH, dt) {
+            return;
+        }
+
+        // Move to formation post, idle when close
+        let dist = self.units[ai_idx].distance_to_pos(post_x, post_y);
+        if dist < TILE_SIZE * 0.5 {
+            self.units[ai_idx].set_anim(UnitAnim::Idle);
+        } else {
+            self.ai_move_toward_continuous(ai_idx, post_x, post_y, dt);
         }
     }
 }

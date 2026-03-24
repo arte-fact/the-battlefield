@@ -368,22 +368,26 @@ pub fn run(
                         haptic(25);
                     }
 
-                    // Player orders: H=Hold, G=Go, R=Retreat, F=Follow
-                    if inp.take_order_hold() && game.issue_order("hold") > 0 && inp.is_touch_device
-                    {
+                    // Recruit: R key or touch button
+                    if inp.take_recruit() && game.recruit_units() > 0 && inp.is_touch_device {
                         haptic(15);
                     }
-                    if inp.take_order_go() && game.issue_order("go") > 0 && inp.is_touch_device {
-                        haptic(15);
-                    }
-                    if inp.take_order_retreat()
-                        && game.issue_order("retreat") > 0
+
+                    // Player orders: F=Follow, C=Charge, V=Defend
+                    if inp.take_order_follow()
+                        && game.issue_order("follow") > 0
                         && inp.is_touch_device
                     {
                         haptic(15);
                     }
-                    if inp.take_order_follow()
-                        && game.issue_order("follow") > 0
+                    if inp.take_order_charge()
+                        && game.issue_order("charge") > 0
+                        && inp.is_touch_device
+                    {
+                        haptic(15);
+                    }
+                    if inp.take_order_defend()
+                        && game.issue_order("defend") > 0
                         && inp.is_touch_device
                     {
                         haptic(15);

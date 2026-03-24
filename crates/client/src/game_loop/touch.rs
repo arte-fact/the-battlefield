@@ -136,10 +136,10 @@ pub(super) fn draw_touch_controls(
 
     // Order buttons
     let order_btns: [(&crate::input::ActionButton, &str, &str); 4] = [
-        (&input.order_hold_btn, "H", "rgba(200,170,50,0.5)"),
-        (&input.order_go_btn, "G", "rgba(50,180,80,0.5)"),
-        (&input.order_retreat_btn, "R", "rgba(50,120,200,0.5)"),
+        (&input.recruit_btn, "R", "rgba(50,200,50,0.5)"),
         (&input.order_follow_btn, "F", "rgba(160,80,200,0.5)"),
+        (&input.order_charge_btn, "C", "rgba(220,50,50,0.5)"),
+        (&input.order_defend_btn, "V", "rgba(50,120,200,0.5)"),
     ];
     for (btn, label, color) in &order_btns {
         draw_touch_button(

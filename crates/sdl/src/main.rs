@@ -195,22 +195,22 @@ fn main() {
                             let _ = gc.set_rumble(0x4000, 0x8000, 80);
                         }
                     }
-                    if player_input.order_hold && game.issue_order("hold") > 0 {
-                        if let Some(ref mut gc) = active_controller {
-                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
-                        }
-                    }
-                    if player_input.order_go && game.issue_order("go") > 0 {
-                        if let Some(ref mut gc) = active_controller {
-                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
-                        }
-                    }
-                    if player_input.order_retreat && game.issue_order("retreat") > 0 {
+                    if player_input.recruit && game.recruit_units() > 0 {
                         if let Some(ref mut gc) = active_controller {
                             let _ = gc.set_rumble(0x2000, 0x4000, 50);
                         }
                     }
                     if player_input.order_follow && game.issue_order("follow") > 0 {
+                        if let Some(ref mut gc) = active_controller {
+                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
+                        }
+                    }
+                    if player_input.order_charge && game.issue_order("charge") > 0 {
+                        if let Some(ref mut gc) = active_controller {
+                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
+                        }
+                    }
+                    if player_input.order_defend && game.issue_order("defend") > 0 {
                         if let Some(ref mut gc) = active_controller {
                             let _ = gc.set_rumble(0x2000, 0x4000, 50);
                         }

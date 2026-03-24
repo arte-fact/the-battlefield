@@ -62,9 +62,12 @@ impl Game {
     }
 
     /// Return the strategic objective for a faction (world-space coordinates).
-    /// Prioritizes capture zones; falls back to enemy base if all zones are controlled.
+    /// Used as fallback when macro objectives are empty.
     pub(super) fn faction_objective(&self, faction: Faction) -> (f32, f32) {
         if let Some(zone) = self.zone_manager.best_target_zone(faction) {
+            return (zone.center_wx, zone.center_wy);
+        }
+        if let Some(zone) = self.zone_manager.most_advanced_zone(faction) {
             return (zone.center_wx, zone.center_wy);
         }
         match faction {
@@ -73,39 +76,86 @@ impl Game {
         }
     }
 
-    /// Update a faction's flow field if the objective has moved significantly.
-    pub(super) fn update_flow_field_if_needed(&mut self, faction: Faction) {
-        let objective = self.faction_objective(faction);
-        let flow_state = match faction {
-            Faction::Blue => &self.blue_flow,
-            _ => &self.red_flow,
+    /// Pick the best macro objective for a specific unit based on position + score.
+    /// Returns (objective_index, wx, wy).
+    fn unit_best_objective(&self, ai_idx: usize) -> (usize, f32, f32) {
+        let faction = self.units[ai_idx].faction;
+        let fi = match faction {
+            Faction::Blue => 0,
+            Faction::Red => 1,
         };
-        let dx = objective.0 - flow_state.cached_goal.0;
-        let dy = objective.1 - flow_state.cached_goal.1;
-        let dist_sq = dx * dx + dy * dy;
-        let half_tile = TILE_SIZE * 0.5;
-        if flow_state.field.is_some() && dist_sq < half_tile * half_tile {
-            return; // goal hasn't moved enough
+        let objectives = &self.macro_objectives[fi];
+        if objectives.is_empty() {
+            let obj = self.faction_objective(faction);
+            return (0, obj.0, obj.1);
         }
-        let (gx, gy) = grid::world_to_grid(objective.0, objective.1);
-        let gx = gx.max(0) as u32;
-        let gy = gy.max(0) as u32;
-        // If goal is impassable, search nearby for a passable tile
-        let (gx, gy) = if self.grid.is_passable(gx, gy) {
-            (gx, gy)
-        } else {
-            self.find_nearest_passable(gx, gy).unwrap_or((gx, gy))
-        };
-        let field = crate::flowfield::FlowField::generate(&self.grid, gx, gy);
-        let state = match faction {
-            Faction::Blue => &mut self.blue_flow,
-            _ => &mut self.red_flow,
-        };
-        state.field = Some(field);
-        state.cached_goal = objective;
+
+        let ux = self.units[ai_idx].x;
+        let uy = self.units[ai_idx].y;
+        let dist_weight = 0.05; // per world-unit penalty
+
+        let mut best_idx = 0;
+        let mut best_pick = f32::NEG_INFINITY;
+        for (i, &(wx, wy, score)) in objectives.iter().enumerate() {
+            let dx = ux - wx;
+            let dy = uy - wy;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let pick = score - dist * dist_weight;
+            if pick > best_pick {
+                best_pick = pick;
+                best_idx = i;
+            }
+        }
+        let (wx, wy, _) = objectives[best_idx];
+        (best_idx, wx, wy)
     }
 
-    /// Move AI unit via flow field toward faction objective.
+    /// Update all flow fields for a faction (one per macro objective).
+    pub(super) fn update_flow_fields(&mut self, faction: Faction) {
+        let fi = match faction {
+            Faction::Blue => 0,
+            Faction::Red => 1,
+        };
+        let objectives = &self.macro_objectives[fi];
+
+        for i in 0..3 {
+            let goal = if i < objectives.len() {
+                (objectives[i].0, objectives[i].1)
+            } else {
+                continue;
+            };
+
+            let flow_states = match faction {
+                Faction::Blue => &self.blue_flow,
+                _ => &self.red_flow,
+            };
+            let dx = goal.0 - flow_states[i].cached_goal.0;
+            let dy = goal.1 - flow_states[i].cached_goal.1;
+            let dist_sq = dx * dx + dy * dy;
+            let half_tile = TILE_SIZE * 0.5;
+            if flow_states[i].field.is_some() && dist_sq < half_tile * half_tile {
+                continue; // goal hasn't moved enough
+            }
+
+            let (gx, gy) = grid::world_to_grid(goal.0, goal.1);
+            let gx = gx.max(0) as u32;
+            let gy = gy.max(0) as u32;
+            let (gx, gy) = if self.grid.is_passable(gx, gy) {
+                (gx, gy)
+            } else {
+                self.find_nearest_passable(gx, gy).unwrap_or((gx, gy))
+            };
+            let field = crate::flowfield::FlowField::generate(&self.grid, gx, gy);
+            let state = match faction {
+                Faction::Blue => &mut self.blue_flow[i],
+                _ => &mut self.red_flow[i],
+            };
+            state.field = Some(field);
+            state.cached_goal = goal;
+        }
+    }
+
+    /// Move AI unit via flow field toward its best macro objective.
     /// Blends 80% flow direction + 20% separation steering.
     /// Falls back to A* if flow field is absent or cell is unreachable.
     pub(super) fn ai_move_via_flowfield(&mut self, ai_idx: usize, dt: f32) {
@@ -113,38 +163,44 @@ impl Game {
         let ux = self.units[ai_idx].x;
         let uy = self.units[ai_idx].y;
 
-        // If already inside the target capture zone, stop — no need to crowd the center
-        if let Some(zone) = self.zone_manager.best_target_zone(faction) {
-            if zone.contains_world(ux, uy) {
+        let (obj_idx, obj_wx, obj_wy) = self.unit_best_objective(ai_idx);
+
+        // If already inside the target capture zone, stop
+        for zone in &self.zone_manager.zones {
+            if (zone.center_wx - obj_wx).abs() < 1.0
+                && (zone.center_wy - obj_wy).abs() < 1.0
+                && zone.contains_world(ux, uy)
+            {
                 return;
             }
         }
 
-        let flow_state = match faction {
+        let flow_states = match faction {
             Faction::Blue => &self.blue_flow,
             _ => &self.red_flow,
         };
 
-        if let Some(ref field) = flow_state.field {
-            let (gx, gy) = self.units[ai_idx].grid_cell();
-            let dir = field.direction_at(gx, gy);
-            if dir != (0, 0) {
-                let (sep_x, sep_y) = self.compute_separation(ai_idx);
-                let flow_x = dir.0 as f32;
-                let flow_y = dir.1 as f32;
-                let bx = flow_x * 0.8 + sep_x * 0.2;
-                let by = flow_y * 0.8 + sep_y * 0.2;
-                let len = (bx * bx + by * by).sqrt();
-                if len > 0.01 {
-                    self.move_unit(ai_idx, bx / len, by / len, dt);
+        if obj_idx < flow_states.len() {
+            if let Some(ref field) = flow_states[obj_idx].field {
+                let (gx, gy) = self.units[ai_idx].grid_cell();
+                let dir = field.direction_at(gx, gy);
+                if dir != (0, 0) {
+                    let (sep_x, sep_y) = self.compute_separation(ai_idx);
+                    let flow_x = dir.0 as f32;
+                    let flow_y = dir.1 as f32;
+                    let bx = flow_x * 0.8 + sep_x * 0.2;
+                    let by = flow_y * 0.8 + sep_y * 0.2;
+                    let len = (bx * bx + by * by).sqrt();
+                    if len > 0.01 {
+                        self.move_unit(ai_idx, bx / len, by / len, dt);
+                    }
+                    return;
                 }
-                return;
             }
         }
 
         // Fallback: use A* toward objective
-        let objective = self.faction_objective(faction);
-        self.ai_move_toward_continuous(ai_idx, objective.0, objective.1, dt);
+        self.ai_move_toward_continuous(ai_idx, obj_wx, obj_wy, dt);
     }
 
     /// Compute separation steering: repulsion from nearby same-faction units.

@@ -307,6 +307,9 @@ impl<'a> Assets<'a> {
                 BuildingKind::Barracks,
                 BuildingKind::Archery,
                 BuildingKind::Monastery,
+                BuildingKind::Castle,
+                BuildingKind::DefenseTower,
+                BuildingKind::House,
             ] {
                 let (sw, sh) = bkind.sprite_size();
                 let path = format!(

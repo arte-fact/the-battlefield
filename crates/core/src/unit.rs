@@ -133,10 +133,16 @@ pub enum UnitAnim {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OrderKind {
-    Hold { target_x: f32, target_y: f32 },
-    Go { target_x: f32, target_y: f32 },
-    Retreat { target_x: f32, target_y: f32 },
+    /// Units follow the player at close distance.
     Follow,
+    /// Units charge to a target point, then auto-transition to Follow.
+    Charge { target_x: f32, target_y: f32 },
+    /// Units form a defensive formation behind an anchor point.
+    Defend {
+        anchor_x: f32,
+        anchor_y: f32,
+        facing_dir: f32,
+    },
 }
 
 /// Duration of the death fade-out animation in seconds.
@@ -179,6 +185,8 @@ pub struct Unit {
     pub cached_enemy: Option<(f32, f32, UnitId, f32)>,
     /// Cooldown before refreshing cached_enemy (avoids LOS raycasts every frame).
     pub enemy_scan_cooldown: f32,
+    /// When true, unit idles at rally point instead of marching via flowfield.
+    pub rally_hold: bool,
 }
 
 impl Unit {
@@ -215,6 +223,7 @@ impl Unit {
             order_flash: 0.0,
             cached_enemy: None,
             enemy_scan_cooldown: 0.0,
+            rally_hold: false,
         }
     }
 
@@ -226,6 +235,7 @@ impl Unit {
             self.alive = false;
             self.death_fade = DEATH_FADE_DURATION;
             self.order = None;
+            self.rally_hold = false;
             self.set_anim(UnitAnim::Idle);
         }
     }

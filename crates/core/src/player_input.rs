@@ -13,9 +13,10 @@ pub struct PlayerInput {
     /// Whether the aim-lock modifier is held (Ctrl on keyboard, left trigger on gamepad).
     /// When true, aim direction and facing are locked regardless of movement.
     pub aim_lock: bool,
-    /// Order commands (at most one per frame).
-    pub order_hold: bool,
-    pub order_go: bool,
-    pub order_retreat: bool,
+    /// Recruit nearby units into the follower list.
+    pub recruit: bool,
+    /// Order commands (at most one per frame). Apply to recruited units only.
     pub order_follow: bool,
+    pub order_charge: bool,
+    pub order_defend: bool,
 }

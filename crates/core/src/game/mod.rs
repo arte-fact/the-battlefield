@@ -57,16 +57,24 @@ pub struct Game {
     pub zone_manager: ZoneManager,
     /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
     pub winner: Option<Faction>,
-    /// Reinforcement wave timers per faction [Blue, Red].
-    reinforce_timer: [f32; 2],
+    /// Spawn queue per faction [Blue, Red] — units to spawn one-by-one.
+    spawn_queue: [Vec<UnitKind>; 2],
+    /// Timer between individual unit spawns per faction [Blue, Red].
+    spawn_timer: [f32; 2],
     /// Pre-computed occupied grid cells for AI pathfinding (rebuilt each frame).
     ai_occupied_cache: HashSet<(u32, u32)>,
-    /// Flow field for Blue faction objective marching.
-    blue_flow: FactionFlowState,
-    /// Flow field for Red faction objective marching.
-    red_flow: FactionFlowState,
+    /// Flow fields for Blue faction (up to 3 macro objectives).
+    blue_flow: [FactionFlowState; 3],
+    /// Flow fields for Red faction (up to 3 macro objectives).
+    red_flow: [FactionFlowState; 3],
+    /// Macro objectives per faction: [(wx, wy, score); 3] per faction [Blue, Red].
+    pub macro_objectives: [Vec<(f32, f32, f32)>; 2],
+    /// Timer for periodic macro objective recomputation.
+    objective_timer: f32,
     /// Player authority level (0..100), governing order radius, follow chance, and rank.
     pub authority: f32,
+    /// Persistently recruited unit IDs. Orders apply only to these units.
+    pub recruited: HashSet<UnitId>,
 }
 
 impl Game {
@@ -97,11 +105,23 @@ impl Game {
             buildings: Vec::new(),
             zone_manager: ZoneManager::empty(),
             winner: None,
-            reinforce_timer: [0.0; 2],
+            spawn_queue: [Vec::new(), Vec::new()],
+            spawn_timer: [0.0; 2],
             ai_occupied_cache: HashSet::new(),
-            blue_flow: FactionFlowState::new(),
-            red_flow: FactionFlowState::new(),
+            blue_flow: [
+                FactionFlowState::new(),
+                FactionFlowState::new(),
+                FactionFlowState::new(),
+            ],
+            red_flow: [
+                FactionFlowState::new(),
+                FactionFlowState::new(),
+                FactionFlowState::new(),
+            ],
+            macro_objectives: [Vec::new(), Vec::new()],
+            objective_timer: 0.0,
             authority: 0.0,
+            recruited: HashSet::new(),
         }
     }
 
@@ -178,6 +198,7 @@ impl Game {
         self.tick_ai(dt);
         self.tick_zones(dt);
         self.tick_production(dt);
+        self.tick_building_combat(dt);
 
         // Player movement
         if input.move_x != 0.0 || input.move_y != 0.0 {
@@ -202,5 +223,10 @@ impl Game {
         self.resolve_collisions();
         self.update_movement_anims(&old_positions);
         self.tick_authority();
+
+        // Remove dead units from the recruited set
+        let units = &self.units;
+        self.recruited
+            .retain(|id| units.iter().any(|u| u.alive && u.id == *id));
     }
 }

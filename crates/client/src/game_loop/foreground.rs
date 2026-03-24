@@ -358,6 +358,9 @@ fn draw_base_building(
         BuildingKind::Barracks => 0,
         BuildingKind::Archery => 1,
         BuildingKind::Monastery => 2,
+        BuildingKind::Castle => 3,
+        BuildingKind::DefenseTower => 4,
+        BuildingKind::House => 5,
     };
     let faction_index = match b.faction {
         Faction::Blue => 0,
@@ -368,8 +371,8 @@ fn draw_base_building(
         let (tex_id, sprite_w, sprite_h) = loaded.building_textures[tex_idx];
         let sw = sprite_w as f64;
         let sh = sprite_h as f64;
-        let draw_w = ts * 3.0;
-        let draw_h = draw_w * (sh / sw);
+        let draw_w = sw;
+        let draw_h = sh;
         let dx = (b.grid_x as f64) * ts + ts / 2.0 - draw_w / 2.0;
         let dy = (b.grid_y as f64) * ts + ts - draw_h;
         r.draw_texture(tex_id, 0.0, 0.0, sw, sh, dx, dy, draw_w, draw_h)?;

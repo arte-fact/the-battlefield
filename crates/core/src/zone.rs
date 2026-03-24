@@ -39,6 +39,8 @@ pub struct CaptureZone {
     pub progress: f32,
     pub blue_count: u32,
     pub red_count: u32,
+    /// Attack cooldown for the zone tower (fires when controlled).
+    pub tower_cooldown: f32,
 }
 
 impl CaptureZone {
@@ -57,6 +59,7 @@ impl CaptureZone {
             progress: 0.0,
             blue_count: 0,
             red_count: 0,
+            tower_cooldown: 0.0,
         }
     }
 
@@ -247,6 +250,107 @@ impl ZoneManager {
             .iter()
             .filter(|z| z.state != ZoneState::Controlled(faction))
             .min_by_key(|z| dist_sq(z))
+    }
+
+    /// Return the most advanced controlled zone (farthest from own base).
+    /// Used when all zones are held — army defends the front line instead of rushing the enemy base.
+    pub fn most_advanced_zone(&self, faction: Faction) -> Option<&CaptureZone> {
+        let (own_x, own_y) = match faction {
+            Faction::Blue => (self.blue_base.0 as f32, self.blue_base.1 as f32),
+            _ => (self.red_base.0 as f32, self.red_base.1 as f32),
+        };
+        self.zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(faction))
+            .max_by_key(|z| {
+                let dx = z.center_gx as f32 - own_x;
+                let dy = z.center_gy as f32 - own_y;
+                ((dx * dx + dy * dy) * 10.0) as i32
+            })
+    }
+
+    /// Score all zones for a faction, return top 3 as (world_x, world_y, score).
+    /// Fewer than 3 entries if fewer valid targets exist.
+    pub fn score_top3_zones(&self, faction: Faction) -> Vec<(f32, f32, f32)> {
+        if self.zones.is_empty() {
+            return Vec::new();
+        }
+
+        let (own_x, own_y) = match faction {
+            Faction::Blue => (self.blue_base.0 as f32, self.blue_base.1 as f32),
+            _ => (self.red_base.0 as f32, self.red_base.1 as f32),
+        };
+
+        // Max distance for normalization
+        let max_dist_sq = self
+            .zones
+            .iter()
+            .map(|z| {
+                let dx = z.center_gx as f32 - own_x;
+                let dy = z.center_gy as f32 - own_y;
+                dx * dx + dy * dy
+            })
+            .fold(1.0_f32, f32::max);
+
+        let mut scored: Vec<(f32, f32, f32)> = self
+            .zones
+            .iter()
+            .map(|z| {
+                let mut score = 0.0_f32;
+
+                let controlled_by_us = z.state == ZoneState::Controlled(faction);
+                let progress_for_us = match faction {
+                    Faction::Blue => z.progress,  // +1 = fully Blue
+                    Faction::Red => -z.progress,  // flip so +1 = fully Red
+                };
+
+                // Expansion target: zones we don't control
+                if !controlled_by_us {
+                    score += 40.0;
+                }
+
+                // Urgency: zone we own but progress is eroding
+                if controlled_by_us && progress_for_us < 0.99 {
+                    score += 50.0 * (1.0 - progress_for_us);
+                }
+
+                // Momentum: zone we're actively capturing — finish the job
+                if !controlled_by_us && progress_for_us > 0.0 {
+                    score += 30.0 * progress_for_us;
+                }
+
+                // Contested bonus
+                if z.state == ZoneState::Contested {
+                    score += 20.0;
+                }
+
+                // Enemy pressure
+                let enemy_count = match faction {
+                    Faction::Blue => z.red_count,
+                    Faction::Red => z.blue_count,
+                };
+                score += 5.0 * enemy_count as f32;
+
+                // Distance penalty (normalized 0-1)
+                let dx = z.center_gx as f32 - own_x;
+                let dy = z.center_gy as f32 - own_y;
+                let norm_dist = (dx * dx + dy * dy) / max_dist_sq;
+                score -= 15.0 * norm_dist;
+
+                // All zones controlled — defend the most advanced one
+                if controlled_by_us && progress_for_us >= 0.99 {
+                    // Only distance-based score (farthest from base = most advanced)
+                    score = norm_dist * 10.0;
+                }
+
+                (z.center_wx, z.center_wy, score)
+            })
+            .collect();
+
+        // Sort by score descending, take top 3
+        scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(3);
+        scored
     }
 
     /// Update victory timer. Returns Some(faction) if a faction has won.

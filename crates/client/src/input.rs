@@ -158,11 +158,12 @@ pub struct Input {
     // Touch controls
     pub joystick: VirtualJoystick,
     pub attack_button: ActionButton,
-    /// Order buttons for touch (Hold, Go, Retreat, Follow).
-    pub order_hold_btn: ActionButton,
-    pub order_go_btn: ActionButton,
-    pub order_retreat_btn: ActionButton,
+    /// Recruit button for touch.
+    pub recruit_btn: ActionButton,
+    /// Order buttons for touch.
     pub order_follow_btn: ActionButton,
+    pub order_charge_btn: ActionButton,
+    pub order_defend_btn: ActionButton,
     /// Set on first touch event; enables touch control rendering.
     pub is_touch_device: bool,
     /// True after the player has used the joystick at least once (hides ghost hint).
@@ -171,11 +172,12 @@ pub struct Input {
     pub attack_pressed: bool,
     /// Keyboard attack key (space) was pressed this frame (consumed on read).
     attack_key_pressed: bool,
+    /// Recruit key pressed this frame (consumed on read).
+    recruit_pressed: bool,
     /// Order keys pressed this frame (consumed on read).
-    order_hold_pressed: bool,
-    order_go_pressed: bool,
-    order_retreat_pressed: bool,
     order_follow_pressed: bool,
+    order_charge_pressed: bool,
+    order_defend_pressed: bool,
 
     // Single-finger camera drag (right side of screen, not on any button)
     /// Touch ID for camera drag, if active.
@@ -205,18 +207,18 @@ impl Input {
             touch_pan_y: 0.0,
             joystick: VirtualJoystick::new(),
             attack_button: ActionButton::new(0.0, 0.0, 56.0),
-            order_hold_btn: ActionButton::new(0.0, 0.0, 28.0),
-            order_go_btn: ActionButton::new(0.0, 0.0, 28.0),
-            order_retreat_btn: ActionButton::new(0.0, 0.0, 28.0),
+            recruit_btn: ActionButton::new(0.0, 0.0, 28.0),
             order_follow_btn: ActionButton::new(0.0, 0.0, 28.0),
+            order_charge_btn: ActionButton::new(0.0, 0.0, 28.0),
+            order_defend_btn: ActionButton::new(0.0, 0.0, 28.0),
             is_touch_device: false,
             has_used_joystick: false,
             attack_pressed: false,
             attack_key_pressed: false,
-            order_hold_pressed: false,
-            order_go_pressed: false,
-            order_retreat_pressed: false,
+            recruit_pressed: false,
             order_follow_pressed: false,
+            order_charge_pressed: false,
+            order_defend_pressed: false,
             camera_drag_id: None,
             camera_drag_prev: (0.0, 0.0),
             camera_drag_dx: 0.0,
@@ -235,30 +237,30 @@ impl Input {
         self.attack_button.center_y = atk_cy;
         self.attack_button.radius = atk_radius;
 
-        // Order buttons: arranged around the attack button (left, top-left, top, top-right)
+        // Order buttons: arranged around the attack button (left, top-left, top)
         let ord_radius = 36.0 * dpr;
         let spacing = atk_radius + ord_radius + 12.0 * dpr;
 
         // Left of ATK
-        self.order_hold_btn.center_x = atk_cx - spacing;
-        self.order_hold_btn.center_y = atk_cy;
-        self.order_hold_btn.radius = ord_radius;
+        self.order_follow_btn.center_x = atk_cx - spacing;
+        self.order_follow_btn.center_y = atk_cy;
+        self.order_follow_btn.radius = ord_radius;
 
         // Top-left of ATK
         let diag = spacing * 0.707;
-        self.order_go_btn.center_x = atk_cx - diag;
-        self.order_go_btn.center_y = atk_cy - diag;
-        self.order_go_btn.radius = ord_radius;
+        self.order_charge_btn.center_x = atk_cx - diag;
+        self.order_charge_btn.center_y = atk_cy - diag;
+        self.order_charge_btn.radius = ord_radius;
 
         // Top of ATK
-        self.order_retreat_btn.center_x = atk_cx;
-        self.order_retreat_btn.center_y = atk_cy - spacing;
-        self.order_retreat_btn.radius = ord_radius;
+        self.order_defend_btn.center_x = atk_cx;
+        self.order_defend_btn.center_y = atk_cy - spacing;
+        self.order_defend_btn.radius = ord_radius;
 
-        // Top-right of ATK
-        self.order_follow_btn.center_x = atk_cx + diag;
-        self.order_follow_btn.center_y = atk_cy - diag;
-        self.order_follow_btn.radius = ord_radius;
+        // Top-right of ATK (recruit)
+        self.recruit_btn.center_x = atk_cx + diag;
+        self.recruit_btn.center_y = atk_cy - diag;
+        self.recruit_btn.radius = ord_radius;
 
         // Joystick: smaller radius for higher sensitivity
         self.joystick.max_radius = 40.0 * dpr;
@@ -276,17 +278,17 @@ impl Input {
         if key == " " && !self.keys_down.contains(" ") {
             self.attack_key_pressed = true;
         }
-        if key == "h" && !self.keys_down.contains("h") {
-            self.order_hold_pressed = true;
-        }
-        if key == "g" && !self.keys_down.contains("g") {
-            self.order_go_pressed = true;
-        }
         if key == "r" && !self.keys_down.contains("r") {
-            self.order_retreat_pressed = true;
+            self.recruit_pressed = true;
         }
         if key == "f" && !self.keys_down.contains("f") {
             self.order_follow_pressed = true;
+        }
+        if key == "c" && !self.keys_down.contains("c") {
+            self.order_charge_pressed = true;
+        }
+        if key == "v" && !self.keys_down.contains("v") {
+            self.order_defend_pressed = true;
         }
         self.keys_down.insert(key);
     }
@@ -349,24 +351,10 @@ impl Input {
         r
     }
 
-    /// Consume Hold order key press (H).
-    pub fn take_order_hold(&mut self) -> bool {
-        let r = self.order_hold_pressed;
-        self.order_hold_pressed = false;
-        r
-    }
-
-    /// Consume Go order key press (G).
-    pub fn take_order_go(&mut self) -> bool {
-        let r = self.order_go_pressed;
-        self.order_go_pressed = false;
-        r
-    }
-
-    /// Consume Retreat order key press (R).
-    pub fn take_order_retreat(&mut self) -> bool {
-        let r = self.order_retreat_pressed;
-        self.order_retreat_pressed = false;
+    /// Consume Recruit key press (R).
+    pub fn take_recruit(&mut self) -> bool {
+        let r = self.recruit_pressed;
+        self.recruit_pressed = false;
         r
     }
 
@@ -374,6 +362,20 @@ impl Input {
     pub fn take_order_follow(&mut self) -> bool {
         let r = self.order_follow_pressed;
         self.order_follow_pressed = false;
+        r
+    }
+
+    /// Consume Charge order key press (C).
+    pub fn take_order_charge(&mut self) -> bool {
+        let r = self.order_charge_pressed;
+        self.order_charge_pressed = false;
+        r
+    }
+
+    /// Consume Defend order key press (V).
+    pub fn take_order_defend(&mut self) -> bool {
+        let r = self.order_defend_pressed;
+        self.order_defend_pressed = false;
         r
     }
 
@@ -387,10 +389,10 @@ impl Input {
         self.keys_down.clear();
         self.scroll_delta = 0.0;
         self.attack_key_pressed = false;
-        self.order_hold_pressed = false;
-        self.order_go_pressed = false;
-        self.order_retreat_pressed = false;
+        self.recruit_pressed = false;
         self.order_follow_pressed = false;
+        self.order_charge_pressed = false;
+        self.order_defend_pressed = false;
         self.joystick.active = false;
         self.joystick.dx = 0.0;
         self.joystick.dy = 0.0;
@@ -401,24 +403,24 @@ impl Input {
 
     /// Check if a touch hits any order button; if so, press it and set the flag.
     fn try_order_buttons(&mut self, touch_id: i32, x: f32, y: f32) -> bool {
-        if self.order_hold_btn.contains(x, y) {
-            self.order_hold_btn.press(touch_id);
-            self.order_hold_pressed = true;
-            return true;
-        }
-        if self.order_go_btn.contains(x, y) {
-            self.order_go_btn.press(touch_id);
-            self.order_go_pressed = true;
-            return true;
-        }
-        if self.order_retreat_btn.contains(x, y) {
-            self.order_retreat_btn.press(touch_id);
-            self.order_retreat_pressed = true;
+        if self.recruit_btn.contains(x, y) {
+            self.recruit_btn.press(touch_id);
+            self.recruit_pressed = true;
             return true;
         }
         if self.order_follow_btn.contains(x, y) {
             self.order_follow_btn.press(touch_id);
             self.order_follow_pressed = true;
+            return true;
+        }
+        if self.order_charge_btn.contains(x, y) {
+            self.order_charge_btn.press(touch_id);
+            self.order_charge_pressed = true;
+            return true;
+        }
+        if self.order_defend_btn.contains(x, y) {
+            self.order_defend_btn.press(touch_id);
+            self.order_defend_pressed = true;
             return true;
         }
         false
@@ -487,10 +489,10 @@ impl Input {
     pub fn has_active_control(&self) -> bool {
         self.joystick.active
             || self.attack_button.pressed
-            || self.order_hold_btn.pressed
-            || self.order_go_btn.pressed
-            || self.order_retreat_btn.pressed
+            || self.recruit_btn.pressed
             || self.order_follow_btn.pressed
+            || self.order_charge_btn.pressed
+            || self.order_defend_btn.pressed
             || self.camera_drag_id.is_some()
     }
 
@@ -534,10 +536,10 @@ impl Input {
 
         self.joystick.deactivate(touch_id);
         self.attack_button.release(touch_id);
-        self.order_hold_btn.release(touch_id);
-        self.order_go_btn.release(touch_id);
-        self.order_retreat_btn.release(touch_id);
+        self.recruit_btn.release(touch_id);
         self.order_follow_btn.release(touch_id);
+        self.order_charge_btn.release(touch_id);
+        self.order_defend_btn.release(touch_id);
         if self.camera_drag_id == Some(touch_id) {
             self.camera_drag_id = None;
         }
@@ -762,25 +764,24 @@ mod tests {
     }
 
     #[test]
-    fn touch_order_hold_button() {
+    fn touch_order_follow_button() {
         let mut input = Input::new();
         input.update_layout(960.0, 640.0, 1.0);
-        // Touch the hold button (top of stack above attack)
-        let hx = input.order_hold_btn.center_x;
-        let hy = input.order_hold_btn.center_y;
-        input.on_touch_start(1, hx, hy, 1, 960.0);
-        assert!(input.take_order_hold());
-        assert!(!input.take_order_hold()); // consumed
+        let fx = input.order_follow_btn.center_x;
+        let fy = input.order_follow_btn.center_y;
+        input.on_touch_start(1, fx, fy, 1, 960.0);
+        assert!(input.take_order_follow());
+        assert!(!input.take_order_follow()); // consumed
     }
 
     #[test]
-    fn touch_order_go_button() {
+    fn touch_order_charge_button() {
         let mut input = Input::new();
         input.update_layout(960.0, 640.0, 1.0);
-        let gx = input.order_go_btn.center_x;
-        let gy = input.order_go_btn.center_y;
-        input.on_touch_start(1, gx, gy, 1, 960.0);
-        assert!(input.take_order_go());
+        let cx = input.order_charge_btn.center_x;
+        let cy = input.order_charge_btn.center_y;
+        input.on_touch_start(1, cx, cy, 1, 960.0);
+        assert!(input.take_order_charge());
     }
 
     #[test]
