@@ -345,7 +345,7 @@ mod tests {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
         let e1 = game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 5, false);
-        let e2 = game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 4, false);
+        let e2 = game.spawn_unit(UnitKind::Warrior, Faction::Red, 5, 6, false);
         game.player_aim_dir = 0.0; // aim right
         game.player_attack();
         let enemy1 = find_unit(&game, e1).unwrap();

@@ -42,3 +42,10 @@ __MACOSX/
 # Verification screenshots
 verify-*.png
 game-*.png
+
+# QEMU disk images
+pi/qemu-system/images/
+*.qcow2
+
+# Core dumps
+*.core

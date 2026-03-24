@@ -58,7 +58,9 @@ fn main() {
     } else {
         1.0
     };
-    log::info!("DPI scale: {dpi_scale} (output {output_w}x{output_h}, logical {logical_w}x{_logical_h})");
+    log::info!(
+        "DPI scale: {dpi_scale} (output {output_w}x{output_h}, logical {logical_w}x{_logical_h})"
+    );
 
     // Initialize game
     let (w, h) = (output_w, output_h);
@@ -87,6 +89,15 @@ fn main() {
     let start_time = Instant::now();
     let mut screen = GameScreen::MainMenu;
     let mut player_was_alive = true;
+
+    // Frame profiler (enabled by PERF_PROFILE=1)
+    let profiling = std::env::var("PERF_PROFILE").is_ok();
+    let mut prof_tick_us: Vec<u128> = Vec::new();
+    let mut prof_update_us: Vec<u128> = Vec::new();
+    let mut prof_render_us: Vec<u128> = Vec::new();
+    let mut prof_frame_us: Vec<u128> = Vec::new();
+    let mut prof_last_report = Instant::now();
+    let prof_interval = std::time::Duration::from_secs(3);
 
     'main_loop: loop {
         let now = Instant::now();
@@ -172,9 +183,13 @@ fn main() {
                 let player_input = input_state.build_player_input(&keyboard);
 
                 if game.winner.is_none() {
+                    let t0 = Instant::now();
                     game.tick(&player_input, dt as f32);
+                    if profiling {
+                        prof_tick_us.push(t0.elapsed().as_micros());
+                    }
 
-                    if (player_input.attack || player_input.attack_held) && game.player_attack() {
+                    if player_input.attack && game.player_attack() {
                         // Rumble on successful hit
                         if let Some(ref mut gc) = active_controller {
                             let _ = gc.set_rumble(0x4000, 0x8000, 80);
@@ -217,7 +232,11 @@ fn main() {
                 }
 
                 // Update animations, particles, camera follow
+                let t0 = Instant::now();
                 game.update(dt);
+                if profiling {
+                    prof_update_us.push(t0.elapsed().as_micros());
+                }
 
                 // Clamp camera
                 let world_size = GRID_SIZE as f32 * TILE_SIZE;
@@ -274,6 +293,7 @@ fn main() {
         }
 
         // Render
+        let t0 = Instant::now();
         let buttons = renderer::render_frame(
             &mut canvas,
             &texture_creator,
@@ -287,6 +307,68 @@ fn main() {
             input_state.gamepad_connected,
             dpi_scale,
         );
+
+        if profiling {
+            prof_render_us.push(t0.elapsed().as_micros());
+        }
+
+        // Frame profiling report
+        if profiling {
+            prof_frame_us.push(now.elapsed().as_micros());
+            if prof_last_report.elapsed() >= prof_interval && !prof_frame_us.is_empty() {
+                let n = prof_frame_us.len();
+                let avg = |v: &[u128]| -> f64 {
+                    if v.is_empty() {
+                        0.0
+                    } else {
+                        v.iter().sum::<u128>() as f64 / v.len() as f64
+                    }
+                };
+                let p95 = |v: &mut Vec<u128>| -> u128 {
+                    v.sort();
+                    v.get(v.len() * 95 / 100).copied().unwrap_or(0)
+                };
+                let max = |v: &[u128]| -> u128 { v.iter().copied().max().unwrap_or(0) };
+                let fps = 1_000_000.0 / avg(&prof_frame_us);
+                eprintln!("--- PERF ({n} frames, {fps:.0} FPS) ---");
+                eprintln!(
+                    "  tick:   avg {:.0}us  p95 {}us  max {}us",
+                    avg(&prof_tick_us),
+                    p95(&mut prof_tick_us),
+                    max(&prof_tick_us)
+                );
+                eprintln!(
+                    "  update: avg {:.0}us  p95 {}us  max {}us",
+                    avg(&prof_update_us),
+                    p95(&mut prof_update_us),
+                    max(&prof_update_us)
+                );
+                eprintln!(
+                    "  render: avg {:.0}us  p95 {}us  max {}us",
+                    avg(&prof_render_us),
+                    p95(&mut prof_render_us),
+                    max(&prof_render_us)
+                );
+                eprintln!(
+                    "  frame:  avg {:.0}us  p95 {}us  max {}us",
+                    avg(&prof_frame_us),
+                    p95(&mut prof_frame_us),
+                    max(&prof_frame_us)
+                );
+                let budget = 16670.0;
+                let pct = avg(&prof_frame_us) / budget * 100.0;
+                eprintln!("  budget: {pct:.1}% of 16.67ms (60fps)");
+                eprintln!(
+                    "  units:  {} alive",
+                    game.units.iter().filter(|u| u.alive).count()
+                );
+                prof_tick_us.clear();
+                prof_update_us.clear();
+                prof_render_us.clear();
+                prof_frame_us.clear();
+                prof_last_report = Instant::now();
+            }
+        }
 
         // Handle mouse click on overlay buttons
         if input_state.mouse_clicked {

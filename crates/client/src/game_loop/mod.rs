@@ -328,13 +328,13 @@ pub fn run(
                     game.tick_zones(dt as f32);
                     game.tick_production(dt as f32);
 
-                    // Attack held: lock aim direction and facing
-                    let attack_held = inp.is_key_down(" ") || inp.attack_button.pressed;
+                    // Aim lock: Ctrl key locks aim direction and facing
+                    let aim_lock = inp.is_key_down("Control");
 
                     // Keyboard movement (WASD/ZQSD + arrows)
                     let (move_dx, move_dy) = inp.movement_direction();
                     if move_dx != 0.0 || move_dy != 0.0 {
-                        if !attack_held {
+                        if !aim_lock {
                             game.player_aim_dir = move_dy.atan2(move_dx);
                         }
                         game.try_player_move(move_dx, move_dy, dt as f32);
@@ -343,14 +343,14 @@ pub fn run(
                     // Virtual joystick movement (mobile)
                     let (joy_dx, joy_dy) = (inp.joystick.dx, inp.joystick.dy);
                     if joy_dx.abs() > 0.01 || joy_dy.abs() > 0.01 {
-                        if !attack_held {
+                        if !aim_lock {
                             game.player_aim_dir = joy_dy.atan2(joy_dx);
                         }
                         game.try_player_move(joy_dx, joy_dy, dt as f32);
                     }
 
                     // Update player facing from aim direction (skip when attacking)
-                    if !attack_held {
+                    if !aim_lock {
                         let aim_cos = game.player_aim_dir.cos();
                         if let Some(player) = game.player_unit_mut() {
                             if aim_cos > 0.01 {
@@ -361,9 +361,9 @@ pub fn run(
                         }
                     }
 
-                    // Attack: keyboard (space held or pressed) or touch button
+                    // Attack: keyboard (space) or touch button
                     let attack_input =
-                        inp.take_attack_key() || inp.take_attack_pressed() || attack_held;
+                        inp.is_key_down(" ") || inp.take_attack_key() || inp.take_attack_pressed();
                     if attack_input && game.player_attack() && inp.is_touch_device {
                         haptic(25);
                     }

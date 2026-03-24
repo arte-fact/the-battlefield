@@ -10,8 +10,9 @@ pub struct PlayerInput {
     pub attack: bool,
     /// Aim direction in radians (0 = right).
     pub aim_dir: f32,
-    /// Whether attack key/button is held (locks aim direction).
-    pub attack_held: bool,
+    /// Whether the aim-lock modifier is held (Ctrl on keyboard, left trigger on gamepad).
+    /// When true, aim direction and facing are locked regardless of movement.
+    pub aim_lock: bool,
     /// Order commands (at most one per frame).
     pub order_hold: bool,
     pub order_go: bool,

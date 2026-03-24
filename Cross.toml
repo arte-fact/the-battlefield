@@ -1,0 +1,13 @@
+[target.aarch64-unknown-linux-gnu]
+dockerfile = { file = "pi/docker/Dockerfile.aarch64" }
+
+[target.armv7-unknown-linux-gnueabihf]
+image = "ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main"
+pre-build = [
+    "dpkg --add-architecture armhf",
+    "apt-get update && apt-get install -y cmake libx11-dev:armhf libxext-dev:armhf libxrandr-dev:armhf libxcursor-dev:armhf libxi-dev:armhf libxss-dev:armhf libxxf86vm-dev:armhf libwayland-dev:armhf libasound2-dev:armhf libpulse-dev:armhf libudev-dev:armhf libdbus-1-dev:armhf libgl-dev:armhf libgles-dev:armhf libegl-dev:armhf",
+    "ln -sf /usr/lib/arm-linux-gnueabihf/lib*.so* /usr/arm-linux-gnueabihf/lib/ 2>/dev/null || true"
+]
+
+[build.env]
+passthrough = ["RUST_LOG"]

@@ -254,7 +254,7 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
         let (bx, by) = b_leaf.center();
         let da = (ax as f32 - top_left.0).powi(2) + (ay as f32 - top_left.1).powi(2);
         let db = (bx as f32 - top_left.0).powi(2) + (by as f32 - top_left.1).powi(2);
-        da.partial_cmp(&db).unwrap()
+        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let blue_base = sorted_leaves[0].center();

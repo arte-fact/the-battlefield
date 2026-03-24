@@ -2,6 +2,18 @@
 name = "battlefield-core"
 version = "0.1.0"
 edition = "2021"
+autobenches = false
 
 [dependencies]
 log = "0.4"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "game_tick"
+harness = false
+
+[[bin]]
+name = "bench-headless"
+path = "benches/headless_frames.rs"

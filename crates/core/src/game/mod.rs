@@ -181,14 +181,14 @@ impl Game {
 
         // Player movement
         if input.move_x != 0.0 || input.move_y != 0.0 {
-            if !input.attack_held {
+            if !input.aim_lock {
                 self.player_aim_dir = input.move_y.atan2(input.move_x);
             }
             self.try_player_move(input.move_x, input.move_y, dt);
         }
 
-        // Player facing from aim (skip when attack held to lock facing)
-        if !input.attack_held {
+        // Player facing from aim (skip when aim locked to preserve facing)
+        if !input.aim_lock {
             let aim_cos = self.player_aim_dir.cos();
             if let Some(player) = self.player_unit_mut() {
                 if aim_cos > 0.01 {

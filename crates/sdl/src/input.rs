@@ -143,9 +143,15 @@ impl InputState {
         (self.left_stick_x, self.left_stick_y)
     }
 
-    /// Returns zoom delta from triggers: positive = zoom in, negative = zoom out.
+    /// Returns zoom delta from right trigger (positive = zoom in).
+    /// Left trigger is reserved for aim lock.
     pub fn gamepad_zoom_delta(&self) -> f32 {
-        self.trigger_right - self.trigger_left
+        self.trigger_right
+    }
+
+    /// Returns true if the left trigger is held past the activation threshold.
+    pub fn gamepad_aim_lock(&self) -> bool {
+        self.trigger_left > 0.5
     }
 
     /// Build a PlayerInput from the current keyboard and gamepad state.
@@ -192,19 +198,22 @@ impl InputState {
             self.aim_dir = move_y.atan2(move_x);
         }
 
-        let kb_attack_held = keyboard.is_scancode_pressed(Scancode::Space);
-        let gp_attack_held = self.gamepad_held(Button::A);
-        let attack_held = kb_attack_held || gp_attack_held;
+        // Aim lock: Ctrl (keyboard) or left trigger (gamepad)
+        let kb_aim_lock = keyboard.is_scancode_pressed(Scancode::LCtrl)
+            || keyboard.is_scancode_pressed(Scancode::RCtrl);
+        let gp_aim_lock = self.gamepad_aim_lock();
+        let aim_lock = kb_aim_lock || gp_aim_lock;
 
-        let kb_attack_pressed = self.pressed_this_frame.contains(&Scancode::Space);
-        let gp_attack_pressed = self.gamepad_pressed(Button::A);
+        // Attack: Space (keyboard) or A button (gamepad)
+        let kb_attack = keyboard.is_scancode_pressed(Scancode::Space);
+        let gp_attack = self.gamepad_held(Button::A) || self.gamepad_pressed(Button::A);
 
         PlayerInput {
             move_x,
             move_y,
-            attack: kb_attack_pressed || gp_attack_pressed || attack_held,
+            attack: kb_attack || gp_attack,
             aim_dir: self.aim_dir,
-            attack_held,
+            aim_lock,
             order_hold: self.pressed_this_frame.contains(&Scancode::H)
                 || self.gamepad_pressed(Button::LeftShoulder),
             order_go: self.pressed_this_frame.contains(&Scancode::G)

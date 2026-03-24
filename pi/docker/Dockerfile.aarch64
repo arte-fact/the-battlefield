@@ -1,0 +1,23 @@
+FROM ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main
+
+RUN dpkg --add-architecture arm64 && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends cmake \
+        libx11-dev:arm64 libxext-dev:arm64 libxrandr-dev:arm64 \
+        libxcursor-dev:arm64 libxi-dev:arm64 libxss-dev:arm64 \
+        libxxf86vm-dev:arm64 libwayland-dev:arm64 \
+        libasound2-dev:arm64 libpulse-dev:arm64 \
+        libudev-dev:arm64 libdbus-1-dev:arm64 \
+        libgl-dev:arm64 libgles-dev:arm64 libegl-dev:arm64 \
+        libxkbcommon-dev:arm64 && \
+    # Symlink ARM64 runtime libs into QEMU sysroot for the emulated dynamic linker
+    ln -sf /usr/lib/aarch64-linux-gnu/lib*.so* /usr/aarch64-linux-gnu/lib/ && \
+    ln -sf /usr/lib/aarch64-linux-gnu/pkgconfig /usr/aarch64-linux-gnu/lib/pkgconfig && \
+    # Symlink headers into cross sysroot (CMake restricts include search to CROSS_SYSROOT)
+    for d in X11 GL EGL GLES GLES2 GLES3 KHR wayland-protocols; do \
+        [ -d "/usr/include/$d" ] && ln -sfn "/usr/include/$d" "/usr/aarch64-linux-gnu/include/$d" || true; \
+    done && \
+    for f in /usr/include/wayland*.h /usr/include/xkbcommon /usr/include/dbus-1.0; do \
+        [ -e "$f" ] && ln -sfn "$f" /usr/aarch64-linux-gnu/include/ || true; \
+    done && \
+    rm -rf /var/lib/apt/lists/*

@@ -28,6 +28,7 @@ Every battle is different: terrain, faction pairings, army composition, and comm
 
 - [Rust](https://rustup.rs/) (latest stable)
 - [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
+- [cmake](https://cmake.org/) (required by the SDL2 native build)
 - Any modern browser (Chrome, Firefox, Safari, Edge)
 
 ### Build and Run
