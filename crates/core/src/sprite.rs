@@ -20,6 +20,8 @@ pub struct AnimationState {
     pub frame_timer: f64,
     pub frame_duration: f64,
     pub frame_count: u32,
+    pub looping: bool,
+    pub finished: bool,
 }
 
 impl AnimationState {
@@ -29,14 +31,36 @@ impl AnimationState {
             frame_timer: 0.0,
             frame_duration: 1.0 / fps,
             frame_count,
+            looping: true,
+            finished: false,
+        }
+    }
+
+    pub fn new_oneshot(frame_count: u32, fps: f64) -> Self {
+        Self {
+            looping: false,
+            finished: false,
+            ..Self::new(frame_count, fps)
         }
     }
 
     pub fn update(&mut self, dt: f64) {
+        if self.finished {
+            return;
+        }
         self.frame_timer += dt;
         while self.frame_timer >= self.frame_duration {
             self.frame_timer -= self.frame_duration;
-            self.current_frame = (self.current_frame + 1) % self.frame_count;
+            if self.looping {
+                self.current_frame = (self.current_frame + 1) % self.frame_count;
+            } else {
+                self.current_frame += 1;
+                if self.current_frame >= self.frame_count {
+                    self.current_frame = self.frame_count - 1;
+                    self.finished = true;
+                    return;
+                }
+            }
         }
     }
 }

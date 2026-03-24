@@ -30,6 +30,7 @@ fn main() {
         .window("The Battlefield", WINDOW_W, WINDOW_H)
         .position_centered()
         .resizable()
+        .allow_highdpi()
         .build()
         .expect("Window creation failed");
 
@@ -49,8 +50,18 @@ fn main() {
     let mut assets = renderer::Assets::load(&texture_creator);
     log::info!("Assets loaded");
 
+    // Compute DPI scale factor (HiDPI: output pixels > logical window size)
+    let (output_w, output_h) = canvas.output_size().unwrap_or((WINDOW_W, WINDOW_H));
+    let (logical_w, _logical_h) = canvas.window().size();
+    let mut dpi_scale = if logical_w > 0 {
+        output_w as f64 / logical_w as f64
+    } else {
+        1.0
+    };
+    log::info!("DPI scale: {dpi_scale} (output {output_w}x{output_h}, logical {logical_w}x{_logical_h})");
+
     // Initialize game
-    let (w, h) = canvas.output_size().unwrap_or((WINDOW_W, WINDOW_H));
+    let (w, h) = (output_w, output_h);
     let mut game = Game::new(w as f32, h as f32);
     let mut seed = generate_seed();
     game.setup_demo_battle_with_seed(seed);
@@ -113,11 +124,15 @@ fn main() {
             input_state.handle_event(&event);
         }
 
-        // Handle window resize
+        // Handle window resize and DPI changes
         let (cur_w, cur_h) = canvas.output_size().unwrap_or((WINDOW_W, WINDOW_H));
         if cur_w as f32 != game.camera.viewport_w || cur_h as f32 != game.camera.viewport_h {
             game.camera.resize(cur_w as f32, cur_h as f32);
             game.camera.zoom = game.camera.ideal_zoom();
+            let (lw, _lh) = canvas.window().size();
+            if lw > 0 {
+                dpi_scale = cur_w as f64 / lw as f64;
+            }
         }
 
         // Screen transition logic
@@ -270,6 +285,7 @@ fn main() {
             input_state.mouse_y,
             input_state.focused_button,
             input_state.gamepad_connected,
+            dpi_scale,
         );
 
         // Handle mouse click on overlay buttons

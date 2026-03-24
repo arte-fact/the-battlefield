@@ -106,32 +106,7 @@ pub fn main_menu_layout() -> ScreenLayout {
             style: ButtonStyle::Blue,
             action: ButtonAction::Play,
         }],
-        hints: vec![
-            TextElement {
-                text: "WASD move \u{00B7} SPACE attack \u{00B7} H G R F orders".into(),
-                offset_x: 0.0,
-                offset_y: 96.0,
-                size: 13.0,
-                r: 200,
-                g: 200,
-                b: 200,
-                a: 200,
-                bold: false,
-                shadow: false,
-            },
-            TextElement {
-                text: "Enter or Space to start".into(),
-                offset_x: 0.0,
-                offset_y: 116.0,
-                size: 13.0,
-                r: 200,
-                g: 200,
-                b: 200,
-                a: 200,
-                bold: false,
-                shadow: false,
-            },
-        ],
+        hints: vec![],
     }
 }
 
@@ -180,18 +155,7 @@ pub fn death_layout() -> ScreenLayout {
                 action: ButtonAction::NewGame,
             },
         ],
-        hints: vec![TextElement {
-            text: "Enter = Retry \u{00B7} Space = New Game".into(),
-            offset_x: 0.0,
-            offset_y: 86.0,
-            size: 12.0,
-            r: 200,
-            g: 200,
-            b: 200,
-            a: 180,
-            bold: false,
-            shadow: false,
-        }],
+        hints: vec![],
     }
 }
 
@@ -269,17 +233,6 @@ pub fn result_layout(is_victory: bool) -> ScreenLayout {
                 action: ButtonAction::NewGame,
             },
         ],
-        hints: vec![TextElement {
-            text: format!("Enter = {retry_label} \u{00B7} Space = New Game"),
-            offset_x: 0.0,
-            offset_y: 100.0,
-            size: 12.0,
-            r: 200,
-            g: 200,
-            b: 200,
-            a: 180,
-            bold: false,
-            shadow: false,
-        }],
+        hints: vec![],
     }
 }

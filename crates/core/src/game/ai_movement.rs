@@ -110,6 +110,16 @@ impl Game {
     /// Falls back to A* if flow field is absent or cell is unreachable.
     pub(super) fn ai_move_via_flowfield(&mut self, ai_idx: usize, dt: f32) {
         let faction = self.units[ai_idx].faction;
+        let ux = self.units[ai_idx].x;
+        let uy = self.units[ai_idx].y;
+
+        // If already inside the target capture zone, stop — no need to crowd the center
+        if let Some(zone) = self.zone_manager.best_target_zone(faction) {
+            if zone.contains_world(ux, uy) {
+                return;
+            }
+        }
+
         let flow_state = match faction {
             Faction::Blue => &self.blue_flow,
             _ => &self.red_flow,

@@ -522,7 +522,7 @@ pub(super) fn draw_overlays(
         // Aim direction indicator (wedge showing attack cone)
         let aim = game.player_aim_dir as f64;
         let half = ATTACK_CONE_HALF_ANGLE as f64;
-        let radius = 40.0_f64;
+        let radius = battlefield_core::grid::TILE_SIZE as f64;
         let px = player.x as f64;
         let py = player.y as f64;
 
@@ -645,7 +645,7 @@ pub(super) fn draw_authority_bar(
     let rank = game.authority_rank_name();
     let followers = game.follower_count();
     let max_followers = game.authority_max_followers();
-    let label = format!("{rank} — {followers}/{max_followers}");
+    let label = format!("{rank}  {followers} of {max_followers}");
 
     let font_size = 10.0 * dpr;
     r.set_font(&format!("bold {font_size}px sans-serif"));

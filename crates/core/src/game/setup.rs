@@ -166,6 +166,14 @@ impl Game {
         // Create capture zones from BSP layout
         self.zone_manager = ZoneManager::create_from_layout(&layout);
 
+        // Mark tower center tile as impassable.
+        // Tower sprite (2x4 tiles) has bottom-center at (center_gx+0.5, center_gy+1).
+        // Only block the single center tile to keep the navigation footprint tight
+        // (is_wide_passable expands this by 1 tile in each cardinal direction).
+        for zone in &self.zone_manager.zones {
+            self.grid.mark_building(zone.center_gx, zone.center_gy);
+        }
+
         // Place production buildings at both bases
         let mut buildings = building::base_buildings(Faction::Blue, blue_cx, blue_cy);
         buildings.extend(building::base_buildings(Faction::Red, red_cx, red_cy));

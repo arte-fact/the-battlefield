@@ -101,10 +101,10 @@ impl UnitKind {
     /// Base attack cooldown in seconds.
     pub fn base_attack_cooldown(self) -> f32 {
         match self {
-            UnitKind::Warrior => 0.60,
-            UnitKind::Lancer => 0.50,
-            UnitKind::Archer => 0.80,
-            UnitKind::Monk => 0.70,
+            UnitKind::Warrior => 0.40,
+            UnitKind::Lancer => 0.35,
+            UnitKind::Archer => 0.55,
+            UnitKind::Monk => 0.50,
         }
     }
 }
@@ -238,7 +238,11 @@ impl Unit {
                 UnitAnim::Run => (self.kind.run_frames(), 12.0),
                 UnitAnim::Attack => (self.kind.attack_frames(), 12.0),
             };
-            self.animation = AnimationState::new(frames, fps);
+            self.animation = if anim == UnitAnim::Attack {
+                AnimationState::new_oneshot(frames, fps)
+            } else {
+                AnimationState::new(frames, fps)
+            };
         }
     }
 
@@ -250,6 +254,10 @@ impl Unit {
     /// Tick attack cooldown by dt.
     pub fn tick_cooldowns(&mut self, dt: f32) {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
+        // Reset to Idle once the one-shot attack animation finishes
+        if self.current_anim == UnitAnim::Attack && self.animation.finished {
+            self.set_anim(UnitAnim::Idle);
+        }
         self.hit_flash = (self.hit_flash - dt).max(0.0);
         self.order_flash = (self.order_flash - dt).max(0.0);
     }

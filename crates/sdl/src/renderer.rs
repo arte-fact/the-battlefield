@@ -3,7 +3,7 @@
 use battlefield_core::autotile;
 use battlefield_core::building::BuildingKind;
 use battlefield_core::camera::Camera;
-use battlefield_core::game::{Game, ATTACK_CONE_HALF_ANGLE, ORDER_FLASH_DURATION};
+use battlefield_core::game::{Game, ORDER_FLASH_DURATION};
 use battlefield_core::grid::{self, Decoration, TileKind, TILE_SIZE};
 use battlefield_core::particle::ParticleKind;
 use battlefield_core::render_util;
@@ -1007,73 +1007,57 @@ fn draw_ribbon(
 /// Draw a horizontal 3-part ribbon from the SmallRibbons sprite sheet.
 /// `color_row` selects the row (Blue=1, Red=3, Yellow=5, Purple=7, Black=9).
 /// Uses exact pixel boundaries from render_util SMALL_RIBBON_* constants.
+/// Draw a SmallRibbon at native pixel size. Caps are drawn at their natural
+/// source width (61px). The center stretches to fill `center_w`. Total drawn
+/// width = 61 + center_w + 61. Height = native 54px (no vertical scaling).
+/// Draw a SmallRibbon centered at (cx, cy).
+/// `center_w` = desired width of the stretchable center piece (screen pixels).
+/// `scale` = uniform scale for caps and height (1.0 for HUD, cam.zoom for world-space).
 fn draw_small_ribbon(
     canvas: &mut Canvas<Window>,
     tex: &Texture,
     color_row: u32,
-    dx: f64,
-    dy: f64,
-    dw: f64,
-    dh: f64,
-    cap_w: f64,
+    cx: f64,
+    cy: f64,
+    center_w: f64,
+    scale: f64,
 ) {
-    let cap = cap_w.min(dw / 2.0);
-    let mid_w = (dw - cap * 2.0).max(0.0);
     let row_y = color_row as f64 * render_util::SMALL_RIBBON_CELL_H;
 
     let (lsx, lsy, lsw, lsh) = render_util::SMALL_RIBBON_LEFT;
     let (csx, csy, csw, csh) = render_util::SMALL_RIBBON_CENTER;
     let (rsx, rsy, rsw, rsh) = render_util::SMALL_RIBBON_RIGHT;
 
+    // Caps and height scale uniformly; center_w is already in screen pixels
+    let cap_lw = (lsw * scale).ceil() as u32;
+    let cap_rw = (rsw * scale).ceil() as u32;
+    let h = (lsh * scale).ceil() as u32;
+    let cw = center_w.ceil().max(0.0) as u32;
+
+    // Total width and position (centered on cx, cy)
+    let total_w = cap_lw + cw + cap_rw;
+    let dx = (cx - total_w as f64 / 2.0).floor() as i32;
+    let dy = (cy - h as f64 / 2.0).floor() as i32;
+
     // Left end
     let _ = canvas.copy(
         tex,
-        Rect::new(
-            lsx as i32,
-            (row_y + lsy) as i32,
-            lsw.ceil() as u32,
-            lsh.ceil() as u32,
-        ),
-        Rect::new(
-            dx.floor() as i32,
-            dy.floor() as i32,
-            cap.ceil() as u32,
-            dh.ceil() as u32,
-        ),
+        Rect::new(lsx as i32, (row_y + lsy) as i32, lsw.ceil() as u32, lsh.ceil() as u32),
+        Rect::new(dx, dy, cap_lw, h),
     );
-    // Center (stretch)
-    if mid_w > 0.0 {
+    // Center — stretched horizontally
+    if cw > 0 {
         let _ = canvas.copy(
             tex,
-            Rect::new(
-                csx as i32,
-                (row_y + csy) as i32,
-                csw.ceil() as u32,
-                csh.ceil() as u32,
-            ),
-            Rect::new(
-                (dx + cap).floor() as i32,
-                dy.floor() as i32,
-                mid_w.ceil() as u32,
-                dh.ceil() as u32,
-            ),
+            Rect::new(csx as i32, (row_y + csy) as i32, csw.ceil() as u32, csh.ceil() as u32),
+            Rect::new(dx + cap_lw as i32, dy, cw, h),
         );
     }
     // Right end
     let _ = canvas.copy(
         tex,
-        Rect::new(
-            rsx as i32,
-            (row_y + rsy) as i32,
-            rsw.ceil() as u32,
-            rsh.ceil() as u32,
-        ),
-        Rect::new(
-            (dx + cap + mid_w).floor() as i32,
-            dy.floor() as i32,
-            cap.ceil() as u32,
-            dh.ceil() as u32,
-        ),
+        Rect::new(rsx as i32, (row_y + rsy) as i32, rsw.ceil() as u32, rsh.ceil() as u32),
+        Rect::new(dx + cap_lw as i32 + cw as i32, dy, cap_rw, h),
     );
 }
 
@@ -1105,6 +1089,7 @@ pub fn render_frame(
     mouse_y: i32,
     focused_button: usize,
     gamepad_connected: bool,
+    dpi_scale: f64,
 ) -> Vec<ClickableButton> {
     let ts = TILE_SIZE * game.camera.zoom;
     let cam = &game.camera;
@@ -1131,7 +1116,7 @@ pub fn render_frame(
     );
 
     // 5. Zone overlays (in world space)
-    draw_zones(canvas, tc, assets, game, cam, ts);
+    draw_zones(canvas, tc, assets, game, cam, ts, dpi_scale);
 
     // 6. Bushes (ground level, behind units)
     draw_bushes(
@@ -1156,7 +1141,7 @@ pub fn render_frame(
 
     // 11. HP bars and order labels
     draw_hp_bars(canvas, game, cam);
-    draw_order_labels(canvas, tc, assets, game, cam);
+    draw_order_labels(canvas, tc, assets, game, cam, dpi_scale);
 
     // 12. Fog of war
     draw_fog(
@@ -1164,10 +1149,10 @@ pub fn render_frame(
     );
 
     // 13. Screen-space HUD
-    draw_hud(canvas, tc, game, assets);
+    draw_hud(canvas, tc, game, assets, dpi_scale);
 
     // 14. Victory progress bar
-    draw_victory_progress(canvas, tc, assets, game);
+    draw_victory_progress(canvas, tc, assets, game, dpi_scale);
 
     // 15. Minimap
     draw_minimap(canvas, game, assets);
@@ -1182,6 +1167,7 @@ pub fn render_frame(
         mouse_y,
         focused_button,
         gamepad_connected,
+        dpi_scale,
     );
 
     canvas.present();
@@ -1569,10 +1555,11 @@ fn draw_rocks(
 fn draw_zones(
     canvas: &mut Canvas<Window>,
     tc: &TextureCreator<WindowContext>,
-    assets: &Assets,
+    assets: &mut Assets,
     game: &Game,
     cam: &Camera,
     ts: f32,
+    dpi_scale: f64,
 ) {
     canvas.set_blend_mode(BlendMode::Blend);
     for zone in &game.zone_manager.zones {
@@ -1583,27 +1570,46 @@ fn draw_zones(
         canvas.set_draw_color(Color::RGBA(fr, fg, fb, fa));
         fill_circle(canvas, sx, sy, radius);
 
+        // Inner glow ring
         let (br, bg, bb, ba) = render_util::zone_border_rgba(zone.state);
+        canvas.set_draw_color(Color::RGBA(br, bg, bb, ba / 3));
+        stroke_circle(canvas, sx, sy, radius - 2);
+        // Outer border (draw twice for thicker line)
         canvas.set_draw_color(Color::RGBA(br, bg, bb, ba));
         stroke_circle(canvas, sx, sy, radius);
+        stroke_circle(canvas, sx, sy, radius + 1);
 
-        // Zone name label above progress bar (with Black ribbon, row 9)
-        let zone_font = 16.0 * cam.zoom;
-        let ribbon_h = 54.0 * cam.zoom as f64;
-        let name_y = sy - radius - (ribbon_h / 2.0) as i32 - 4;
+        // Zone name ribbon (colored by faction)
+        let zoom = cam.zoom as f64;
+        let zone_font = (24.0 * dpi_scale as f32) * cam.zoom;
+        let ribbon_h = 54.0 * zoom;
+
+        // Layout: ribbon top, bar below ribbon
+        let bar_w = 160.0 * zoom;
+        let bar_h = 46.0 * zoom;
+        let total_h = ribbon_h + 2.0 * zoom + bar_h;
+        let top_y = sy as f64 - radius as f64 - total_h - 2.0 * zoom;
+        let name_y = (top_y + ribbon_h / 2.0) as i32;
+        let bar_x = sx as f64 - bar_w / 2.0;
+        let bar_y = top_y + ribbon_h + 2.0 * zoom;
+
+        let ribbon_row = match zone.state {
+            ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => 1, // Blue
+            ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => 3,   // Red
+            _ => 9, // Black (neutral/contested)
+        };
 
         if let Some(ref tex) = assets.ui_small_ribbons {
             let (tw, _th) = assets.text.measure_text(zone.name, zone_font);
-            let rw = tw as f64 + 16.0 * cam.zoom as f64;
+            let center_w = tw as f64 + 4.0 * zoom;
             draw_small_ribbon(
                 canvas,
                 tex,
-                9, // Black row
-                sx as f64 - rw / 2.0,
-                name_y as f64 - ribbon_h / 2.0,
-                rw,
-                ribbon_h,
-                ribbon_h,
+                ribbon_row,
+                sx as f64,
+                name_y as f64,
+                center_w,
+                zoom,
             );
         }
 
@@ -1617,28 +1623,50 @@ fn draw_zones(
             Color::RGBA(255, 255, 255, 220),
         );
 
-        // Progress bar above zone (below name label)
-        let bar_w = radius;
-        let bar_h = 4_i32;
-        let bar_x = sx - bar_w / 2;
-        let bar_y = sy - radius - 8;
-        canvas.set_draw_color(Color::RGBA(0, 0, 0, 100));
-        let _ = canvas.fill_rect(Rect::new(bar_x, bar_y, bar_w as u32, bar_h as u32));
+        // Bar base frame
+        if let Some((ref tex, bw, bh)) = assets.ui_bar_base {
+            draw_bar_3slice(
+                canvas, tex, bw as f64, bh as f64, bar_x, bar_y, bar_w, bar_h, 24.0 * zoom,
+            );
+        } else {
+            canvas.set_draw_color(Color::RGBA(0, 0, 0, 100));
+            let _ = canvas.fill_rect(Rect::new(bar_x as i32, bar_y as i32, bar_w as u32, bar_h as u32));
+        }
 
+        // Fill on top (same insets as HP bar: 10/10/12/12)
         let progress = zone.progress as f64;
-        if progress > 0.01 {
-            canvas.set_draw_color(Color::RGBA(60, 120, 255, 200));
-            let fill_w = ((bar_w as f64) * 0.5 * progress) as u32;
-            let _ = canvas.fill_rect(Rect::new(bar_x + bar_w / 2, bar_y, fill_w, bar_h as u32));
-        } else if progress < -0.01 {
-            canvas.set_draw_color(Color::RGBA(255, 60, 60, 200));
-            let fill_w = ((bar_w as f64) * 0.5 * (-progress)) as u32;
-            let _ = canvas.fill_rect(Rect::new(
-                bar_x + bar_w / 2 - fill_w as i32,
-                bar_y,
-                fill_w,
-                bar_h as u32,
-            ));
+        let fill_inset_x = 10.0 * zoom;
+        let fill_inset_y = 12.0 * zoom;
+        let inner_w = bar_w - fill_inset_x * 2.0;
+        let fill_h = (bar_h - fill_inset_y * 2.0).max(1.0);
+        if progress.abs() > 0.01 {
+            let (fr, fg, fb) = if progress > 0.0 {
+                (60u8, 120u8, 255u8)
+            } else {
+                (255u8, 60u8, 60u8)
+            };
+            let fill_w = (inner_w * 0.5 * progress.abs()).max(0.0);
+            if fill_w > 0.0 {
+                let fill_x = if progress > 0.0 {
+                    bar_x + fill_inset_x + inner_w * 0.5
+                } else {
+                    bar_x + fill_inset_x + inner_w * 0.5 - fill_w
+                };
+                if let Some(ref mut fill_tex) = assets.ui_bar_fill {
+                    fill_tex.set_color_mod(fr, fg, fb);
+                    let _ = canvas.copy(
+                        fill_tex,
+                        Rect::new(0, 20, 64, 24),
+                        Rect::new(fill_x as i32, (bar_y + fill_inset_y) as i32, fill_w as u32, fill_h as u32),
+                    );
+                    fill_tex.set_color_mod(255, 255, 255);
+                } else {
+                    canvas.set_draw_color(Color::RGBA(fr, fg, fb, 200));
+                    let _ = canvas.fill_rect(Rect::new(
+                        fill_x as i32, (bar_y + fill_inset_y) as i32, fill_w as u32, fill_h as u32,
+                    ));
+                }
+            }
         }
     }
 }
@@ -1659,30 +1687,6 @@ fn draw_player_overlay(canvas: &mut Canvas<Window>, game: &Game, cam: &Camera) {
     let radius = (24.0 * cam.zoom) as i32;
     canvas.set_draw_color(Color::RGBA(255, 255, 51, 50));
     draw_filled_circle(canvas, px, py, radius);
-
-    // Aim direction wedge (approximated as a triangle)
-    let aim = game.player_aim_dir;
-    let half = ATTACK_CONE_HALF_ANGLE;
-    let wedge_radius = 40.0 * cam.zoom;
-
-    let x0 = px as f32;
-    let y0 = py as f32;
-    let x1 = x0 + wedge_radius * (aim - half).cos();
-    let y1 = y0 + wedge_radius * (aim - half).sin();
-    let x2 = x0 + wedge_radius * (aim + half).cos();
-    let y2 = y0 + wedge_radius * (aim + half).sin();
-
-    // Draw filled triangle approximation for aim cone
-    canvas.set_draw_color(Color::RGBA(255, 255, 100, 30));
-    draw_filled_triangle(
-        canvas, x0 as i32, y0 as i32, x1 as i32, y1 as i32, x2 as i32, y2 as i32,
-    );
-
-    // Border lines
-    canvas.set_draw_color(Color::RGBA(255, 255, 100, 90));
-    let _ = canvas.draw_line((px, py), (x1 as i32, y1 as i32));
-    let _ = canvas.draw_line((px, py), (x2 as i32, y2 as i32));
-    let _ = canvas.draw_line((x1 as i32, y1 as i32), (x2 as i32, y2 as i32));
 }
 
 /// Draw a filled circle using horizontal line segments.
@@ -1693,54 +1697,6 @@ fn draw_filled_circle(canvas: &mut Canvas<Window>, cx: i32, cy: i32, radius: i32
     }
 }
 
-/// Draw a filled triangle using scanline.
-fn draw_filled_triangle(
-    canvas: &mut Canvas<Window>,
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-    x2: i32,
-    y2: i32,
-) {
-    let mut verts = [(x0, y0), (x1, y1), (x2, y2)];
-    verts.sort_by_key(|v| v.1);
-    let (ax, ay) = verts[0];
-    let (bx, by) = verts[1];
-    let (cx, cy) = verts[2];
-
-    if ay == cy {
-        return;
-    }
-
-    for y in ay..=cy {
-        let min_x;
-        let max_x;
-
-        // Interpolate x along edges
-        let x_ac = ax + (cx - ax) * (y - ay) / (cy - ay);
-
-        if y <= by {
-            if by == ay {
-                min_x = ax.min(bx);
-                max_x = ax.max(bx);
-            } else {
-                let x_ab = ax + (bx - ax) * (y - ay) / (by - ay);
-                min_x = x_ac.min(x_ab);
-                max_x = x_ac.max(x_ab);
-            }
-        } else if cy == by {
-            min_x = bx.min(cx);
-            max_x = bx.max(cx);
-        } else {
-            let x_bc = bx + (cx - bx) * (y - by) / (cy - by);
-            min_x = x_ac.min(x_bc);
-            max_x = x_ac.max(x_bc);
-        }
-
-        let _ = canvas.draw_line((min_x, y), (max_x, y));
-    }
-}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Y-sorted foreground
@@ -2156,6 +2112,7 @@ fn draw_order_labels(
     assets: &Assets,
     game: &Game,
     cam: &Camera,
+    dpi_scale: f64,
 ) {
     canvas.set_blend_mode(BlendMode::Blend);
     let zoom = game.camera.zoom;
@@ -2172,23 +2129,22 @@ fn draw_order_labels(
         let (sx, sy) = world_to_screen(unit.x, unit.y, cam);
         let label_y = sy - (TILE_SIZE * zoom) as i32;
 
-        let font_size = 20.0 * zoom;
+        let font_size = (24.0 * dpi_scale as f32) * zoom;
         let ribbon_h = 54.0 * zoom as f64;
         let label_cy = label_y - (ribbon_h / 2.0) as i32;
 
         // Yellow ribbon (row 5) behind label, scaled with zoom
         if let Some(ref tex) = assets.ui_small_ribbons {
             let (tw, _th) = assets.text.measure_text(label, font_size);
-            let rw = tw as f64 + 20.0 * zoom as f64;
+            let center_w = tw as f64 + 4.0 * zoom as f64;
             draw_small_ribbon(
                 canvas,
                 tex,
                 5, // Yellow row
-                sx as f64 - rw / 2.0,
-                label_cy as f64 - ribbon_h / 2.0,
-                rw,
-                ribbon_h,
-                ribbon_h,
+                sx as f64,
+                label_cy as f64,
+                center_w,
+                zoom as f64,
             );
         }
 
@@ -2254,6 +2210,7 @@ fn draw_hud(
     tc: &TextureCreator<WindowContext>,
     game: &Game,
     assets: &mut Assets,
+    dpi_scale: f64,
 ) {
     let (w, _h) = canvas.output_size().unwrap_or((960, 640));
 
@@ -2388,23 +2345,22 @@ fn draw_hud(
         let rank = game.authority_rank_name();
         let followers = game.follower_count();
         let max_followers = game.authority_max_followers();
-        let label = format!("{rank} — {followers}/{max_followers}");
-        let rank_font = 20.0_f32;
+        let label = format!("{rank}  {followers} of {max_followers}");
+        let rank_font = 32.0_f32 * dpi_scale as f32;
         let (tw, _th) = assets.text.measure_text(&label, rank_font);
         let ribbon_h = 54.0;
         let rank_cx = (auth_x + auth_w / 2.0) as i32;
         let rank_ry = auth_y + auth_h + 4.0;
-        let rank_rw = tw as f64 + 24.0;
+        let rank_rw = tw as f64 + 8.0;
         if let Some(ref tex) = assets.ui_small_ribbons {
             draw_small_ribbon(
                 canvas,
                 tex,
                 1, // Blue row
-                rank_cx as f64 - rank_rw / 2.0,
-                rank_ry,
+                rank_cx as f64,
+                rank_ry + ribbon_h / 2.0,
                 rank_rw,
-                ribbon_h,
-                ribbon_h,
+                1.0,
             );
         }
         assets.text.draw_text_centered(
@@ -2426,7 +2382,6 @@ fn draw_hud(
         let total_w = zone_count * pip_size + (zone_count - 1) * gap;
         let start_x = (w / 2 - total_w / 2) as i32;
         let ribbon_h = 54.0; // native ribbon height
-        let pip_y_ribbon = 0.0_f64; // ribbon starts at top
         let pip_y = ((ribbon_h - pip_size as f64) / 2.0) as i32; // center pips vertically
 
         // SmallRibbon background (Black, row 9) behind all pips
@@ -2438,11 +2393,10 @@ fn draw_hud(
                 canvas,
                 tex,
                 9,
-                pip_bg_x,
-                pip_y_ribbon,
+                pip_bg_x + pip_bg_w / 2.0,
+                ribbon_h / 2.0,
                 pip_bg_w,
-                ribbon_h,
-                ribbon_h,
+                1.0,
             );
         } else {
             canvas.set_blend_mode(BlendMode::Blend);
@@ -2487,6 +2441,7 @@ fn draw_victory_progress(
     tc: &TextureCreator<WindowContext>,
     assets: &mut Assets,
     game: &Game,
+    dpi_scale: f64,
 ) {
     let progress = game.zone_manager.victory_progress();
     if progress < f32::EPSILON || game.winner.is_some() {
@@ -2568,27 +2523,26 @@ fn draw_victory_progress(
         "Red"
     };
     let msg = format!(
-        "{} holds all zones — Victory in {}s",
+        "{} holds all zones. Victory in {}s",
         faction_name, remaining
     );
-    let victory_font = 18.0_f32;
+    let victory_font = 24.0_f32 * dpi_scale as f32;
     let ribbon_h = 54.0;
     let victory_cy = (bar_y - ribbon_h / 2.0 - 2.0) as i32;
 
     // Faction-colored SmallRibbon behind victory text
     if let Some(ref tex) = assets.ui_small_ribbons {
         let (tw, _th) = assets.text.measure_text(&msg, victory_font);
-        let rw = tw as f64 + 24.0;
+        let center_w = tw as f64 + 8.0;
         let color_row = render_util::small_ribbon_row(faction);
         draw_small_ribbon(
             canvas,
             tex,
             color_row,
-            cx - rw / 2.0,
-            victory_cy as f64 - ribbon_h / 2.0,
-            rw,
-            ribbon_h,
-            ribbon_h,
+            cx,
+            victory_cy as f64,
+            center_w,
+            1.0,
         );
     }
 
@@ -2755,6 +2709,7 @@ fn draw_screen_overlay(
     mouse_y: i32,
     focused_button: usize,
     gamepad_connected: bool,
+    dpi_scale: f64,
 ) -> Vec<ClickableButton> {
     let (w, h) = canvas.output_size().unwrap_or((960, 640));
     canvas.set_blend_mode(BlendMode::Blend);
@@ -2778,6 +2733,7 @@ fn draw_screen_overlay(
         mouse_y,
         focused_button,
         gamepad_connected,
+        dpi_scale,
     )
 }
 
@@ -2794,6 +2750,7 @@ fn draw_layout_overlay(
     mouse_y: i32,
     focused_button: usize,
     gamepad_connected: bool,
+    dpi_scale: f64,
 ) -> Vec<ClickableButton> {
     let cx = w as f64 / 2.0;
     let cy = h as f64 / 2.0;
@@ -2846,7 +2803,7 @@ fn draw_layout_overlay(
             &title.text,
             tx,
             ty,
-            title.size as f32,
+            (title.size * dpi_scale) as f32,
             Color::RGBA(title.r, title.g, title.b, title.a),
         );
     }
@@ -2861,7 +2818,7 @@ fn draw_layout_overlay(
             &sub.text,
             sx,
             sy,
-            sub.size as f32,
+            (sub.size * dpi_scale) as f32,
             Color::RGBA(sub.r, sub.g, sub.b, sub.a),
         );
     }
@@ -2917,22 +2874,10 @@ fn draw_layout_overlay(
             btn.label,
             bx as i32,
             by as i32,
-            20.0,
+            24.0 * dpi_scale as f32,
             Color::RGB(255, 255, 255),
         );
 
-        // Gamepad hint label (small text below button label)
-        if gamepad_connected && is_focused {
-            assets.text.draw_text_centered(
-                canvas,
-                tc,
-                "(A)",
-                bx as i32,
-                (by + btn.h / 2.0 - 6.0) as i32,
-                12.0,
-                Color::RGBA(255, 255, 255, 180),
-            );
-        }
 
         clickable_buttons.push(ClickableButton {
             x: btn_x,
@@ -2953,7 +2898,7 @@ fn draw_layout_overlay(
             &hint.text,
             hx,
             hy,
-            hint.size as f32,
+            (hint.size.max(24.0) * dpi_scale) as f32,
             Color::RGBA(hint.r, hint.g, hint.b, hint.a),
         );
     }

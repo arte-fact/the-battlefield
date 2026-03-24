@@ -1,7 +1,7 @@
 use super::*;
 
-/// Half-angle of the player's attack cone (60° = PI/3 radians).
-pub const ATTACK_CONE_HALF_ANGLE: f32 = std::f32::consts::FRAC_PI_3;
+/// Half-angle of the player's attack cone (90° = PI/2 radians, 180° total arc).
+pub const ATTACK_CONE_HALF_ANGLE: f32 = std::f32::consts::FRAC_PI_2;
 
 impl Game {
     pub fn player_unit(&self) -> Option<&Unit> {
@@ -38,7 +38,7 @@ impl Game {
         let attack_range = if self.units[player_idx].stats.range > 1 {
             self.units[player_idx].stats.range as f32 * TILE_SIZE
         } else {
-            MELEE_RANGE
+            TILE_SIZE // 1 tile melee reach for player
         };
 
         let targets = self.enemies_in_cone(
@@ -51,10 +51,10 @@ impl Game {
         );
 
         if targets.is_empty() {
-            // Whiff: play attack anim with half cooldown
+            // Whiff: play attack anim with full cooldown (same rate as hits)
             self.units[player_idx].set_anim(UnitAnim::Attack);
             self.units[player_idx].attack_cooldown =
-                self.units[player_idx].kind.base_attack_cooldown() * 0.5;
+                self.units[player_idx].kind.base_attack_cooldown();
             false
         } else {
             for enemy_id in targets {
