@@ -206,7 +206,9 @@ impl TurnAnimator {
                     let duration = *duration;
 
                     if let Some(unit) = units.iter_mut().find(|u| u.id == attacker_id) {
-                        unit.set_anim(UnitAnim::Attack);
+                        if !unit.current_anim.is_attack() {
+                            unit.set_anim(UnitAnim::Attack);
+                        }
                     }
 
                     if !*particle_spawned && anim.elapsed >= duration * 0.6 {
@@ -252,7 +254,9 @@ impl TurnAnimator {
                     let duration = *duration;
 
                     if let Some(unit) = units.iter_mut().find(|u| u.id == attacker_id) {
-                        unit.set_anim(UnitAnim::Attack);
+                        if !unit.current_anim.is_attack() {
+                            unit.set_anim(UnitAnim::Attack);
+                        }
                     }
 
                     // Projectile is now spawned directly by execute_attack() with
@@ -288,7 +292,9 @@ impl TurnAnimator {
                     let duration = *duration;
 
                     if let Some(unit) = units.iter_mut().find(|u| u.id == healer_id) {
-                        unit.set_anim(UnitAnim::Attack);
+                        if !unit.current_anim.is_attack() {
+                            unit.set_anim(UnitAnim::Attack);
+                        }
                     }
 
                     let done = anim.elapsed >= duration;

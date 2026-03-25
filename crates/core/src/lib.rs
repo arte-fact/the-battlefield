@@ -10,6 +10,7 @@ pub mod mapgen;
 pub mod particle;
 pub mod player_input;
 pub mod render_util;
+pub mod sheep;
 pub mod sprite;
 pub mod ui;
 pub mod unit;

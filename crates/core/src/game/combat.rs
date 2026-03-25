@@ -53,7 +53,8 @@ impl Game {
 
             // Start cooldown + attack anim on attacker
             self.units[attacker_idx].start_attack_cooldown();
-            self.units[attacker_idx].set_anim(UnitAnim::Attack);
+            let anim = self.units[attacker_idx].next_attack_anim();
+            self.units[attacker_idx].set_anim(anim);
 
             // Spawn ballistic projectile — damage applied on landing
             self.projectiles
@@ -170,20 +171,34 @@ impl Game {
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap_or(f32::MAX)
     }
-    /// Tick building and zone tower combat: find nearest enemy, fire projectiles.
+    /// Tick building combat: find nearest enemy, fire projectiles.
+    /// Zone-linked buildings derive their faction from zone capture progress.
     pub(super) fn tick_building_combat(&mut self, dt: f32) {
-        // Base buildings (Castle, DefenseTower)
         for i in 0..self.buildings.len() {
             if !self.buildings[i].kind.is_combat() {
                 continue;
             }
+
+            // Zone-linked buildings: derive faction from zone progress
+            let faction = if let Some(zid) = self.buildings[i].zone_id {
+                let progress = self.zone_manager.zones[zid as usize].progress;
+                if progress > 0.01 {
+                    Faction::Blue
+                } else if progress < -0.01 {
+                    Faction::Red
+                } else {
+                    continue; // neutral — no tower defense
+                }
+            } else {
+                self.buildings[i].faction
+            };
+
             self.buildings[i].attack_cooldown -= dt;
             if self.buildings[i].attack_cooldown > 0.0 {
                 continue;
             }
 
             let bx = grid::grid_to_world(self.buildings[i].grid_x, self.buildings[i].grid_y);
-            let faction = self.buildings[i].faction;
             let range = self.buildings[i].kind.attack_range();
             let damage = self.buildings[i].kind.attack_damage();
 
@@ -191,35 +206,6 @@ impl Game {
                 self.buildings[i].attack_cooldown = self.buildings[i].kind.base_cooldown();
                 self.projectiles
                     .push(Projectile::new(bx.0, bx.1, tx, ty, damage, faction));
-            }
-        }
-
-        // Zone towers defend based on progress (who "owns" the zone).
-        // Fires as long as progress is non-neutral, even during capture or contest.
-        let tower_range = 7.0 * TILE_SIZE;
-        let tower_damage = 2;
-        let tower_cooldown = 0.55 / 2.0; // same as DefenseTower
-        for i in 0..self.zone_manager.zones.len() {
-            let progress = self.zone_manager.zones[i].progress;
-            let faction = if progress > 0.01 {
-                Faction::Blue
-            } else if progress < -0.01 {
-                Faction::Red
-            } else {
-                continue; // neutral — no tower defense
-            };
-            self.zone_manager.zones[i].tower_cooldown -= dt;
-            if self.zone_manager.zones[i].tower_cooldown > 0.0 {
-                continue;
-            }
-
-            let wx = self.zone_manager.zones[i].center_wx;
-            let wy = self.zone_manager.zones[i].center_wy;
-
-            if let Some((tx, ty)) = self.find_nearest_enemy_from(wx, wy, faction, tower_range) {
-                self.zone_manager.zones[i].tower_cooldown = tower_cooldown;
-                self.projectiles
-                    .push(Projectile::new(wx, wy, tx, ty, tower_damage, faction));
             }
         }
     }

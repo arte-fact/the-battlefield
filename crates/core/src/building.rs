@@ -25,58 +25,34 @@ impl BuildingKind {
     }
 
     /// Grid footprint offsets (dx, dy) relative to the building's anchor tile.
+    /// Sprite is drawn bottom-center at (grid_x + 0.5, grid_y + 1) in tile coords.
+    /// Footprint covers the visible building walls, not transparent padding or roof.
     pub fn footprint_offsets(self) -> &'static [(i32, i32)] {
         match self {
             BuildingKind::Barracks | BuildingKind::Archery => {
-                &[(-1, -1), (0, -1), (1, -1), (-1, 0), (0, 0), (1, 0)]
+                // 192x256 sprite = 3×4 tiles; base walls in middle 2 rows
+                &[(-1, -1), (0, -1), (1, -1)]
             }
-            BuildingKind::Monastery => &[
-                (-1, -2),
-                (0, -2),
-                (1, -2),
-                (-1, -1),
-                (0, -1),
-                (1, -1),
-                (-1, 0),
-                (0, 0),
-                (1, 0),
-            ],
-            // Castle: 320x256 = 5 wide × 4 tall, bottom-center anchored
+            BuildingKind::Monastery => {
+                // 192x320 sprite = 3×5 tiles; walls span 3 rows
+                &[
+                    (-1, -1),
+                    (0, -1),
+                    (1, -1),
+                ]
+            }
+            // Castle: 320x256 sprite; ground-level walls = 5×2
             BuildingKind::Castle => &[
-                (-2, -3),
-                (-1, -3),
-                (0, -3),
-                (1, -3),
-                (2, -3),
-                (-2, -2),
-                (-1, -2),
-                (0, -2),
-                (1, -2),
-                (2, -2),
                 (-2, -1),
                 (-1, -1),
                 (0, -1),
                 (1, -1),
                 (2, -1),
-                (-2, 0),
-                (-1, 0),
-                (0, 0),
-                (1, 0),
-                (2, 0),
             ],
-            // DefenseTower: 128x256 = 2 wide × 4 tall, bottom-center anchored
-            BuildingKind::DefenseTower => &[
-                (-1, -3),
-                (0, -3),
-                (-1, -2),
-                (0, -2),
-                (-1, -1),
-                (0, -1),
-                (-1, 0),
-                (0, 0),
-            ],
-            // House: 128x192 = 2 wide × 3 tall, bottom-center anchored
-            BuildingKind::House => &[(-1, -2), (0, -2), (-1, -1), (0, -1), (-1, 0), (0, 0)],
+            // DefenseTower: 128x256 sprite; circular base = 2×2
+            BuildingKind::DefenseTower => &[(0, -1)],
+            // House: 128x192 sprite; walls = 2×2
+            BuildingKind::House => &[(0, -1)],
         }
     }
 
@@ -125,7 +101,7 @@ impl BuildingKind {
     }
 }
 
-/// A building placed at a faction base.
+/// A building placed on the battlefield (at a faction base, or at a capture zone).
 #[derive(Clone, Debug)]
 pub struct BaseBuilding {
     pub kind: BuildingKind,
@@ -134,6 +110,8 @@ pub struct BaseBuilding {
     pub grid_y: u32,
     /// Current attack cooldown timer (only used by combat buildings).
     pub attack_cooldown: f32,
+    /// If set, this building is linked to a capture zone and changes faction dynamically.
+    pub zone_id: Option<u8>,
 }
 
 /// Which building produces a given unit type.
@@ -157,6 +135,7 @@ pub fn base_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBuilding> {
                 grid_x: cx.saturating_sub(3),
                 grid_y: cy.saturating_sub(4),
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
             BaseBuilding {
                 kind: BuildingKind::Archery,
@@ -164,6 +143,7 @@ pub fn base_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBuilding> {
                 grid_x: cx + 3,
                 grid_y: cy.saturating_sub(4),
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
             BaseBuilding {
                 kind: BuildingKind::Monastery,
@@ -171,6 +151,7 @@ pub fn base_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBuilding> {
                 grid_x: cx,
                 grid_y: cy.saturating_sub(6),
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
         ],
         _ => vec![
@@ -180,6 +161,7 @@ pub fn base_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBuilding> {
                 grid_x: cx + 3,
                 grid_y: cy + 4,
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
             BaseBuilding {
                 kind: BuildingKind::Archery,
@@ -187,6 +169,7 @@ pub fn base_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBuilding> {
                 grid_x: cx.saturating_sub(3),
                 grid_y: cy + 4,
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
             BaseBuilding {
                 kind: BuildingKind::Monastery,
@@ -194,6 +177,7 @@ pub fn base_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBuilding> {
                 grid_x: cx,
                 grid_y: cy + 6,
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
         ],
     }
@@ -210,6 +194,7 @@ pub fn base_defense_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBui
                 grid_x: cx,
                 grid_y: cy + 8,
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
             // Defense towers flanking the spawn corridor (below base)
             BaseBuilding {
@@ -218,6 +203,7 @@ pub fn base_defense_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBui
                 grid_x: cx.saturating_sub(5),
                 grid_y: cy + 2,
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
             BaseBuilding {
                 kind: BuildingKind::DefenseTower,
@@ -225,14 +211,16 @@ pub fn base_defense_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBui
                 grid_x: cx + 5,
                 grid_y: cy + 2,
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
-            // Decorative houses behind the castle
+            // Decorative houses
             BaseBuilding {
                 kind: BuildingKind::House,
                 faction,
                 grid_x: cx.saturating_sub(4),
                 grid_y: cy.saturating_sub(4),
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
             BaseBuilding {
                 kind: BuildingKind::House,
@@ -240,6 +228,39 @@ pub fn base_defense_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBui
                 grid_x: cx + 4,
                 grid_y: cy.saturating_sub(4),
                 attack_cooldown: 0.0,
+                zone_id: None,
+            },
+            BaseBuilding {
+                kind: BuildingKind::House,
+                faction,
+                grid_x: cx.saturating_sub(7),
+                grid_y: cy,
+                attack_cooldown: 0.0,
+                zone_id: None,
+            },
+            BaseBuilding {
+                kind: BuildingKind::House,
+                faction,
+                grid_x: cx + 7,
+                grid_y: cy,
+                attack_cooldown: 0.0,
+                zone_id: None,
+            },
+            BaseBuilding {
+                kind: BuildingKind::House,
+                faction,
+                grid_x: cx.saturating_sub(3),
+                grid_y: cy + 6,
+                attack_cooldown: 0.0,
+                zone_id: None,
+            },
+            BaseBuilding {
+                kind: BuildingKind::House,
+                faction,
+                grid_x: cx + 3,
+                grid_y: cy + 6,
+                attack_cooldown: 0.0,
+                zone_id: None,
             },
         ],
         _ => vec![
@@ -250,6 +271,7 @@ pub fn base_defense_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBui
                 grid_x: cx,
                 grid_y: cy.saturating_sub(8),
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
             // Defense towers flanking the spawn corridor (above base)
             BaseBuilding {
@@ -258,6 +280,7 @@ pub fn base_defense_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBui
                 grid_x: cx + 5,
                 grid_y: cy.saturating_sub(2),
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
             BaseBuilding {
                 kind: BuildingKind::DefenseTower,
@@ -265,14 +288,16 @@ pub fn base_defense_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBui
                 grid_x: cx.saturating_sub(5),
                 grid_y: cy.saturating_sub(2),
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
-            // Decorative houses behind the castle
+            // Decorative houses
             BaseBuilding {
                 kind: BuildingKind::House,
                 faction,
                 grid_x: cx + 4,
                 grid_y: cy + 4,
                 attack_cooldown: 0.0,
+                zone_id: None,
             },
             BaseBuilding {
                 kind: BuildingKind::House,
@@ -280,6 +305,39 @@ pub fn base_defense_buildings(faction: Faction, cx: u32, cy: u32) -> Vec<BaseBui
                 grid_x: cx.saturating_sub(4),
                 grid_y: cy + 4,
                 attack_cooldown: 0.0,
+                zone_id: None,
+            },
+            BaseBuilding {
+                kind: BuildingKind::House,
+                faction,
+                grid_x: cx.saturating_sub(7),
+                grid_y: cy,
+                attack_cooldown: 0.0,
+                zone_id: None,
+            },
+            BaseBuilding {
+                kind: BuildingKind::House,
+                faction,
+                grid_x: cx + 7,
+                grid_y: cy,
+                attack_cooldown: 0.0,
+                zone_id: None,
+            },
+            BaseBuilding {
+                kind: BuildingKind::House,
+                faction,
+                grid_x: cx.saturating_sub(3),
+                grid_y: cy.saturating_sub(6),
+                attack_cooldown: 0.0,
+                zone_id: None,
+            },
+            BaseBuilding {
+                kind: BuildingKind::House,
+                faction,
+                grid_x: cx + 3,
+                grid_y: cy.saturating_sub(6),
+                attack_cooldown: 0.0,
+                zone_id: None,
             },
         ],
     }
@@ -335,8 +393,8 @@ mod tests {
 
     #[test]
     fn defense_buildings_count() {
-        assert_eq!(base_defense_buildings(Faction::Blue, 50, 50).len(), 5);
-        assert_eq!(base_defense_buildings(Faction::Red, 100, 100).len(), 5);
+        assert_eq!(base_defense_buildings(Faction::Blue, 50, 50).len(), 9);
+        assert_eq!(base_defense_buildings(Faction::Red, 100, 100).len(), 9);
     }
 
     #[test]

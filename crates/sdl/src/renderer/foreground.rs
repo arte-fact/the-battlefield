@@ -4,6 +4,7 @@ use battlefield_core::camera::Camera;
 use battlefield_core::game::{Game, ORDER_FLASH_DURATION};
 use battlefield_core::grid::{Decoration, TileKind, TILE_SIZE};
 use battlefield_core::render_util;
+use battlefield_core::sheep::SHEEP_FRAME_SIZE;
 use battlefield_core::sprite::SpriteSheet;
 use battlefield_core::unit::{Facing, Faction, UnitAnim, UnitKind};
 use battlefield_core::zone::{ZoneState, VICTORY_HOLD_TIME};
@@ -216,16 +217,15 @@ pub(super) fn draw_foreground(
         }
     }
 
-    // Tower buildings at zone centers
-    for (i, zone) in game.zone_manager.zones.iter().enumerate() {
-        let foot_y = (zone.center_gy as f64 + 1.0) * ts_f64;
-        drawables.push((foot_y, Drawable::Tower(i as u8)));
-    }
-
     // Production buildings
     for (i, b) in game.buildings.iter().enumerate() {
-        let foot_y = (b.grid_y as f64 + 1.0) * ts_f64;
+        let foot_y = b.grid_y as f64 * ts_f64;
         drawables.push((foot_y, Drawable::BaseBuilding(i)));
+    }
+
+    // Sheep
+    for (i, s) in game.sheep.iter().enumerate() {
+        drawables.push((s.y as f64 + ts_f64 * 0.5, Drawable::Sheep(i)));
     }
 
     // Particles
@@ -248,14 +248,14 @@ pub(super) fn draw_foreground(
             Drawable::WaterRock(gx, gy) => {
                 draw_water_rock(canvas, assets, cam, ts, *gx, *gy, elapsed);
             }
-            Drawable::Tower(zone_idx) => {
-                draw_tower(canvas, game, assets, cam, ts, *zone_idx);
-            }
             Drawable::BaseBuilding(idx) => {
-                draw_base_building(canvas, game, assets, cam, ts, *idx);
+                draw_base_building(canvas, game, assets, cam, ts, *idx, player_pos);
             }
             Drawable::Particle(idx) => {
                 draw_particle(canvas, game, assets, cam, ts, *idx);
+            }
+            Drawable::Sheep(idx) => {
+                draw_sheep(canvas, game, assets, cam, ts, *idx);
             }
         }
     }
@@ -392,55 +392,6 @@ fn draw_water_rock(
     let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip_h, false);
 }
 
-fn draw_tower(
-    canvas: &mut Canvas<Window>,
-    game: &Game,
-    assets: &mut Assets,
-    cam: &Camera,
-    ts: f32,
-    zone_idx: u8,
-) {
-    if assets.tower_textures.is_empty() {
-        return;
-    }
-    let zone = &game.zone_manager.zones[zone_idx as usize];
-
-    let color_idx = match zone.state {
-        ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => 1,
-        ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => 2,
-        _ => 0,
-    };
-    if color_idx >= assets.tower_textures.len() {
-        return;
-    }
-
-    let tex = &mut assets.tower_textures[color_idx];
-    let draw_w = ts * 2.0;
-    let draw_h = ts * 4.0;
-    let wx = zone.center_gx as f32 * TILE_SIZE + TILE_SIZE * 0.5;
-    let wy = zone.center_gy as f32 * TILE_SIZE + TILE_SIZE;
-    let (scx, sby) = world_to_screen(wx, wy, cam);
-    let dst = Rect::new(
-        scx - (draw_w * 0.5) as i32,
-        sby - draw_h as i32,
-        draw_w as u32,
-        draw_h as u32,
-    );
-
-    let alpha = match zone.state {
-        ZoneState::Capturing(_) => {
-            ((zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0) * 255.0) as u8
-        }
-        _ => 255,
-    };
-    tex.set_alpha_mod(alpha);
-
-    let src = Rect::new(0, 0, 128, 256);
-    let _ = canvas.copy(tex, src, dst);
-
-    tex.set_alpha_mod(255);
-}
-
 fn draw_base_building(
     canvas: &mut Canvas<Window>,
     game: &Game,
@@ -448,22 +399,62 @@ fn draw_base_building(
     cam: &Camera,
     _ts: f32,
     idx: usize,
+    player_pos: Option<(f64, f64)>,
 ) {
     let building = &game.buildings[idx];
+    let (sw, sh) = building.kind.sprite_size();
+    let wx = building.grid_x as f32 * TILE_SIZE + TILE_SIZE * 0.5;
+    let wy = building.grid_y as f32 * TILE_SIZE + TILE_SIZE;
+    let (scx, sby) = world_to_screen(wx, wy, cam);
+    let draw_w = sw as f32 * cam.zoom;
+    let draw_h = sh as f32 * cam.zoom;
+    let dst = Rect::new(
+        scx - (draw_w * 0.5) as i32,
+        sby - draw_h as i32,
+        draw_w as u32,
+        draw_h as u32,
+    );
+
+    // Fade when player is behind the building (sprite covers the player)
+    let ts_f64 = TILE_SIZE as f64;
+    let bldg_cx = wx as f64;
+    let bldg_cy = wy as f64 - sh as f64 * 0.5;
+    let proximity_alpha = render_util::tree_alpha(bldg_cx, bldg_cy, player_pos, ts_f64);
+
+    // Zone-linked towers use tower_textures (neutral/blue/red) with alpha modulation
+    if let Some(zid) = building.zone_id {
+        if assets.tower_textures.is_empty() {
+            return;
+        }
+        let zone = &game.zone_manager.zones[zid as usize];
+        let color_idx = match zone.state {
+            ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => 1,
+            ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => 2,
+            _ => 0,
+        };
+        if color_idx >= assets.tower_textures.len() {
+            return;
+        }
+        let zone_alpha = match zone.state {
+            ZoneState::Capturing(_) => {
+                (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0)
+            }
+            _ => 1.0,
+        };
+        let alpha = (proximity_alpha * zone_alpha * 255.0) as u8;
+        let tex = &mut assets.tower_textures[color_idx];
+        tex.set_alpha_mod(alpha);
+        let _ = canvas.copy(tex, Rect::new(0, 0, sw, sh), dst);
+        tex.set_alpha_mod(255);
+        return;
+    }
+
     let key = (building.faction, building.kind);
-    if let Some((ref tex, sw, sh)) = assets.building_textures.get(&key) {
-        let draw_w = *sw as f32 * cam.zoom;
-        let draw_h = *sh as f32 * cam.zoom;
-        let wx = building.grid_x as f32 * TILE_SIZE + TILE_SIZE * 0.5;
-        let wy = building.grid_y as f32 * TILE_SIZE + TILE_SIZE;
-        let (scx, sby) = world_to_screen(wx, wy, cam);
-        let dst = Rect::new(
-            scx - (draw_w * 0.5) as i32,
-            sby - draw_h as i32,
-            draw_w as u32,
-            draw_h as u32,
-        );
+    if let Some((ref mut tex, _sw, _sh)) = assets.building_textures.get_mut(&key) {
+        let alpha = (proximity_alpha * 255.0) as u8;
+        tex.set_alpha_mod(alpha);
         let _ = canvas.copy(tex, None, dst);
+        tex.set_alpha_mod(255);
     }
 }
 
@@ -500,6 +491,41 @@ fn draw_particle(
         let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
         let _ = canvas.copy(tex, src, dst);
     }
+}
+
+fn draw_sheep(
+    canvas: &mut Canvas<Window>,
+    game: &Game,
+    assets: &mut Assets,
+    cam: &Camera,
+    ts: f32,
+    idx: usize,
+) {
+    let sheep = &game.sheep[idx];
+    let sprite_idx = sheep.sprite_index();
+    if sprite_idx >= assets.sheep_textures.len() {
+        return;
+    }
+    let (ref mut tex, _frame_count) = assets.sheep_textures[sprite_idx];
+    let sheet = SpriteSheet {
+        frame_width: SHEEP_FRAME_SIZE,
+        frame_height: SHEEP_FRAME_SIZE,
+        frame_count: sheep.anim_frame_count(),
+    };
+    let (sx, sy, sw, sh) = sheet.frame_src_rect(sheep.animation.current_frame);
+    let draw_size = ts * (SHEEP_FRAME_SIZE as f32 / TILE_SIZE);
+    let (screen_x, screen_y) = world_to_screen(sheep.x, sheep.y, cam);
+    let half = (draw_size / 2.0) as i32;
+
+    let dst = Rect::new(
+        screen_x - half,
+        screen_y - half,
+        draw_size as u32,
+        draw_size as u32,
+    );
+    let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
+    let flip = sheep.facing == Facing::Left;
+    let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
 }
 
 pub(super) fn draw_projectiles(

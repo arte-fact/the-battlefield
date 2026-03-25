@@ -128,7 +128,7 @@ impl Game {
             if !unit.alive {
                 continue;
             }
-            if unit.current_anim == UnitAnim::Attack {
+            if unit.current_anim.is_attack() {
                 if unit.attack_cooldown <= 0.0 {
                     unit.set_anim(UnitAnim::Idle);
                 }

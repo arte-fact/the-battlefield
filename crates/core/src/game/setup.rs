@@ -186,14 +186,6 @@ impl Game {
         // Create capture zones from BSP layout
         self.zone_manager = ZoneManager::create_from_layout(&layout);
 
-        // Mark tower center tile as impassable.
-        // Tower sprite (2x4 tiles) has bottom-center at (center_gx+0.5, center_gy+1).
-        // Only block the single center tile to keep the navigation footprint tight
-        // (is_wide_passable expands this by 1 tile in each cardinal direction).
-        for zone in &self.zone_manager.zones {
-            self.grid.mark_building(zone.center_gx, zone.center_gy);
-        }
-
         // Place production buildings at both bases
         let mut buildings = building::base_buildings(Faction::Blue, blue_cx, blue_cy);
         buildings.extend(building::base_buildings(Faction::Red, red_cx, red_cy));
@@ -208,6 +200,17 @@ impl Game {
             red_cx,
             red_cy,
         ));
+        // Place defense towers at capture zone centers
+        for zone in &self.zone_manager.zones {
+            buildings.push(building::BaseBuilding {
+                kind: building::BuildingKind::DefenseTower,
+                faction: Faction::Blue, // updated dynamically based on zone state
+                grid_x: zone.center_gx,
+                grid_y: zone.center_gy,
+                attack_cooldown: 0.0,
+                zone_id: Some(zone.id),
+            });
+        }
         for b in &buildings {
             for &(dx, dy) in b.kind.footprint_offsets() {
                 let fx = b.grid_x as i32 + dx;
@@ -218,6 +221,10 @@ impl Game {
             }
         }
         self.buildings = buildings;
+
+        // Spawn ambient sheep at each base
+        self.spawn_base_sheep(blue_cx, blue_cy, seed);
+        self.spawn_base_sheep(red_cx, red_cy, seed.wrapping_add(7919));
 
         // Spawn player at base center
         self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_cx, blue_cy, true);
@@ -246,6 +253,22 @@ impl Game {
         // Pre-compute caches
         self.compute_water_adjacency();
         self.compute_fov();
+    }
+
+    /// Spawn a small flock of sheep around a base center.
+    fn spawn_base_sheep(&mut self, cx: u32, cy: u32, base_seed: u32) {
+        // Offsets relative to base center for sheep positions
+        let offsets: &[(i32, i32)] = &[(-5, -2), (3, -1), (-2, 3), (6, 1)];
+        for (i, &(dx, dy)) in offsets.iter().enumerate() {
+            let gx = (cx as i32 + dx).max(0) as u32;
+            let gy = (cy as i32 + dy).max(0) as u32;
+            if !self.grid.is_passable(gx, gy) {
+                continue;
+            }
+            let (wx, wy) = grid::grid_to_world(gx, gy);
+            let seed = base_seed.wrapping_mul(31).wrapping_add(i as u32 * 1013);
+            self.sheep.push(Sheep::new(wx, wy, seed));
+        }
     }
 }
 

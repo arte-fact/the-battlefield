@@ -281,20 +281,20 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
     zone_centers.push(flank1);
     zone_centers.push(flank2);
 
-    // Clear 14x14 rect around each base center
+    // Clear 20x20 rect around each base center
     clear_rect(
         &mut grid,
-        blue_base.0.saturating_sub(7),
-        blue_base.1.saturating_sub(7),
-        14,
-        14,
+        blue_base.0.saturating_sub(10),
+        blue_base.1.saturating_sub(10),
+        20,
+        20,
     );
     clear_rect(
         &mut grid,
-        red_base.0.saturating_sub(7),
-        red_base.1.saturating_sub(7),
-        14,
-        14,
+        red_base.0.saturating_sub(10),
+        red_base.1.saturating_sub(10),
+        20,
+        20,
     );
 
     // Clear 6-tile radius around each zone center

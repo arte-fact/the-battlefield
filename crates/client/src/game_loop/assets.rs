@@ -69,6 +69,8 @@ pub(super) struct LoadedTextures {
     pub(super) ui_bar_fill: Option<TextureId>,
     /// UI ribbon sprite sheet (BigRibbons.png, 448x640, 3 cols x 5 rows of 149x128)
     pub(super) ui_big_ribbons: Option<TextureId>,
+    /// Sheep sprite sheets: Idle(6), Move(4), Grass(12) at 128x128
+    pub(super) sheep_textures: Vec<(TextureId, u32, u32)>,
 }
 
 impl LoadedTextures {
@@ -101,6 +103,7 @@ impl LoadedTextures {
             ui_bar_base: None,
             ui_bar_fill: None,
             ui_big_ribbons: None,
+            sheep_textures: Vec::new(),
         }
     }
 }
@@ -186,24 +189,30 @@ pub(super) async fn load_textures(
         (UnitAnim::Idle, "Idle"),
         (UnitAnim::Run, "Run"),
         (UnitAnim::Attack, "Attack"),
+        (UnitAnim::Attack2, "Attack2"),
     ];
 
     for &faction in &factions {
         for &(kind, kind_name) in &unit_kinds {
             for &(anim, _anim_name) in &anims {
-                let (filename, frame_count) = match (kind, anim) {
-                    (UnitKind::Warrior, UnitAnim::Idle) => ("Warrior_Idle.png", 8),
-                    (UnitKind::Warrior, UnitAnim::Run) => ("Warrior_Run.png", 6),
-                    (UnitKind::Warrior, UnitAnim::Attack) => ("Warrior_Attack1.png", 4),
-                    (UnitKind::Archer, UnitAnim::Idle) => ("Archer_Idle.png", 6),
-                    (UnitKind::Archer, UnitAnim::Run) => ("Archer_Run.png", 4),
-                    (UnitKind::Archer, UnitAnim::Attack) => ("Archer_Shoot.png", 8),
-                    (UnitKind::Lancer, UnitAnim::Idle) => ("Lancer_Idle.png", 12),
-                    (UnitKind::Lancer, UnitAnim::Run) => ("Lancer_Run.png", 6),
-                    (UnitKind::Lancer, UnitAnim::Attack) => ("Lancer_Right_Attack.png", 3),
-                    (UnitKind::Monk, UnitAnim::Idle) => ("Idle.png", 6),
-                    (UnitKind::Monk, UnitAnim::Run) => ("Run.png", 4),
-                    (UnitKind::Monk, UnitAnim::Attack) => ("Heal.png", 11),
+                let maybe = match (kind, anim) {
+                    (UnitKind::Warrior, UnitAnim::Idle) => Some(("Warrior_Idle.png", 8)),
+                    (UnitKind::Warrior, UnitAnim::Run) => Some(("Warrior_Run.png", 6)),
+                    (UnitKind::Warrior, UnitAnim::Attack) => Some(("Warrior_Attack1.png", 4)),
+                    (UnitKind::Warrior, UnitAnim::Attack2) => Some(("Warrior_Attack2.png", 4)),
+                    (UnitKind::Archer, UnitAnim::Idle) => Some(("Archer_Idle.png", 6)),
+                    (UnitKind::Archer, UnitAnim::Run) => Some(("Archer_Run.png", 4)),
+                    (UnitKind::Archer, UnitAnim::Attack) => Some(("Archer_Shoot.png", 8)),
+                    (UnitKind::Lancer, UnitAnim::Idle) => Some(("Lancer_Idle.png", 12)),
+                    (UnitKind::Lancer, UnitAnim::Run) => Some(("Lancer_Run.png", 6)),
+                    (UnitKind::Lancer, UnitAnim::Attack) => Some(("Lancer_Right_Attack.png", 3)),
+                    (UnitKind::Monk, UnitAnim::Idle) => Some(("Idle.png", 6)),
+                    (UnitKind::Monk, UnitAnim::Run) => Some(("Run.png", 4)),
+                    (UnitKind::Monk, UnitAnim::Attack) => Some(("Heal.png", 11)),
+                    (_, UnitAnim::Attack2) => None, // only Warrior has Attack2
+                };
+                let Some((filename, frame_count)) = maybe else {
+                    continue;
                 };
 
                 let frame_size = kind.frame_size();
@@ -386,6 +395,21 @@ pub(super) async fn load_textures(
     {
         let url = format!("{ui_base}/Ribbons/BigRibbons.png");
         loaded.borrow_mut().ui_big_ribbons = load_texture(state, &url, 149, 128, 15).await.ok();
+    }
+
+    // Sheep sprites (Idle=6, Move=4, Grass=12 frames at 128x128)
+    {
+        let sheep_specs: &[(&str, u32)] = &[
+            ("Sheep_Idle.png", 6),
+            ("Sheep_Move.png", 4),
+            ("Sheep_Grass.png", 12),
+        ];
+        for &(filename, frame_count) in sheep_specs {
+            let url = format!("{}/Terrain/Resources/Meat/Sheep/{}", ASSET_BASE, filename);
+            if let Ok(tex_id) = load_texture(state, &url, 128, 128, frame_count).await {
+                loaded.borrow_mut().sheep_textures.push((tex_id, 128, 128));
+            }
+        }
     }
 
     // Build gapless 9-slice atlases from the loaded UI images

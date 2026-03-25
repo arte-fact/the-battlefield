@@ -53,9 +53,9 @@ enum Drawable {
     Unit(usize),
     Tree(u32, u32),
     WaterRock(u32, u32),
-    Tower(u8),
     BaseBuilding(usize),
     Particle(usize),
+    Sheep(usize),
 }
 
 // ───────────────────────────────────────────────────────────────────────────

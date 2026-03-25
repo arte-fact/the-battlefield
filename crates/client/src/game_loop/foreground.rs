@@ -5,6 +5,7 @@ use battlefield_core::building::BuildingKind;
 use battlefield_core::game::Game;
 use battlefield_core::grid::{Decoration, TileKind, TILE_SIZE};
 use battlefield_core::render_util;
+use battlefield_core::sheep::SHEEP_FRAME_SIZE;
 use battlefield_core::sprite::SpriteSheet;
 use battlefield_core::unit::{Facing, Faction, UnitAnim, UnitKind};
 use battlefield_core::zone::ZoneState;
@@ -15,9 +16,9 @@ enum Drawable {
     Unit(usize),         // index into game.units
     Tree(u32, u32),      // (gx, gy)
     WaterRock(u32, u32), // (gx, gy)
-    Building(u8),        // zone index (tower)
     BaseBuilding(usize), // index into game.buildings
     Particle(usize),     // index into game.particles
+    Sheep(usize),        // index into game.sheep
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -76,16 +77,16 @@ pub(super) fn draw_foreground(
         }
     }
 
-    // Tower buildings at zone centers
-    for (i, zone) in game.zone_manager.zones.iter().enumerate() {
-        let foot_y = (zone.center_gy as f64 + 1.0) * ts;
-        drawables.push((foot_y, Drawable::Building(i as u8)));
+    // Buildings (base buildings + zone towers)
+
+    for (i, b) in game.buildings.iter().enumerate() {
+        let foot_y = b.grid_y as f64 * ts;
+        drawables.push((foot_y, Drawable::BaseBuilding(i)));
     }
 
-    // Production buildings at faction bases
-    for (i, b) in game.buildings.iter().enumerate() {
-        let foot_y = (b.grid_y as f64 + 1.0) * ts;
-        drawables.push((foot_y, Drawable::BaseBuilding(i)));
+    // Sheep
+    for (i, s) in game.sheep.iter().enumerate() {
+        drawables.push((s.y as f64 + ts * 0.5, Drawable::Sheep(i)));
     }
 
     // Particles
@@ -111,14 +112,14 @@ pub(super) fn draw_foreground(
             Drawable::WaterRock(gx, gy) => {
                 draw_water_rock(r, loaded, *gx, *gy, elapsed, ts)?;
             }
-            Drawable::Building(zone_idx) => {
-                draw_tower(r, game, loaded, *zone_idx, ts)?;
-            }
             Drawable::BaseBuilding(idx) => {
-                draw_base_building(r, game, loaded, *idx, ts)?;
+                draw_base_building(r, game, loaded, *idx, ts, player_pos)?;
             }
             Drawable::Particle(idx) => {
                 draw_particle(r, game, loaded, *idx)?;
+            }
+            Drawable::Sheep(idx) => {
+                draw_sheep(r, game, loaded, *idx)?;
             }
         }
     }
@@ -299,61 +300,57 @@ fn draw_water_rock(
     Ok(())
 }
 
-fn draw_tower(
-    r: &Canvas2dRenderer,
-    game: &Game,
-    loaded: &LoadedTextures,
-    zone_idx: u8,
-    ts: f64,
-) -> Result<(), JsValue> {
-    if loaded.tower_textures.is_empty() {
-        return Ok(());
-    }
-    let zone = &game.zone_manager.zones[zone_idx as usize];
-
-    // Select tower color based on zone state
-    let color_idx = match zone.state {
-        ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => 1,
-        ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => 2,
-        _ => 0, // Black (neutral / contested)
-    };
-
-    let tex_id = loaded.tower_textures[color_idx];
-    let draw_w = ts * 2.0;
-    let draw_h = ts * 4.0;
-    let dx = (zone.center_gx as f64) * ts + ts / 2.0 - draw_w / 2.0;
-    let dy = (zone.center_gy as f64) * ts + ts - draw_h;
-
-    // Pulse opacity during capturing to show in-progress
-    let alpha = match zone.state {
-        ZoneState::Capturing(_) => (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0),
-        _ => 1.0,
-    };
-
-    if (alpha - 1.0).abs() > 0.001 {
-        r.set_alpha(alpha);
-    }
-
-    r.draw_texture(tex_id, 0.0, 0.0, 128.0, 256.0, dx, dy, draw_w, draw_h)?;
-
-    if (alpha - 1.0).abs() > 0.001 {
-        r.set_alpha(1.0);
-    }
-
-    Ok(())
-}
-
 fn draw_base_building(
     r: &Canvas2dRenderer,
     game: &Game,
     loaded: &LoadedTextures,
     idx: usize,
     ts: f64,
+    player_pos: Option<(f64, f64)>,
 ) -> Result<(), JsValue> {
+    let b = &game.buildings[idx];
+    let (sprite_w, sprite_h) = b.kind.sprite_size();
+    let anchor_x = (b.grid_x as f64) * ts + ts / 2.0;
+    let anchor_y = (b.grid_y as f64) * ts + ts;
+
+    // Fade when player is behind the building
+    let bldg_cx = anchor_x;
+    let bldg_cy = anchor_y - sprite_h as f64 * 0.5;
+    let proximity_alpha = render_util::tree_alpha(bldg_cx, bldg_cy, player_pos, ts);
+
+    // Zone-linked towers use tower_textures (neutral/blue/red) with alpha modulation
+    if let Some(zid) = b.zone_id {
+        if loaded.tower_textures.is_empty() {
+            return Ok(());
+        }
+        let zone = &game.zone_manager.zones[zid as usize];
+        let color_idx = match zone.state {
+            ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => 1,
+            ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => 2,
+            _ => 0,
+        };
+        let (sw, sh) = (sprite_w as f64, sprite_h as f64);
+        let zone_alpha = match zone.state {
+            ZoneState::Capturing(_) => {
+                (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0)
+            }
+            _ => 1.0,
+        };
+        let alpha = proximity_alpha * zone_alpha;
+        if (alpha - 1.0).abs() > 0.001 {
+            r.set_alpha(alpha);
+        }
+        let tex_id = loaded.tower_textures[color_idx];
+        r.draw_texture(tex_id, 0.0, 0.0, sw, sh, anchor_x - sw / 2.0, anchor_y - sh, sw, sh)?;
+        if (alpha - 1.0).abs() > 0.001 {
+            r.set_alpha(1.0);
+        }
+        return Ok(());
+    }
+
     if loaded.building_textures.is_empty() {
         return Ok(());
     }
-    let b = &game.buildings[idx];
     let kind_index = match b.kind {
         BuildingKind::Barracks => 0,
         BuildingKind::Archery => 1,
@@ -368,14 +365,15 @@ fn draw_base_building(
     };
     let tex_idx = kind_index * 2 + faction_index;
     if tex_idx < loaded.building_textures.len() {
-        let (tex_id, sprite_w, sprite_h) = loaded.building_textures[tex_idx];
-        let sw = sprite_w as f64;
-        let sh = sprite_h as f64;
-        let draw_w = sw;
-        let draw_h = sh;
-        let dx = (b.grid_x as f64) * ts + ts / 2.0 - draw_w / 2.0;
-        let dy = (b.grid_y as f64) * ts + ts - draw_h;
-        r.draw_texture(tex_id, 0.0, 0.0, sw, sh, dx, dy, draw_w, draw_h)?;
+        let (tex_id, _sprite_w, _sprite_h) = loaded.building_textures[tex_idx];
+        let (sw, sh) = (sprite_w as f64, sprite_h as f64);
+        if (proximity_alpha - 1.0).abs() > 0.001 {
+            r.set_alpha(proximity_alpha);
+        }
+        r.draw_texture(tex_id, 0.0, 0.0, sw, sh, anchor_x - sw / 2.0, anchor_y - sh, sw, sh)?;
+        if (proximity_alpha - 1.0).abs() > 0.001 {
+            r.set_alpha(1.0);
+        }
     }
     Ok(())
 }
@@ -406,5 +404,32 @@ fn draw_particle(
 
         r.draw_sprite(tex_id, sx, sy, sw, sh, dx, dy, size, size, false, 1.0)?;
     }
+    Ok(())
+}
+
+fn draw_sheep(
+    r: &Canvas2dRenderer,
+    game: &Game,
+    loaded: &LoadedTextures,
+    idx: usize,
+) -> Result<(), JsValue> {
+    let sheep = &game.sheep[idx];
+    let sprite_idx = sheep.sprite_index();
+    if sprite_idx >= loaded.sheep_textures.len() {
+        return Ok(());
+    }
+    let (tex_id, _fw, _fh) = loaded.sheep_textures[sprite_idx];
+    let fs = SHEEP_FRAME_SIZE;
+    let sheet = SpriteSheet {
+        frame_width: fs,
+        frame_height: fs,
+        frame_count: sheep.anim_frame_count(),
+    };
+    let (sx, sy, sw, sh) = sheet.frame_src_rect(sheep.animation.current_frame);
+    let size = fs as f64;
+    let dx = (sheep.x as f64) - size / 2.0;
+    let dy = (sheep.y as f64) - size / 2.0;
+    let flip = sheep.facing == Facing::Left;
+    r.draw_sprite(tex_id, sx, sy, sw, sh, dx, dy, size, size, flip, 1.0)?;
     Ok(())
 }

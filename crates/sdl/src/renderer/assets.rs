@@ -48,6 +48,8 @@ pub struct Assets<'a> {
     pub(super) ui_wood_table: Option<(Texture<'a>, u32, u32)>,
     // Fog
     pub fog_texture: Option<Texture<'a>>,
+    // Sheep: (texture, frame_count) for Idle, Move, Grass
+    pub(super) sheep_textures: Vec<(Texture<'a>, u32)>,
     // Text rendering
     pub text: TextRenderer,
 }
@@ -235,6 +237,11 @@ impl<'a> Assets<'a> {
                         (
                             UnitAnim::Attack,
                             "Warrior_Attack1.png",
+                            kind.attack_frames(),
+                        ),
+                        (
+                            UnitAnim::Attack2,
+                            "Warrior_Attack2.png",
                             kind.attack_frames(),
                         ),
                     ],
@@ -495,6 +502,20 @@ impl<'a> Assets<'a> {
             &render_util::WOOD_TABLE_CELLS,
         );
 
+        // Sheep sprites (Idle=6, Move=4, Grass=12 frames at 128x128)
+        let sheep_specs: &[(&str, u32)] = &[
+            ("Sheep_Idle.png", 6),
+            ("Sheep_Move.png", 4),
+            ("Sheep_Grass.png", 12),
+        ];
+        let mut sheep_textures = Vec::new();
+        for &(filename, frame_count) in sheep_specs {
+            let path = format!("{ASSET_BASE}/Terrain/Resources/Meat/Sheep/{filename}");
+            if let Some(tex) = load_png_texture(tc, &path) {
+                sheep_textures.push((tex, frame_count));
+            }
+        }
+
         Self {
             unit_textures,
             particle_textures,
@@ -519,6 +540,7 @@ impl<'a> Assets<'a> {
             ui_small_ribbons,
             _ui_swords: ui_swords,
             ui_wood_table,
+            sheep_textures,
             fog_texture: {
                 use battlefield_core::grid::GRID_SIZE;
                 sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "1");

@@ -1,5 +1,5 @@
 use crate::grid::Grid;
-use crate::unit::{Unit, UnitAnim};
+use crate::unit::Unit;
 
 /// Result of a combat action.
 #[derive(Debug, PartialEq, Eq)]
@@ -27,7 +27,8 @@ pub fn execute_melee(attacker: &mut Unit, defender: &mut Unit, grid: &Grid) -> C
     let damage = calc_melee_damage(attacker, defender, grid);
     defender.take_damage(damage);
     attacker.start_attack_cooldown();
-    attacker.set_anim(UnitAnim::Attack);
+    let anim = attacker.next_attack_anim();
+    attacker.set_anim(anim);
 
     CombatResult {
         damage,
@@ -40,7 +41,8 @@ pub fn execute_heal(healer: &mut Unit, target: &mut Unit) -> i32 {
     let heal_amount = 3.min(target.stats.max_hp - target.hp);
     target.hp += heal_amount;
     healer.start_attack_cooldown();
-    healer.set_anim(UnitAnim::Attack);
+    let anim = healer.next_attack_anim();
+    healer.set_anim(anim);
     heal_amount
 }
 
