@@ -39,8 +39,6 @@ pub struct CaptureZone {
     pub progress: f32,
     pub blue_count: u32,
     pub red_count: u32,
-    /// Attack cooldown for the zone tower (fires when controlled).
-    pub tower_cooldown: f32,
 }
 
 impl CaptureZone {
@@ -59,7 +57,6 @@ impl CaptureZone {
             progress: 0.0,
             blue_count: 0,
             red_count: 0,
-            tower_cooldown: 0.0,
         }
     }
 
@@ -300,8 +297,8 @@ impl ZoneManager {
 
                 let controlled_by_us = z.state == ZoneState::Controlled(faction);
                 let progress_for_us = match faction {
-                    Faction::Blue => z.progress,  // +1 = fully Blue
-                    Faction::Red => -z.progress,  // flip so +1 = fully Red
+                    Faction::Blue => z.progress, // +1 = fully Blue
+                    Faction::Red => -z.progress, // flip so +1 = fully Red
                 };
 
                 // Expansion target: zones we don't control
@@ -388,70 +385,6 @@ impl ZoneManager {
         }
     }
 
-    /// Return the best retreat zone for a faction: a controlled zone that is
-    /// closer to own base than the unit ("behind" it), picking the most advanced
-    /// (farthest from base) among those. Falls back to nearest controlled zone.
-    pub fn retreat_zone(
-        &self,
-        faction: Faction,
-        unit_wx: f32,
-        unit_wy: f32,
-    ) -> Option<&CaptureZone> {
-        let (base_x, base_y): (f32, f32) = match faction {
-            Faction::Blue => (
-                self.blue_base.0 as f32 * TILE_SIZE,
-                self.blue_base.1 as f32 * TILE_SIZE,
-            ),
-            _ => (
-                self.red_base.0 as f32 * TILE_SIZE,
-                self.red_base.1 as f32 * TILE_SIZE,
-            ),
-        };
-
-        let unit_dist_sq =
-            (unit_wx - base_x) * (unit_wx - base_x) + (unit_wy - base_y) * (unit_wy - base_y);
-
-        let controlled: Vec<&CaptureZone> = self
-            .zones
-            .iter()
-            .filter(|z| z.state == ZoneState::Controlled(faction))
-            .collect();
-
-        if controlled.is_empty() {
-            return None;
-        }
-
-        // Zones closer to base than the unit (behind the unit)
-        let behind: Vec<&CaptureZone> = controlled
-            .iter()
-            .copied()
-            .filter(|z| {
-                let d = (z.center_wx - base_x) * (z.center_wx - base_x)
-                    + (z.center_wy - base_y) * (z.center_wy - base_y);
-                d < unit_dist_sq
-            })
-            .collect();
-
-        if !behind.is_empty() {
-            // Pick the most advanced rear zone (farthest from base among behind zones)
-            return behind.into_iter().max_by(|a, b| {
-                let da = (a.center_wx - base_x) * (a.center_wx - base_x)
-                    + (a.center_wy - base_y) * (a.center_wy - base_y);
-                let db = (b.center_wx - base_x) * (b.center_wx - base_x)
-                    + (b.center_wy - base_y) * (b.center_wy - base_y);
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-
-        // Fallback: nearest controlled zone
-        controlled.into_iter().min_by(|a, b| {
-            let da = (a.center_wx - unit_wx) * (a.center_wx - unit_wx)
-                + (a.center_wy - unit_wy) * (a.center_wy - unit_wy);
-            let db = (b.center_wx - unit_wx) * (b.center_wx - unit_wx)
-                + (b.center_wy - unit_wy) * (b.center_wy - unit_wy);
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-        })
-    }
 }
 
 #[cfg(test)]

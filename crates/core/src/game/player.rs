@@ -52,7 +52,8 @@ impl Game {
 
         if targets.is_empty() {
             // Whiff: play attack anim with full cooldown (same rate as hits)
-            self.units[player_idx].set_anim(UnitAnim::Attack);
+            let anim = self.units[player_idx].next_attack_anim();
+            self.units[player_idx].set_anim(anim);
             self.units[player_idx].attack_cooldown =
                 self.units[player_idx].kind.base_attack_cooldown();
             false
@@ -65,39 +66,6 @@ impl Game {
             }
             true
         }
-    }
-
-    /// Find nearest enemy within range AND within a cone defined by aim direction and half-angle.
-    pub fn enemy_in_cone(
-        &self,
-        x: f32,
-        y: f32,
-        faction: Faction,
-        range: f32,
-        aim_dir: f32,
-        half_angle: f32,
-    ) -> Option<UnitId> {
-        self.units
-            .iter()
-            .filter(|u| u.alive && u.faction != faction)
-            .filter_map(|u| {
-                let dist = u.distance_to_pos(x, y);
-                if dist > range {
-                    return None;
-                }
-                let angle_to = (u.y - y).atan2(u.x - x);
-                let mut diff = angle_to - aim_dir;
-                // Normalize to [-PI, PI]
-                diff = (diff + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
-                    - std::f32::consts::PI;
-                if diff.abs() <= half_angle {
-                    Some((u.id, dist))
-                } else {
-                    None
-                }
-            })
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(id, _)| id)
     }
 
     /// Find ALL enemies within range AND within a cone (for cleave attacks).
@@ -206,90 +174,6 @@ mod tests {
         assert!(
             enemy.hp < 10,
             "Enemy should have taken ranged damage on arrow impact"
-        );
-    }
-
-    // ---- Cone hitbox tests ----
-
-    #[test]
-    fn enemy_in_cone_finds_enemy_ahead() {
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 5, false);
-        let px = game.units[0].x;
-        let py = game.units[0].y;
-        // Aim right (0 rad), enemy is to the right
-        let result = game.enemy_in_cone(
-            px,
-            py,
-            Faction::Blue,
-            MELEE_RANGE,
-            0.0,
-            ATTACK_CONE_HALF_ANGLE,
-        );
-        assert_eq!(result, Some(2), "Should hit enemy directly ahead");
-    }
-
-    #[test]
-    fn enemy_in_cone_misses_enemy_behind() {
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 4, 5, false); // enemy to the left
-        let px = game.units[0].x;
-        let py = game.units[0].y;
-        // Aim right (0 rad), enemy is to the left (behind)
-        let result = game.enemy_in_cone(
-            px,
-            py,
-            Faction::Blue,
-            MELEE_RANGE,
-            0.0,
-            ATTACK_CONE_HALF_ANGLE,
-        );
-        assert_eq!(result, None, "Should miss enemy behind");
-    }
-
-    #[test]
-    fn enemy_in_cone_diagonal_aim() {
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 6, 6, false); // SE
-        let px = game.units[0].x;
-        let py = game.units[0].y;
-        // Aim SE (PI/4 rad)
-        let aim_se = std::f32::consts::FRAC_PI_4;
-        let result = game.enemy_in_cone(
-            px,
-            py,
-            Faction::Blue,
-            MELEE_RANGE * 2.0,
-            aim_se,
-            ATTACK_CONE_HALF_ANGLE,
-        );
-        assert_eq!(result, Some(2), "Should hit enemy in SE when aiming SE");
-    }
-
-    #[test]
-    fn enemy_in_cone_wraps_around_pi() {
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 4, 5, false); // enemy to the left
-        let px = game.units[0].x;
-        let py = game.units[0].y;
-        // Aim left (PI rad) — tests wrap-around at -PI/PI boundary
-        let aim_left = std::f32::consts::PI;
-        let result = game.enemy_in_cone(
-            px,
-            py,
-            Faction::Blue,
-            MELEE_RANGE,
-            aim_left,
-            ATTACK_CONE_HALF_ANGLE,
-        );
-        assert_eq!(
-            result,
-            Some(2),
-            "Should hit enemy to the left when aiming left"
         );
     }
 
