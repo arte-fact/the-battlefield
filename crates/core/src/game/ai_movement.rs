@@ -77,6 +77,7 @@ impl Game {
     }
 
     /// Pick the best macro objective for a specific unit based on position + score.
+    /// Uses flow field integration cost for distance (terrain-aware), with Euclidean fallback.
     /// Returns (objective_index, wx, wy).
     fn unit_best_objective(&self, ai_idx: usize) -> (usize, f32, f32) {
         let faction = self.units[ai_idx].faction;
@@ -90,17 +91,44 @@ impl Game {
             return (0, obj.0, obj.1);
         }
 
-        let ux = self.units[ai_idx].x;
-        let uy = self.units[ai_idx].y;
-        let dist_weight = 0.05; // per world-unit penalty
+        let unit = &self.units[ai_idx];
+        let (gx, gy) = unit.grid_cell();
+        let flow_states = match faction {
+            Faction::Blue => &self.blue_flow,
+            _ => &self.red_flow,
+        };
+
+        let cost_weight = 0.3; // penalty per integration-cost unit
+        let euclidean_weight = 0.05; // fallback: per world-unit penalty
+        let hysteresis_bonus = 5.0; // bonus for staying on current objective
 
         let mut best_idx = 0;
         let mut best_pick = f32::NEG_INFINITY;
         for (i, &(wx, wy, score)) in objectives.iter().enumerate() {
-            let dx = ux - wx;
-            let dy = uy - wy;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let pick = score - dist * dist_weight;
+            let distance_penalty = if i < flow_states.len() {
+                if let Some(ref field) = flow_states[i].field {
+                    let cost = field.cost_at(gx, gy);
+                    if cost < u32::MAX {
+                        cost as f32 * cost_weight
+                    } else {
+                        let dx = unit.x - wx;
+                        let dy = unit.y - wy;
+                        (dx * dx + dy * dy).sqrt() * euclidean_weight
+                    }
+                } else {
+                    let dx = unit.x - wx;
+                    let dy = unit.y - wy;
+                    (dx * dx + dy * dy).sqrt() * euclidean_weight
+                }
+            } else {
+                let dx = unit.x - wx;
+                let dy = unit.y - wy;
+                (dx * dx + dy * dy).sqrt() * euclidean_weight
+            };
+            let mut pick = score - distance_penalty;
+            if i == unit.assigned_objective as usize {
+                pick += hysteresis_bonus;
+            }
             if pick > best_pick {
                 best_pick = pick;
                 best_idx = i;
@@ -164,6 +192,7 @@ impl Game {
         let uy = self.units[ai_idx].y;
 
         let (obj_idx, obj_wx, obj_wy) = self.unit_best_objective(ai_idx);
+        self.units[ai_idx].assigned_objective = obj_idx as u8;
 
         // If already inside the target capture zone, stop
         for zone in &self.zone_manager.zones {

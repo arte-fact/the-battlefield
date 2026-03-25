@@ -187,6 +187,8 @@ pub struct Unit {
     pub enemy_scan_cooldown: f32,
     /// When true, unit idles at rally point instead of marching via flowfield.
     pub rally_hold: bool,
+    /// Index of the macro objective this unit is currently assigned to (0..2).
+    pub assigned_objective: u8,
 }
 
 impl Unit {
@@ -224,6 +226,7 @@ impl Unit {
             cached_enemy: None,
             enemy_scan_cooldown: 0.0,
             rally_hold: false,
+            assigned_objective: 0,
         }
     }
 
