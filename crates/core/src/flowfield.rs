@@ -2,16 +2,14 @@ use crate::grid::Grid;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-/// Flow field: a grid of direction vectors pointing toward a goal.
-/// Generated via Dijkstra from the goal outward.
+/// Flow field: a grid of direction vectors pointing toward the nearest/cheapest goal.
+/// Generated via Dijkstra from one or more goals outward.
 pub struct FlowField {
     /// 8-directional direction per cell: (dx, dy) where each is -1, 0, or 1.
     /// (0, 0) means goal cell or unreachable.
     directions: Vec<(i8, i8)>,
-    /// Integration cost to reach the goal from each cell. u32::MAX = unreachable.
+    /// Integration cost to reach the nearest goal from each cell. u32::MAX = unreachable.
     integration: Vec<u32>,
-    pub goal_gx: u32,
-    pub goal_gy: u32,
     width: u32,
     height: u32,
 }
@@ -30,9 +28,15 @@ const DIRS: [(i32, i32, u32); 8] = [
 ];
 
 impl FlowField {
-    /// Generate a flow field from the given goal using Dijkstra.
-    /// Uses the same cost model as A*: cardinal=2, diagonal=3, × tile movement_cost.
+    /// Generate a flow field from a single goal. Thin wrapper around `generate_multi_source`.
     pub fn generate(grid: &Grid, goal_gx: u32, goal_gy: u32) -> Self {
+        Self::generate_multi_source(grid, &[(goal_gx, goal_gy, 0)])
+    }
+
+    /// Generate a multi-source flow field from multiple goals using Dijkstra.
+    /// Each goal is `(gx, gy, initial_cost)` — lower initial_cost = higher priority.
+    /// Uses the same cost model as A*: cardinal=2, diagonal=3, × tile movement_cost.
+    pub fn generate_multi_source(grid: &Grid, goals: &[(u32, u32, u32)]) -> Self {
         let w = grid.width;
         let h = grid.height;
         let size = (w * h) as usize;
@@ -40,23 +44,24 @@ impl FlowField {
 
         let mut integration = vec![u32::MAX; size];
         let mut directions = vec![(0i8, 0i8); size];
+        let mut heap: BinaryHeap<Reverse<(u32, u32, u32)>> = BinaryHeap::new();
 
-        if !grid.in_bounds(goal_gx as i32, goal_gy as i32) || !grid.is_passable(goal_gx, goal_gy) {
-            return Self {
-                directions,
-                integration,
-                goal_gx,
-                goal_gy,
-                width: w,
-                height: h,
-            };
+        // Seed all valid goals
+        for &(gx, gy, initial_cost) in goals {
+            if grid.in_bounds(gx as i32, gy as i32) && grid.is_passable(gx, gy) {
+                let i = idx(gx, gy);
+                if initial_cost < integration[i] {
+                    integration[i] = initial_cost;
+                    heap.push(Reverse((initial_cost, gx, gy)));
+                }
+            }
         }
 
-        // Dijkstra from goal
-        integration[idx(goal_gx, goal_gy)] = 0;
-        let mut heap: BinaryHeap<Reverse<(u32, u32, u32)>> = BinaryHeap::new();
-        heap.push(Reverse((0, goal_gx, goal_gy)));
+        if heap.is_empty() {
+            return Self { directions, integration, width: w, height: h };
+        }
 
+        // Dijkstra from all seeded goals simultaneously
         while let Some(Reverse((cost, x, y))) = heap.pop() {
             if cost > integration[idx(x, y)] {
                 continue;
@@ -90,8 +95,9 @@ impl FlowField {
         for y in 0..h {
             for x in 0..w {
                 let ci = idx(x, y);
-                if integration[ci] == u32::MAX || (x == goal_gx && y == goal_gy) {
-                    continue; // unreachable or goal: keep (0, 0)
+                let is_goal = goals.iter().any(|&(gx, gy, _)| gx == x && gy == y);
+                if integration[ci] == u32::MAX || is_goal {
+                    continue; // unreachable or goal cell: keep (0, 0)
                 }
                 let mut best_cost = integration[ci];
                 let mut best_dir = (0i8, 0i8);
@@ -116,14 +122,7 @@ impl FlowField {
             }
         }
 
-        Self {
-            directions,
-            integration,
-            goal_gx,
-            goal_gy,
-            width: w,
-            height: h,
-        }
+        Self { directions, integration, width: w, height: h }
     }
 
     /// O(1) direction lookup at grid cell (gx, gy).
@@ -145,18 +144,11 @@ impl FlowField {
 }
 
 /// Per-faction cached flow field state.
+#[derive(Default)]
 pub struct FactionFlowState {
     pub field: Option<FlowField>,
-    pub cached_goal: (f32, f32),
-}
-
-impl Default for FactionFlowState {
-    fn default() -> Self {
-        Self {
-            field: None,
-            cached_goal: (0.0, 0.0),
-        }
-    }
+    /// Cached (gx, gy, initial_cost) tuples used to detect when regeneration is needed.
+    pub cached_goals: Vec<(u32, u32, u32)>,
 }
 
 impl FactionFlowState {
@@ -228,5 +220,31 @@ mod tests {
         let sym_cost = ff.cost_at(11, 8);
         // Forest should cost more (movement_cost=2 vs 1 for grass)
         assert!(grass_cost > sym_cost);
+    }
+
+    #[test]
+    fn multi_source_routes_to_nearest_goal() {
+        let grid = Grid::new_grass(16, 16);
+        // Two equal-weight goals: left (2, 8) and right (13, 8)
+        let ff = FlowField::generate_multi_source(&grid, &[(2, 8, 0), (13, 8, 0)]);
+        // Cell at (3, 8) is 1 tile from left goal — should point left
+        assert_eq!(ff.direction_at(3, 8), (-1, 0));
+        // Cell at (12, 8) is 1 tile from right goal — should point right
+        assert_eq!(ff.direction_at(12, 8), (1, 0));
+        // Both goal cells themselves are (0, 0)
+        assert_eq!(ff.direction_at(2, 8), (0, 0));
+        assert_eq!(ff.direction_at(13, 8), (0, 0));
+    }
+
+    #[test]
+    fn multi_source_score_biases_routing() {
+        let grid = Grid::new_grass(20, 10);
+        // Goal A at (2, 5) initial_cost=0 (high priority)
+        // Goal B at (17, 5) initial_cost=50 (low priority)
+        // Cell at (10, 5): 8 tiles from A (cost ~16), 7 tiles from B (cost ~14 + 50 = 64)
+        // Net: should flow toward A despite being slightly closer to B in raw distance
+        let ff = FlowField::generate_multi_source(&grid, &[(2, 5, 0), (17, 5, 50)]);
+        let dir = ff.direction_at(10, 5);
+        assert_eq!(dir, (-1, 0), "score bias should redirect toward higher-priority goal A");
     }
 }

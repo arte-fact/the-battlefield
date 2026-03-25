@@ -24,8 +24,8 @@ impl Game {
         self.objective_timer += dt;
         if self.objective_timer >= Self::OBJECTIVE_INTERVAL || self.macro_objectives[0].is_empty() {
             self.objective_timer = 0.0;
-            self.macro_objectives[0] = self.zone_manager.score_top3_zones(Faction::Blue);
-            self.macro_objectives[1] = self.zone_manager.score_top3_zones(Faction::Red);
+            self.macro_objectives[0] = self.zone_manager.score_all_zones(Faction::Blue);
+            self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red);
         }
 
         // Update flow fields for both factions before unit loop

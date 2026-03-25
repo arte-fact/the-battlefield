@@ -266,9 +266,8 @@ impl ZoneManager {
             })
     }
 
-    /// Score all zones for a faction, return top 3 as (world_x, world_y, score).
-    /// Fewer than 3 entries if fewer valid targets exist.
-    pub fn score_top3_zones(&self, faction: Faction) -> Vec<(f32, f32, f32)> {
+    /// Score all zones for a faction, return all as (world_x, world_y, score) sorted desc.
+    pub fn score_all_zones(&self, faction: Faction) -> Vec<(f32, f32, f32)> {
         if self.zones.is_empty() {
             return Vec::new();
         }
@@ -344,9 +343,8 @@ impl ZoneManager {
             })
             .collect();
 
-        // Sort by score descending, take top 3
+        // Sort by score descending
         scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(3);
         scored
     }
 

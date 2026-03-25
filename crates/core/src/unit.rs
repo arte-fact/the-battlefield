@@ -129,6 +129,13 @@ pub enum UnitAnim {
     Idle,
     Run,
     Attack,
+    Attack2,
+}
+
+impl UnitAnim {
+    pub fn is_attack(self) -> bool {
+        matches!(self, UnitAnim::Attack | UnitAnim::Attack2)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -187,8 +194,8 @@ pub struct Unit {
     pub enemy_scan_cooldown: f32,
     /// When true, unit idles at rally point instead of marching via flowfield.
     pub rally_hold: bool,
-    /// Index of the macro objective this unit is currently assigned to (0..2).
-    pub assigned_objective: u8,
+    /// Toggle for alternating between Attack and Attack2 animations (warrior only).
+    pub attack_variant: bool,
 }
 
 impl Unit {
@@ -226,7 +233,7 @@ impl Unit {
             cached_enemy: None,
             enemy_scan_cooldown: 0.0,
             rally_hold: false,
-            assigned_objective: 0,
+            attack_variant: false,
         }
     }
 
@@ -249,9 +256,9 @@ impl Unit {
             let (frames, fps) = match anim {
                 UnitAnim::Idle => (self.kind.idle_frames(), 10.0),
                 UnitAnim::Run => (self.kind.run_frames(), 12.0),
-                UnitAnim::Attack => (self.kind.attack_frames(), 12.0),
+                UnitAnim::Attack | UnitAnim::Attack2 => (self.kind.attack_frames(), 12.0),
             };
-            self.animation = if anim == UnitAnim::Attack {
+            self.animation = if anim.is_attack() {
                 AnimationState::new_oneshot(frames, fps)
             } else {
                 AnimationState::new(frames, fps)
@@ -268,11 +275,25 @@ impl Unit {
     pub fn tick_cooldowns(&mut self, dt: f32) {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         // Reset to Idle once the one-shot attack animation finishes
-        if self.current_anim == UnitAnim::Attack && self.animation.finished {
+        if self.current_anim.is_attack() && self.animation.finished {
             self.set_anim(UnitAnim::Idle);
         }
         self.hit_flash = (self.hit_flash - dt).max(0.0);
         self.order_flash = (self.order_flash - dt).max(0.0);
+    }
+
+    /// Pick the next attack animation, alternating for warriors.
+    pub fn next_attack_anim(&mut self) -> UnitAnim {
+        if self.kind == UnitKind::Warrior {
+            self.attack_variant = !self.attack_variant;
+            if self.attack_variant {
+                UnitAnim::Attack2
+            } else {
+                UnitAnim::Attack
+            }
+        } else {
+            UnitAnim::Attack
+        }
     }
 
     /// Start attack cooldown.

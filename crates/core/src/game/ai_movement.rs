@@ -76,10 +76,9 @@ impl Game {
         }
     }
 
-    /// Pick the best macro objective for a specific unit based on position + score.
-    /// Uses flow field integration cost for distance (terrain-aware), with Euclidean fallback.
-    /// Returns (objective_index, wx, wy).
-    fn unit_best_objective(&self, ai_idx: usize) -> (usize, f32, f32) {
+    /// Return the world position of the objective nearest to a unit (Euclidean).
+    /// Used for the zone-stop check and A* fallback.
+    fn nearest_objective_pos(&self, ai_idx: usize) -> (f32, f32) {
         let faction = self.units[ai_idx].faction;
         let fi = match faction {
             Faction::Blue => 0,
@@ -87,114 +86,90 @@ impl Game {
         };
         let objectives = &self.macro_objectives[fi];
         if objectives.is_empty() {
-            let obj = self.faction_objective(faction);
-            return (0, obj.0, obj.1);
+            return self.faction_objective(faction);
         }
-
-        let unit = &self.units[ai_idx];
-        let (gx, gy) = unit.grid_cell();
-        let flow_states = match faction {
-            Faction::Blue => &self.blue_flow,
-            _ => &self.red_flow,
-        };
-
-        let cost_weight = 0.3; // penalty per integration-cost unit
-        let euclidean_weight = 0.05; // fallback: per world-unit penalty
-        let hysteresis_bonus = 5.0; // bonus for staying on current objective
-
-        let mut best_idx = 0;
-        let mut best_pick = f32::NEG_INFINITY;
-        for (i, &(wx, wy, score)) in objectives.iter().enumerate() {
-            let distance_penalty = if i < flow_states.len() {
-                if let Some(ref field) = flow_states[i].field {
-                    let cost = field.cost_at(gx, gy);
-                    if cost < u32::MAX {
-                        cost as f32 * cost_weight
-                    } else {
-                        let dx = unit.x - wx;
-                        let dy = unit.y - wy;
-                        (dx * dx + dy * dy).sqrt() * euclidean_weight
-                    }
-                } else {
-                    let dx = unit.x - wx;
-                    let dy = unit.y - wy;
-                    (dx * dx + dy * dy).sqrt() * euclidean_weight
-                }
-            } else {
-                let dx = unit.x - wx;
-                let dy = unit.y - wy;
-                (dx * dx + dy * dy).sqrt() * euclidean_weight
-            };
-            let mut pick = score - distance_penalty;
-            if i == unit.assigned_objective as usize {
-                pick += hysteresis_bonus;
-            }
-            if pick > best_pick {
-                best_pick = pick;
-                best_idx = i;
-            }
-        }
-        let (wx, wy, _) = objectives[best_idx];
-        (best_idx, wx, wy)
+        let ux = self.units[ai_idx].x;
+        let uy = self.units[ai_idx].y;
+        objectives
+            .iter()
+            .min_by(|&&(ax, ay, _), &&(bx, by, _)| {
+                let da = (ux - ax) * (ux - ax) + (uy - ay) * (uy - ay);
+                let db = (ux - bx) * (ux - bx) + (uy - by) * (uy - by);
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|&(wx, wy, _)| (wx, wy))
+            .unwrap_or_else(|| self.faction_objective(faction))
     }
 
-    /// Update all flow fields for a faction (one per macro objective).
+    /// Update the unified multi-source flow field for a faction.
+    /// Seeds Dijkstra from every scored zone; higher-score zones get lower initial cost.
     pub(super) fn update_flow_fields(&mut self, faction: Faction) {
         let fi = match faction {
             Faction::Blue => 0,
             Faction::Red => 1,
         };
-        let objectives = &self.macro_objectives[fi];
 
-        for i in 0..3 {
-            let goal = if i < objectives.len() {
-                (objectives[i].0, objectives[i].1)
-            } else {
-                continue;
-            };
-
-            let flow_states = match faction {
-                Faction::Blue => &self.blue_flow,
-                _ => &self.red_flow,
-            };
-            let dx = goal.0 - flow_states[i].cached_goal.0;
-            let dy = goal.1 - flow_states[i].cached_goal.1;
-            let dist_sq = dx * dx + dy * dy;
-            let half_tile = TILE_SIZE * 0.5;
-            if flow_states[i].field.is_some() && dist_sq < half_tile * half_tile {
-                continue; // goal hasn't moved enough
+        // Build goal tuples — separate block to avoid borrow conflict with flow state below
+        let goals: Vec<(u32, u32, u32)> = {
+            let objectives = &self.macro_objectives[fi];
+            if objectives.is_empty() {
+                return;
             }
+            let mut v = Vec::with_capacity(objectives.len());
+            for &(wx, wy, score) in objectives {
+                let (gx, gy) = grid::world_to_grid(wx, wy);
+                let gx = gx.max(0) as u32;
+                let gy = gy.max(0) as u32;
+                let (gx, gy) = if self.grid.is_passable(gx, gy) {
+                    (gx, gy)
+                } else {
+                    self.find_nearest_passable(gx, gy).unwrap_or((gx, gy))
+                };
+                let initial_cost = 150u32.saturating_sub(score.round() as u32);
+                v.push((gx, gy, initial_cost));
+            }
+            v
+        };
 
-            let (gx, gy) = grid::world_to_grid(goal.0, goal.1);
-            let gx = gx.max(0) as u32;
-            let gy = gy.max(0) as u32;
-            let (gx, gy) = if self.grid.is_passable(gx, gy) {
-                (gx, gy)
-            } else {
-                self.find_nearest_passable(gx, gy).unwrap_or((gx, gy))
+        // Skip regeneration if goals are identical to the cached set
+        let cached = match faction {
+            Faction::Blue => &self.blue_flow.cached_goals,
+            _ => &self.red_flow.cached_goals,
+        };
+        let needs_regen = {
+            let field_missing = match faction {
+                Faction::Blue => self.blue_flow.field.is_none(),
+                _ => self.red_flow.field.is_none(),
             };
-            let field = crate::flowfield::FlowField::generate(&self.grid, gx, gy);
-            let state = match faction {
-                Faction::Blue => &mut self.blue_flow[i],
-                _ => &mut self.red_flow[i],
-            };
-            state.field = Some(field);
-            state.cached_goal = goal;
+            field_missing
+                || cached.len() != goals.len()
+                || cached.iter().zip(goals.iter()).any(|(a, b)| a != b)
+        };
+
+        if !needs_regen {
+            return;
         }
+
+        let field = crate::flowfield::FlowField::generate_multi_source(&self.grid, &goals);
+        let state = match faction {
+            Faction::Blue => &mut self.blue_flow,
+            _ => &mut self.red_flow,
+        };
+        state.field = Some(field);
+        state.cached_goals = goals;
     }
 
-    /// Move AI unit via flow field toward its best macro objective.
+    /// Move AI unit via the unified multi-source flow field.
     /// Blends 80% flow direction + 20% separation steering.
-    /// Falls back to A* if flow field is absent or cell is unreachable.
+    /// Falls back to A* toward the nearest objective if flow field is absent or unreachable.
     pub(super) fn ai_move_via_flowfield(&mut self, ai_idx: usize, dt: f32) {
         let faction = self.units[ai_idx].faction;
         let ux = self.units[ai_idx].x;
         let uy = self.units[ai_idx].y;
 
-        let (obj_idx, obj_wx, obj_wy) = self.unit_best_objective(ai_idx);
-        self.units[ai_idx].assigned_objective = obj_idx as u8;
+        let (obj_wx, obj_wy) = self.nearest_objective_pos(ai_idx);
 
-        // If already inside the target capture zone, stop
+        // If already inside the nearest objective zone, stop
         for zone in &self.zone_manager.zones {
             if (zone.center_wx - obj_wx).abs() < 1.0
                 && (zone.center_wy - obj_wy).abs() < 1.0
@@ -204,31 +179,27 @@ impl Game {
             }
         }
 
-        let flow_states = match faction {
-            Faction::Blue => &self.blue_flow,
-            _ => &self.red_flow,
+        // Read direction from the unified field (copy out before any mutable borrows)
+        let (gx, gy) = self.units[ai_idx].grid_cell();
+        let dir = match faction {
+            Faction::Blue => self.blue_flow.field.as_ref().map(|f| f.direction_at(gx, gy)),
+            _ => self.red_flow.field.as_ref().map(|f| f.direction_at(gx, gy)),
         };
 
-        if obj_idx < flow_states.len() {
-            if let Some(ref field) = flow_states[obj_idx].field {
-                let (gx, gy) = self.units[ai_idx].grid_cell();
-                let dir = field.direction_at(gx, gy);
-                if dir != (0, 0) {
-                    let (sep_x, sep_y) = self.compute_separation(ai_idx);
-                    let flow_x = dir.0 as f32;
-                    let flow_y = dir.1 as f32;
-                    let bx = flow_x * 0.8 + sep_x * 0.2;
-                    let by = flow_y * 0.8 + sep_y * 0.2;
-                    let len = (bx * bx + by * by).sqrt();
-                    if len > 0.01 {
-                        self.move_unit(ai_idx, bx / len, by / len, dt);
-                    }
-                    return;
+        if let Some(dir) = dir {
+            if dir != (0, 0) {
+                let (sep_x, sep_y) = self.compute_separation(ai_idx);
+                let bx = dir.0 as f32 * 0.8 + sep_x * 0.2;
+                let by = dir.1 as f32 * 0.8 + sep_y * 0.2;
+                let len = (bx * bx + by * by).sqrt();
+                if len > 0.01 {
+                    self.move_unit(ai_idx, bx / len, by / len, dt);
                 }
+                return;
             }
         }
 
-        // Fallback: use A* toward objective
+        // Fallback: A* toward nearest objective
         self.ai_move_toward_continuous(ai_idx, obj_wx, obj_wy, dt);
     }
 

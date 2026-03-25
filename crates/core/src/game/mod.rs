@@ -17,6 +17,7 @@ use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::mapgen;
 use crate::particle::{Particle, Projectile};
 use crate::player_input::PlayerInput;
+use crate::sheep::Sheep;
 use crate::unit::{
     Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS,
 };
@@ -53,6 +54,8 @@ pub struct Game {
     pub red_objective: (f32, f32),
     /// Production buildings at faction bases.
     pub buildings: Vec<BaseBuilding>,
+    /// Ambient sheep at faction bases.
+    pub sheep: Vec<Sheep>,
     /// Capture zone manager.
     pub zone_manager: ZoneManager,
     /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
@@ -63,10 +66,10 @@ pub struct Game {
     spawn_timer: [f32; 2],
     /// Pre-computed occupied grid cells for AI pathfinding (rebuilt each frame).
     ai_occupied_cache: HashSet<(u32, u32)>,
-    /// Flow fields for Blue faction (up to 3 macro objectives).
-    blue_flow: [FactionFlowState; 3],
-    /// Flow fields for Red faction (up to 3 macro objectives).
-    red_flow: [FactionFlowState; 3],
+    /// Unified flow field for Blue faction (multi-source, all map objectives).
+    blue_flow: FactionFlowState,
+    /// Unified flow field for Red faction (multi-source, all map objectives).
+    red_flow: FactionFlowState,
     /// Macro objectives per faction: [(wx, wy, score); 3] per faction [Blue, Red].
     pub macro_objectives: [Vec<(f32, f32, f32)>; 2],
     /// Timer for periodic macro objective recomputation.
@@ -103,21 +106,14 @@ impl Game {
             blue_objective: (0.0, 0.0),
             red_objective: (0.0, 0.0),
             buildings: Vec::new(),
+            sheep: Vec::new(),
             zone_manager: ZoneManager::empty(),
             winner: None,
             spawn_queue: [Vec::new(), Vec::new()],
             spawn_timer: [0.0; 2],
             ai_occupied_cache: HashSet::new(),
-            blue_flow: [
-                FactionFlowState::new(),
-                FactionFlowState::new(),
-                FactionFlowState::new(),
-            ],
-            red_flow: [
-                FactionFlowState::new(),
-                FactionFlowState::new(),
-                FactionFlowState::new(),
-            ],
+            blue_flow: FactionFlowState::new(),
+            red_flow: FactionFlowState::new(),
             macro_objectives: [Vec::new(), Vec::new()],
             objective_timer: 0.0,
             authority: 0.0,
@@ -149,6 +145,10 @@ impl Game {
             particle.update(dt);
         }
         self.particles.retain(|p| !p.finished);
+
+        for sheep in &mut self.sheep {
+            sheep.animation.update(dt);
+        }
 
         for proj in &mut self.projectiles {
             proj.update(dt as f32);
@@ -223,10 +223,20 @@ impl Game {
         self.resolve_collisions();
         self.update_movement_anims(&old_positions);
         self.tick_authority();
+        self.tick_sheep(dt);
 
         // Remove dead units from the recruited set
         let units = &self.units;
         self.recruited
             .retain(|id| units.iter().any(|u| u.alive && u.id == *id));
+    }
+
+    fn tick_sheep(&mut self, dt: f32) {
+        // Borrow split: take sheep out, pass units and grid by reference
+        let mut sheep = std::mem::take(&mut self.sheep);
+        for s in &mut sheep {
+            s.update(dt, &self.units, &self.grid);
+        }
+        self.sheep = sheep;
     }
 }
