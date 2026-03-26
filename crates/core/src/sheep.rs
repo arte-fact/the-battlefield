@@ -11,24 +11,40 @@ pub const SHEEP_FLEE_RADIUS: f32 = TILE_SIZE * 3.0;
 /// Movement speed when fleeing (pixels/sec).
 pub const SHEEP_FLEE_SPEED: f32 = 120.0;
 /// Collision radius for terrain checks.
-pub const SHEEP_RADIUS: f32 = 16.0;
+pub const SHEEP_RADIUS: f32 = 24.0;
+/// Speed when walking back to home zone (pixels/sec).
+const SHEEP_RETURN_SPEED: f32 = 40.0;
+/// Distance threshold to consider "back home".
+const SHEEP_HOME_THRESHOLD: f32 = TILE_SIZE * 1.5;
+/// Wander speed (pixels/sec) — slow amble within the pasture.
+const SHEEP_WANDER_SPEED: f32 = 30.0;
+/// Max wander distance from home (pixels).
+const SHEEP_WANDER_RADIUS: f32 = TILE_SIZE * 2.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SheepState {
     Idle,
     Grazing,
     Fleeing,
+    /// Walking back toward home position after being pushed away.
+    Returning,
+    /// Ambling to a random nearby point within the pasture.
+    Wandering,
 }
 
 pub struct Sheep {
     pub x: f32,
     pub y: f32,
+    /// Home position — sheep return here after being pushed away.
+    pub home_x: f32,
+    pub home_y: f32,
     pub facing: Facing,
     pub state: SheepState,
     pub animation: AnimationState,
     pub state_timer: f32,
     pub vel_x: f32,
     pub vel_y: f32,
+    wander_target: (f32, f32),
     rng_state: u32,
 }
 
@@ -37,12 +53,15 @@ impl Sheep {
         let mut s = Self {
             x,
             y,
+            home_x: x,
+            home_y: y,
             facing: Facing::Right,
             state: SheepState::Idle,
             animation: AnimationState::new(SHEEP_IDLE_FRAMES, 8.0),
             state_timer: 0.0,
             vel_x: 0.0,
             vel_y: 0.0,
+            wander_target: (x, y),
             rng_state: if seed == 0 { 1 } else { seed },
         };
         // Randomize initial timer so sheep don't all transition at once
@@ -71,7 +90,8 @@ impl Sheep {
         let (frames, fps) = match state {
             SheepState::Idle => (SHEEP_IDLE_FRAMES, 8.0),
             SheepState::Grazing => (SHEEP_GRASS_FRAMES, 10.0),
-            SheepState::Fleeing => (SHEEP_MOVE_FRAMES, 12.0),
+            SheepState::Fleeing | SheepState::Returning => (SHEEP_MOVE_FRAMES, 12.0),
+            SheepState::Wandering => (SHEEP_MOVE_FRAMES, 6.0),
         };
         self.animation = AnimationState::new(frames, fps);
     }
@@ -81,7 +101,9 @@ impl Sheep {
         match self.state {
             SheepState::Idle => SHEEP_IDLE_FRAMES,
             SheepState::Grazing => SHEEP_GRASS_FRAMES,
-            SheepState::Fleeing => SHEEP_MOVE_FRAMES,
+            SheepState::Fleeing | SheepState::Returning | SheepState::Wandering => {
+                SHEEP_MOVE_FRAMES
+            }
         }
     }
 
@@ -89,9 +111,20 @@ impl Sheep {
     pub fn sprite_index(&self) -> usize {
         match self.state {
             SheepState::Idle => 0,
-            SheepState::Fleeing => 1,
+            SheepState::Fleeing | SheepState::Returning | SheepState::Wandering => 1,
             SheepState::Grazing => 2,
         }
+    }
+
+    /// Pick a random point near home and start walking to it.
+    fn start_wander(&mut self) {
+        let angle = self.rand_f32() * std::f32::consts::TAU;
+        let dist = self.rand_range(TILE_SIZE, SHEEP_WANDER_RADIUS);
+        self.wander_target = (
+            self.home_x + angle.cos() * dist,
+            self.home_y + angle.sin() * dist,
+        );
+        self.set_state(SheepState::Wandering);
     }
 
     pub fn update(&mut self, dt: f32, units: &[Unit], grid: &Grid) {
@@ -127,19 +160,17 @@ impl Sheep {
 
         match self.state {
             SheepState::Fleeing => {
-                // Move away
+                // Move away from threat
                 let new_x = self.x + self.vel_x * dt;
                 let new_y = self.y + self.vel_y * dt;
                 if grid.is_circle_passable(new_x, new_y, SHEEP_RADIUS) {
                     self.x = new_x;
                     self.y = new_y;
                 } else {
-                    // Hit impassable terrain — stop fleeing
                     self.vel_x = 0.0;
                     self.vel_y = 0.0;
                 }
 
-                // Update facing
                 if self.vel_x > 0.5 {
                     self.facing = Facing::Right;
                 } else if self.vel_x < -0.5 {
@@ -150,22 +181,114 @@ impl Sheep {
                 if self.state_timer <= 0.0 {
                     self.vel_x = 0.0;
                     self.vel_y = 0.0;
+                    // After fleeing, walk back home if far enough away
+                    let home_dx = self.home_x - self.x;
+                    let home_dy = self.home_y - self.y;
+                    let home_dist_sq = home_dx * home_dx + home_dy * home_dy;
+                    if home_dist_sq > SHEEP_HOME_THRESHOLD * SHEEP_HOME_THRESHOLD {
+                        self.set_state(SheepState::Returning);
+                    } else {
+                        self.set_state(SheepState::Idle);
+                        self.state_timer = self.rand_range(2.0, 4.0);
+                    }
+                }
+            }
+            SheepState::Returning => {
+                // Walk toward home position
+                let home_dx = self.home_x - self.x;
+                let home_dy = self.home_y - self.y;
+                let home_dist_sq = home_dx * home_dx + home_dy * home_dy;
+
+                if home_dist_sq <= SHEEP_HOME_THRESHOLD * SHEEP_HOME_THRESHOLD {
+                    // Close enough — stop and idle
+                    self.vel_x = 0.0;
+                    self.vel_y = 0.0;
                     self.set_state(SheepState::Idle);
                     self.state_timer = self.rand_range(2.0, 4.0);
+                } else {
+                    let dist = home_dist_sq.sqrt();
+                    self.vel_x = (home_dx / dist) * SHEEP_RETURN_SPEED;
+                    self.vel_y = (home_dy / dist) * SHEEP_RETURN_SPEED;
+
+                    let new_x = self.x + self.vel_x * dt;
+                    let new_y = self.y + self.vel_y * dt;
+                    if grid.is_circle_passable(new_x, new_y, SHEEP_RADIUS) {
+                        self.x = new_x;
+                        self.y = new_y;
+                    } else {
+                        // Can't path home — just idle where we are
+                        self.vel_x = 0.0;
+                        self.vel_y = 0.0;
+                        self.set_state(SheepState::Idle);
+                        self.state_timer = self.rand_range(2.0, 4.0);
+                    }
+
+                    if self.vel_x > 0.5 {
+                        self.facing = Facing::Right;
+                    } else if self.vel_x < -0.5 {
+                        self.facing = Facing::Left;
+                    }
+                }
+            }
+            SheepState::Wandering => {
+                // Amble toward wander target
+                let dx = self.wander_target.0 - self.x;
+                let dy = self.wander_target.1 - self.y;
+                let dist_sq = dx * dx + dy * dy;
+
+                if dist_sq < (SHEEP_RADIUS * SHEEP_RADIUS) {
+                    // Reached target — graze or idle
+                    self.vel_x = 0.0;
+                    self.vel_y = 0.0;
+                    self.set_state(SheepState::Grazing);
+                    self.state_timer = self.rand_range(3.0, 6.0);
+                } else {
+                    let dist = dist_sq.sqrt();
+                    self.vel_x = (dx / dist) * SHEEP_WANDER_SPEED;
+                    self.vel_y = (dy / dist) * SHEEP_WANDER_SPEED;
+
+                    let new_x = self.x + self.vel_x * dt;
+                    let new_y = self.y + self.vel_y * dt;
+                    if grid.is_circle_passable(new_x, new_y, SHEEP_RADIUS) {
+                        self.x = new_x;
+                        self.y = new_y;
+                    } else {
+                        // Blocked — just idle
+                        self.vel_x = 0.0;
+                        self.vel_y = 0.0;
+                        self.set_state(SheepState::Idle);
+                        self.state_timer = self.rand_range(2.0, 4.0);
+                    }
+
+                    if self.vel_x > 0.5 {
+                        self.facing = Facing::Right;
+                    } else if self.vel_x < -0.5 {
+                        self.facing = Facing::Left;
+                    }
                 }
             }
             SheepState::Idle => {
                 self.state_timer -= dt;
                 if self.state_timer <= 0.0 {
-                    self.set_state(SheepState::Grazing);
-                    self.state_timer = self.rand_range(4.0, 8.0);
+                    // 30% chance to wander, 70% chance to graze
+                    if self.rand_f32() < 0.3 {
+                        self.start_wander();
+                    } else {
+                        self.set_state(SheepState::Grazing);
+                        self.state_timer = self.rand_range(4.0, 8.0);
+                    }
                 }
             }
             SheepState::Grazing => {
                 self.state_timer -= dt;
                 if self.state_timer <= 0.0 {
-                    self.set_state(SheepState::Idle);
-                    self.state_timer = self.rand_range(3.0, 6.0);
+                    // 25% chance to wander, 75% chance to idle
+                    if self.rand_f32() < 0.25 {
+                        self.start_wander();
+                    } else {
+                        self.set_state(SheepState::Idle);
+                        self.state_timer = self.rand_range(3.0, 6.0);
+                    }
                 }
             }
         }
@@ -197,11 +320,16 @@ mod tests {
     }
 
     #[test]
-    fn sheep_transitions_idle_to_grazing() {
+    fn sheep_transitions_from_idle() {
         let grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
         let mut sheep = Sheep::new(500.0, 500.0, 42);
         sheep.state_timer = 0.01;
         sheep.update(0.1, &[], &grid);
-        assert_eq!(sheep.state, SheepState::Grazing);
+        // After idle expires, sheep either grazes or wanders
+        assert!(
+            sheep.state == SheepState::Grazing || sheep.state == SheepState::Wandering,
+            "expected Grazing or Wandering, got {:?}",
+            sheep.state
+        );
     }
 }

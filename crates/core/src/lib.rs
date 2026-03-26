@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod asset_manifest;
 pub mod autotile;
 pub mod building;
 pub mod camera;
@@ -8,8 +9,10 @@ pub mod game;
 pub mod grid;
 pub mod mapgen;
 pub mod particle;
+pub mod pawn;
 pub mod player_input;
 pub mod render_util;
+pub mod rendering;
 pub mod sheep;
 pub mod sprite;
 pub mod ui;

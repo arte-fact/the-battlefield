@@ -1,26 +1,160 @@
 use super::assets::{LoadedTextures, UnitTextureKey};
-use crate::renderer::{Canvas2dRenderer, Renderer};
+use crate::renderer::{Canvas2dRenderer, Renderer, TextureId};
 use battlefield_core::animation::TurnAnimator;
-use battlefield_core::building::BuildingKind;
+use battlefield_core::asset_manifest;
 use battlefield_core::game::Game;
-use battlefield_core::grid::{Decoration, TileKind, TILE_SIZE};
-use battlefield_core::render_util;
-use battlefield_core::sheep::SHEEP_FRAME_SIZE;
+use battlefield_core::rendering::{DrawBackend, SpriteInfo, SpriteKey};
 use battlefield_core::sprite::SpriteSheet;
-use battlefield_core::unit::{Facing, Faction, UnitAnim, UnitKind};
-use battlefield_core::zone::ZoneState;
-use wasm_bindgen::prelude::*;
+use battlefield_core::unit::UnitAnim;
 
-/// A drawable entity for Y-sorted rendering.
-enum Drawable {
-    Unit(usize),         // index into game.units
-    Tree(u32, u32),      // (gx, gy)
-    WaterRock(u32, u32), // (gx, gy)
-    BaseBuilding(usize), // index into game.buildings
-    Particle(usize),     // index into game.particles
-    Sheep(usize),        // index into game.sheep
+/// WASM implementation of [`DrawBackend`] wrapping Canvas2D + loaded textures.
+struct WasmDrawBackend<'a> {
+    r: &'a Canvas2dRenderer,
+    loaded: &'a LoadedTextures,
 }
 
+impl WasmDrawBackend<'_> {
+    fn texture_id(&self, key: SpriteKey) -> Option<TextureId> {
+        match key {
+            SpriteKey::Unit {
+                faction,
+                kind,
+                anim,
+            } => self
+                .loaded
+                .unit_textures
+                .get(&UnitTextureKey {
+                    faction,
+                    kind,
+                    anim,
+                })
+                .or_else(|| {
+                    self.loaded.unit_textures.get(&UnitTextureKey {
+                        faction,
+                        kind,
+                        anim: UnitAnim::Idle,
+                    })
+                })
+                .copied(),
+            SpriteKey::Building(idx) => {
+                self.loaded.building_textures.get(idx).map(|&(id, _, _)| id)
+            }
+            SpriteKey::Tower(idx) => self.loaded.tower_textures.get(idx).copied(),
+            SpriteKey::Tree(idx) => self.loaded.tree_textures.get(idx).map(|&(id, _, _)| id),
+            SpriteKey::Rock(idx) => self.loaded.rock_textures.get(idx).copied(),
+            SpriteKey::Bush(idx) => self.loaded.bush_textures.get(idx).map(|&(id, _, _)| id),
+            SpriteKey::WaterRock(idx) => {
+                self.loaded
+                    .water_rock_textures
+                    .get(idx)
+                    .map(|&(id, _, _)| id)
+            }
+            SpriteKey::Particle(idx) => {
+                let filename = asset_manifest::PARTICLE_SPECS.get(idx).map(|s| s.2)?;
+                self.loaded.particle_textures.get(filename).copied()
+            }
+            SpriteKey::Arrow => self.loaded.arrow_texture,
+            SpriteKey::Sheep(idx) => self.loaded.sheep_textures.get(idx).map(|&(id, _, _)| id),
+            SpriteKey::Pawn(idx) => self.loaded.pawn_textures.get(idx).map(|&(id, _, _)| id),
+        }
+    }
+}
+
+impl DrawBackend for WasmDrawBackend<'_> {
+    fn draw_sprite(
+        &mut self,
+        key: SpriteKey,
+        frame: u32,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        flip: bool,
+        alpha: f64,
+    ) {
+        let Some(tex_id) = self.texture_id(key) else {
+            return;
+        };
+        let Some(info) = self.r.texture_info(tex_id) else {
+            return;
+        };
+        let sheet = SpriteSheet {
+            frame_width: info.frame_width,
+            frame_height: info.frame_height,
+            frame_count: info.frame_count,
+        };
+        let (sx, sy, sw, sh) = sheet.frame_src_rect(frame);
+
+        // Use pre-flipped canvas for trees/water rocks (avoids canvas save/restore)
+        if flip {
+            let flipped = match key {
+                SpriteKey::Tree(idx) => self
+                    .loaded
+                    .tree_textures_flipped
+                    .get(idx)
+                    .map(|(c, _, _)| c),
+                SpriteKey::WaterRock(idx) => self
+                    .loaded
+                    .water_rock_textures_flipped
+                    .get(idx)
+                    .map(|(c, _, _)| c),
+                _ => None,
+            };
+            if let Some(canvas) = flipped {
+                if (alpha - 1.0).abs() > 0.001 {
+                    self.r.set_alpha(alpha);
+                }
+                let fw = info.frame_width as f64;
+                let fh = info.frame_height as f64;
+                let sheet_w = info.frame_count as f64 * fw;
+                let flipped_sx = sheet_w - sx - fw;
+                let _ =
+                    self.r
+                        .draw_canvas_region(canvas, flipped_sx, 0.0, fw, fh, x, y, w, h);
+                if (alpha - 1.0).abs() > 0.001 {
+                    self.r.set_alpha(1.0);
+                }
+                return;
+            }
+        }
+
+        let _ = self
+            .r
+            .draw_sprite(tex_id, sx, sy, sw, sh, x, y, w, h, flip, alpha);
+    }
+
+    fn draw_rotated(&mut self, key: SpriteKey, cx: f64, cy: f64, size: f64, angle: f64) {
+        let Some(tex_id) = self.texture_id(key) else {
+            return;
+        };
+        let flip = angle.abs() > std::f64::consts::FRAC_PI_2;
+        let draw_angle = if flip {
+            angle + std::f64::consts::PI
+        } else {
+            angle
+        };
+        self.r.save();
+        let _ = self.r.translate(cx, cy);
+        let _ = self.r.rotate(draw_angle);
+        let half = size / 2.0;
+        let _ =
+            self.r
+                .draw_texture(tex_id, 0.0, 0.0, size, size, -half, -half, size, size);
+        self.r.restore();
+    }
+
+    fn sprite_info(&self, key: SpriteKey) -> Option<SpriteInfo> {
+        let tex_id = self.texture_id(key)?;
+        let info = self.r.texture_info(tex_id)?;
+        Some(SpriteInfo {
+            frame_w: info.frame_width,
+            frame_h: info.frame_height,
+            frame_count: info.frame_count,
+        })
+    }
+}
+
+/// Draw all Y-sorted foreground entities via the shared rendering pipeline.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_foreground(
     r: &Canvas2dRenderer,
@@ -32,404 +166,20 @@ pub(super) fn draw_foreground(
     max_gx: u32,
     max_gy: u32,
     elapsed: f64,
-) -> Result<(), JsValue> {
-    let ts = TILE_SIZE as f64;
+) {
+    let mut backend = WasmDrawBackend { r, loaded };
 
-    // Player position for tree transparency
-    let player_pos = game.player_unit().map(|u| (u.x as f64, u.y as f64));
-
-    // Collect all drawable entities with their Y-sort key (foot position)
-    let mut drawables: Vec<(f64, Drawable)> = Vec::new();
-
-    // Units (hide enemies outside friendly line of sight)
-    for (i, u) in game.units.iter().enumerate() {
-        let alive_or_fading = if animator.is_playing() {
-            animator.is_visually_alive(u.id) || u.death_fade > 0.0
-        } else {
-            u.alive || u.death_fade > 0.0
-        };
-        if !alive_or_fading {
-            continue;
-        }
-        // Hide enemy units on non-visible tiles
-        let (gx, gy) = u.grid_cell();
-        if !render_util::is_visible_to_player(u.faction, gx, gy, &game.visible, game.grid.width) {
-            continue;
-        }
-        drawables.push((u.y as f64 + ts * 0.5, Drawable::Unit(i)));
-    }
-
-    // Trees are up to 4 tiles tall (bottom-anchored), so roots below the viewport
-    // can have visible canopies. Extend scan range downward.
-    let tree_max_gy = (max_gy + 4).min(game.grid.height);
-    for gy in min_gy..tree_max_gy {
-        for gx in min_gx..max_gx {
-            let tile = game.grid.get(gx, gy);
-            let foot_y = ((gy + 1) as f64) * ts;
-            if tile == TileKind::Forest && !loaded.tree_textures.is_empty() {
-                drawables.push((foot_y, Drawable::Tree(gx, gy)));
-            }
-            if game.grid.decoration(gx, gy) == Some(Decoration::WaterRock)
-                && !loaded.water_rock_textures.is_empty()
-            {
-                drawables.push((foot_y, Drawable::WaterRock(gx, gy)));
-            }
-        }
-    }
-
-    // Buildings (base buildings + zone towers)
-
-    for (i, b) in game.buildings.iter().enumerate() {
-        let foot_y = b.grid_y as f64 * ts;
-        drawables.push((foot_y, Drawable::BaseBuilding(i)));
-    }
-
-    // Sheep
-    for (i, s) in game.sheep.iter().enumerate() {
-        drawables.push((s.y as f64 + ts * 0.5, Drawable::Sheep(i)));
-    }
-
-    // Particles
-    for (i, _) in game.particles.iter().enumerate() {
-        drawables.push((
-            game.particles[i].world_y as f64 + ts * 0.5,
-            Drawable::Particle(i),
-        ));
-    }
-
-    // Sort by Y (foot position)
-    drawables.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Draw in Y order
-    for (_, drawable) in &drawables {
-        match drawable {
-            Drawable::Unit(idx) => {
-                draw_unit(r, game, loaded, animator, *idx, elapsed)?;
-            }
-            Drawable::Tree(gx, gy) => {
-                draw_tree(r, loaded, *gx, *gy, elapsed, ts, player_pos)?;
-            }
-            Drawable::WaterRock(gx, gy) => {
-                draw_water_rock(r, loaded, *gx, *gy, elapsed, ts)?;
-            }
-            Drawable::BaseBuilding(idx) => {
-                draw_base_building(r, game, loaded, *idx, ts, player_pos)?;
-            }
-            Drawable::Particle(idx) => {
-                draw_particle(r, game, loaded, *idx)?;
-            }
-            Drawable::Sheep(idx) => {
-                draw_sheep(r, game, loaded, *idx)?;
-            }
-        }
-    }
-
-    // Arrow projectiles (drawn last -- they fly above everything)
-    if let Some(&arrow_tex_id) = loaded.arrow_texture.as_ref() {
-        for proj in &game.projectiles {
-            let flip = proj.angle.abs() > std::f32::consts::FRAC_PI_2;
-            let draw_angle = if flip {
-                (proj.angle as f64) + std::f64::consts::PI
+    battlefield_core::rendering::foreground::draw_foreground(
+        &mut backend,
+        game,
+        (min_gx, min_gy, max_gx, max_gy),
+        elapsed,
+        |u| {
+            if animator.is_playing() {
+                animator.is_visually_alive(u.id) || u.death_fade > 0.0
             } else {
-                proj.angle as f64
-            };
-
-            r.save();
-            r.translate(proj.current_x as f64, proj.current_y as f64)?;
-            r.rotate(draw_angle)?;
-            r.draw_texture(arrow_tex_id, 0.0, 0.0, 64.0, 64.0, -32.0, -32.0, 64.0, 64.0)?;
-            r.restore();
-        }
-    }
-
-    Ok(())
-}
-
-fn draw_unit(
-    r: &Canvas2dRenderer,
-    game: &Game,
-    loaded: &LoadedTextures,
-    _animator: &TurnAnimator,
-    idx: usize,
-    elapsed: f64,
-) -> Result<(), JsValue> {
-    let unit = &game.units[idx];
-    let key = UnitTextureKey {
-        faction: unit.faction,
-        kind: unit.kind,
-        anim: unit.current_anim,
-    };
-
-    let tex_id = match loaded.unit_textures.get(&key) {
-        Some(&id) => id,
-        None => {
-            let fallback_key = UnitTextureKey {
-                faction: unit.faction,
-                kind: unit.kind,
-                anim: UnitAnim::Idle,
-            };
-            match loaded.unit_textures.get(&fallback_key) {
-                Some(&id) => id,
-                None => return Ok(()),
+                u.alive || u.death_fade > 0.0
             }
-        }
-    };
-
-    if let Some(info) = r.texture_info(tex_id) {
-        let sheet = SpriteSheet {
-            frame_width: info.frame_width,
-            frame_height: info.frame_height,
-            frame_count: unit.animation.frame_count,
-        };
-        // Archer idle uses wind wave pattern to sync with trees/bushes
-        let anim_frame = if unit.kind == UnitKind::Archer && unit.current_anim == UnitAnim::Idle {
-            let (gx, gy) = unit.grid_cell();
-            render_util::compute_wave_frame(elapsed, gx, gy, unit.animation.frame_count, 0.15)
-        } else {
-            unit.animation.current_frame
-        };
-        let (sx, sy, sw, sh) = sheet.frame_src_rect(anim_frame);
-        let sprite_size = unit.kind.frame_size() as f64;
-
-        let opacity = render_util::unit_opacity(unit.alive, unit.death_fade, unit.hit_flash);
-
-        let dx = (unit.x as f64) - sprite_size / 2.0;
-        let dy = (unit.y as f64) - sprite_size / 2.0;
-
-        r.draw_sprite(
-            tex_id,
-            sx,
-            sy,
-            sw,
-            sh,
-            dx,
-            dy,
-            sprite_size,
-            sprite_size,
-            unit.facing == Facing::Left,
-            opacity,
-        )?;
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_tree(
-    r: &Canvas2dRenderer,
-    loaded: &LoadedTextures,
-    gx: u32,
-    gy: u32,
-    elapsed: f64,
-    ts: f64,
-    player_pos: Option<(f64, f64)>,
-) -> Result<(), JsValue> {
-    let variant_idx = render_util::variant_index(gx, gy, loaded.tree_textures.len(), 31, 17);
-    let (tex_id, frame_w, frame_h) = loaded.tree_textures[variant_idx];
-
-    if let Some(info) = r.texture_info(tex_id) {
-        let fw = frame_w as f64;
-        let fh = frame_h as f64;
-
-        let frame = render_util::compute_wave_frame(elapsed, gx, gy, info.frame_count, 0.15);
-        let sx = frame as f64 * fw;
-
-        let draw_w = ts * 3.0;
-        let draw_h = draw_w * (fh / fw);
-        let dx = (gx as f64) * ts + ts / 2.0 - draw_w / 2.0;
-        let dy = (gy as f64) * ts + ts - draw_h;
-
-        // Tree visual center (canopy), not root tile — trees are ~4 tiles tall
-        let tree_cx = (gx as f64) * ts + ts / 2.0;
-        let tree_cy = (gy as f64) * ts - ts * 1.0;
-
-        // Semi-transparent when near the player to avoid hiding them
-        let alpha = render_util::tree_alpha(tree_cx, tree_cy, player_pos, ts);
-
-        if (alpha - 1.0).abs() > 0.001 {
-            r.set_alpha(alpha);
-        }
-
-        if render_util::tile_flip(gx, gy) {
-            if let Some((flipped, _, _)) = loaded.tree_textures_flipped.get(variant_idx) {
-                let sheet_w = info.frame_count as f64 * fw;
-                let flipped_sx = sheet_w - sx - fw;
-                r.draw_canvas_region(flipped, flipped_sx, 0.0, fw, fh, dx, dy, draw_w, draw_h)?;
-            }
-        } else {
-            r.draw_texture(tex_id, sx, 0.0, fw, fh, dx, dy, draw_w, draw_h)?;
-        }
-
-        if (alpha - 1.0).abs() > 0.001 {
-            r.set_alpha(1.0);
-        }
-    }
-    Ok(())
-}
-
-fn draw_water_rock(
-    r: &Canvas2dRenderer,
-    loaded: &LoadedTextures,
-    gx: u32,
-    gy: u32,
-    elapsed: f64,
-    ts: f64,
-) -> Result<(), JsValue> {
-    let variant_idx = render_util::variant_index(gx, gy, loaded.water_rock_textures.len(), 37, 19);
-    let (tex_id, frame_w, frame_h) = loaded.water_rock_textures[variant_idx];
-
-    if let Some(info) = r.texture_info(tex_id) {
-        let fw = frame_w as f64;
-        let fh = frame_h as f64;
-
-        let frame = render_util::compute_wave_frame(elapsed, gx, gy, info.frame_count, 0.2);
-        let sx = frame as f64 * fw;
-
-        let dx = (gx as f64) * ts;
-        let dy = (gy as f64) * ts;
-
-        if render_util::tile_flip(gx, gy) {
-            if let Some((flipped, _, _)) = loaded.water_rock_textures_flipped.get(variant_idx) {
-                let sheet_w = info.frame_count as f64 * fw;
-                let flipped_sx = sheet_w - sx - fw;
-                r.draw_canvas_region(flipped, flipped_sx, 0.0, fw, fh, dx, dy, ts, ts)?;
-            }
-        } else {
-            r.draw_texture(tex_id, sx, 0.0, fw, fh, dx, dy, ts, ts)?;
-        }
-    }
-    Ok(())
-}
-
-fn draw_base_building(
-    r: &Canvas2dRenderer,
-    game: &Game,
-    loaded: &LoadedTextures,
-    idx: usize,
-    ts: f64,
-    player_pos: Option<(f64, f64)>,
-) -> Result<(), JsValue> {
-    let b = &game.buildings[idx];
-    let (sprite_w, sprite_h) = b.kind.sprite_size();
-    let anchor_x = (b.grid_x as f64) * ts + ts / 2.0;
-    let anchor_y = (b.grid_y as f64) * ts + ts;
-
-    // Fade when player is behind the building
-    let bldg_cx = anchor_x;
-    let bldg_cy = anchor_y - sprite_h as f64 * 0.5;
-    let proximity_alpha = render_util::tree_alpha(bldg_cx, bldg_cy, player_pos, ts);
-
-    // Zone-linked towers use tower_textures (neutral/blue/red) with alpha modulation
-    if let Some(zid) = b.zone_id {
-        if loaded.tower_textures.is_empty() {
-            return Ok(());
-        }
-        let zone = &game.zone_manager.zones[zid as usize];
-        let color_idx = match zone.state {
-            ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => 1,
-            ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => 2,
-            _ => 0,
-        };
-        let (sw, sh) = (sprite_w as f64, sprite_h as f64);
-        let zone_alpha = match zone.state {
-            ZoneState::Capturing(_) => {
-                (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0)
-            }
-            _ => 1.0,
-        };
-        let alpha = proximity_alpha * zone_alpha;
-        if (alpha - 1.0).abs() > 0.001 {
-            r.set_alpha(alpha);
-        }
-        let tex_id = loaded.tower_textures[color_idx];
-        r.draw_texture(tex_id, 0.0, 0.0, sw, sh, anchor_x - sw / 2.0, anchor_y - sh, sw, sh)?;
-        if (alpha - 1.0).abs() > 0.001 {
-            r.set_alpha(1.0);
-        }
-        return Ok(());
-    }
-
-    if loaded.building_textures.is_empty() {
-        return Ok(());
-    }
-    let kind_index = match b.kind {
-        BuildingKind::Barracks => 0,
-        BuildingKind::Archery => 1,
-        BuildingKind::Monastery => 2,
-        BuildingKind::Castle => 3,
-        BuildingKind::DefenseTower => 4,
-        BuildingKind::House => 5,
-    };
-    let faction_index = match b.faction {
-        Faction::Blue => 0,
-        _ => 1,
-    };
-    let tex_idx = kind_index * 2 + faction_index;
-    if tex_idx < loaded.building_textures.len() {
-        let (tex_id, _sprite_w, _sprite_h) = loaded.building_textures[tex_idx];
-        let (sw, sh) = (sprite_w as f64, sprite_h as f64);
-        if (proximity_alpha - 1.0).abs() > 0.001 {
-            r.set_alpha(proximity_alpha);
-        }
-        r.draw_texture(tex_id, 0.0, 0.0, sw, sh, anchor_x - sw / 2.0, anchor_y - sh, sw, sh)?;
-        if (proximity_alpha - 1.0).abs() > 0.001 {
-            r.set_alpha(1.0);
-        }
-    }
-    Ok(())
-}
-
-fn draw_particle(
-    r: &Canvas2dRenderer,
-    game: &Game,
-    loaded: &LoadedTextures,
-    idx: usize,
-) -> Result<(), JsValue> {
-    let particle = &game.particles[idx];
-    let filename = particle.kind.asset_filename();
-    let tex_id = match loaded.particle_textures.get(filename) {
-        Some(&id) => id,
-        None => return Ok(()),
-    };
-
-    if let Some(info) = r.texture_info(tex_id) {
-        let sheet = SpriteSheet {
-            frame_width: info.frame_width,
-            frame_height: info.frame_height,
-            frame_count: particle.animation.frame_count,
-        };
-        let (sx, sy, sw, sh) = sheet.frame_src_rect(particle.animation.current_frame);
-        let size = particle.kind.frame_size() as f64;
-        let dx = (particle.world_x as f64) - size / 2.0;
-        let dy = (particle.world_y as f64) - size / 2.0;
-
-        r.draw_sprite(tex_id, sx, sy, sw, sh, dx, dy, size, size, false, 1.0)?;
-    }
-    Ok(())
-}
-
-fn draw_sheep(
-    r: &Canvas2dRenderer,
-    game: &Game,
-    loaded: &LoadedTextures,
-    idx: usize,
-) -> Result<(), JsValue> {
-    let sheep = &game.sheep[idx];
-    let sprite_idx = sheep.sprite_index();
-    if sprite_idx >= loaded.sheep_textures.len() {
-        return Ok(());
-    }
-    let (tex_id, _fw, _fh) = loaded.sheep_textures[sprite_idx];
-    let fs = SHEEP_FRAME_SIZE;
-    let sheet = SpriteSheet {
-        frame_width: fs,
-        frame_height: fs,
-        frame_count: sheep.anim_frame_count(),
-    };
-    let (sx, sy, sw, sh) = sheet.frame_src_rect(sheep.animation.current_frame);
-    let size = fs as f64;
-    let dx = (sheep.x as f64) - size / 2.0;
-    let dy = (sheep.y as f64) - size / 2.0;
-    let flip = sheep.facing == Facing::Left;
-    r.draw_sprite(tex_id, sx, sy, sw, sh, dx, dy, size, size, flip, 1.0)?;
-    Ok(())
+        },
+    );
 }

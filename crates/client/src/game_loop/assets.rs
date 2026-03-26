@@ -1,7 +1,6 @@
 use super::LoopState;
 use crate::renderer::load_image;
 use crate::renderer::TextureId;
-use battlefield_core::building::BuildingKind;
 use battlefield_core::render_util;
 use battlefield_core::unit::{Faction, UnitAnim, UnitKind};
 use std::cell::RefCell;
@@ -49,7 +48,7 @@ pub(super) struct LoadedTextures {
     /// Tower building textures: index 0=Black(neutral), 1=Blue, 2=Red (128x256 each)
     pub(super) tower_textures: Vec<TextureId>,
     /// Base building textures: indexed by kind_index * 2 + faction_index
-    /// kind: 0=Barracks, 1=Archery, 2=Monastery, 3=Castle, 4=DefenseTower, 5=House; faction: 0=Blue, 1=Red
+    /// kind: 0=Barracks, 1=Archery, 2=Monastery, 3=Castle, 4=DefenseTower, 5=House1, 6=House2, 7=House3; faction: 0=Blue, 1=Red
     pub(super) building_textures: Vec<(TextureId, u32, u32)>,
     /// UI 9-slice panel background (SpecialPaper.png, 320x320, 3x3 grid of 106px cells)
     pub(super) ui_special_paper: Option<TextureId>,
@@ -71,6 +70,8 @@ pub(super) struct LoadedTextures {
     pub(super) ui_big_ribbons: Option<TextureId>,
     /// Sheep sprite sheets: Idle(6), Move(4), Grass(12) at 128x128
     pub(super) sheep_textures: Vec<(TextureId, u32, u32)>,
+    /// Pawn sprite sheets: indexed by faction_offset + sprite_index (5 per faction, 10 total)
+    pub(super) pawn_textures: Vec<(TextureId, u32, u32)>,
 }
 
 impl LoadedTextures {
@@ -104,6 +105,7 @@ impl LoadedTextures {
             ui_bar_fill: None,
             ui_big_ribbons: None,
             sheep_textures: Vec::new(),
+            pawn_textures: Vec::new(),
         }
     }
 }
@@ -345,25 +347,12 @@ pub(super) async fn load_textures(
         }
     }
 
-    // Load base production building sprites (3 kinds x 2 factions)
+    // Load base building sprites from shared manifest
     {
-        let kinds = [
-            (BuildingKind::Barracks, 192u32, 256u32),
-            (BuildingKind::Archery, 192, 256),
-            (BuildingKind::Monastery, 192, 320),
-            (BuildingKind::Castle, 320, 256),
-            (BuildingKind::DefenseTower, 128, 256),
-            (BuildingKind::House, 128, 192),
-        ];
-        let faction_folders = ["Blue Buildings", "Red Buildings"];
-        for &(kind, sw, sh) in &kinds {
-            for faction_folder in &faction_folders {
-                let url = format!(
-                    "{}/Buildings/{}/{}",
-                    ASSET_BASE,
-                    faction_folder,
-                    kind.asset_filename()
-                );
+        use battlefield_core::asset_manifest::{BUILDING_FACTION_FOLDERS, BUILDING_SPECS};
+        for &(sw, sh, filename) in BUILDING_SPECS {
+            for faction_folder in BUILDING_FACTION_FOLDERS {
+                let url = format!("{}/Buildings/{}/{}", ASSET_BASE, faction_folder, filename);
                 let tex_id = load_texture(state, &url, sw, sh, 1).await?;
                 loaded.borrow_mut().building_textures.push((tex_id, sw, sh));
             }
@@ -408,6 +397,23 @@ pub(super) async fn load_textures(
             let url = format!("{}/Terrain/Resources/Meat/Sheep/{}", ASSET_BASE, filename);
             if let Ok(tex_id) = load_texture(state, &url, 128, 128, frame_count).await {
                 loaded.borrow_mut().sheep_textures.push((tex_id, 128, 128));
+            }
+        }
+    }
+
+    // Pawn sprites (5 animations × 2 factions = 10 textures, 192×192 frames)
+    {
+        use battlefield_core::asset_manifest::PAWN_SPECS;
+        let faction_folders = ["Blue Units", "Red Units"];
+        for folder in &faction_folders {
+            for &(filename, frame_count) in PAWN_SPECS {
+                let url = format!("{}/Units/{}/Pawn/{}", ASSET_BASE, folder, filename);
+                if let Ok(tex_id) = load_texture(state, &url, 192, 192, frame_count).await {
+                    loaded
+                        .borrow_mut()
+                        .pawn_textures
+                        .push((tex_id, 192, 192));
+                }
             }
         }
     }

@@ -142,7 +142,7 @@ pub(super) fn render_frame(
         max_gx,
         max_gy,
         state.elapsed,
-    )?;
+    );
 
     // 7. HP bars and order labels (drawn on top of units)
     draw_unit_bars(r, game, &state.animator)?;

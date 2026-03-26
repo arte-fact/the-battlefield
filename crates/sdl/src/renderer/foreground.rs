@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
+use battlefield_core::asset_manifest;
 use battlefield_core::camera::Camera;
 use battlefield_core::game::{Game, ORDER_FLASH_DURATION};
 use battlefield_core::grid::{Decoration, TileKind, TILE_SIZE};
@@ -228,6 +229,11 @@ pub(super) fn draw_foreground(
         drawables.push((s.y as f64 + ts_f64 * 0.5, Drawable::Sheep(i)));
     }
 
+    // Pawns
+    for (i, p) in game.pawns.iter().enumerate() {
+        drawables.push((p.y as f64 + ts_f64 * 0.5, Drawable::Pawn(i)));
+    }
+
     // Particles
     for (i, p) in game.particles.iter().enumerate() {
         if !p.finished {
@@ -256,6 +262,9 @@ pub(super) fn draw_foreground(
             }
             Drawable::Sheep(idx) => {
                 draw_sheep(canvas, game, assets, cam, ts, *idx);
+            }
+            Drawable::Pawn(idx) => {
+                draw_pawn(canvas, game, assets, cam, ts, *idx);
             }
         }
     }
@@ -449,8 +458,9 @@ fn draw_base_building(
         return;
     }
 
-    let key = (building.faction, building.kind);
-    if let Some((ref mut tex, _sw, _sh)) = assets.building_textures.get_mut(&key) {
+    let tex_idx =
+        asset_manifest::building_tex_index(building.kind, building.house_variant, building.faction);
+    if let Some(Some((ref mut tex, _sw, _sh))) = assets.building_textures.get_mut(tex_idx) {
         let alpha = (proximity_alpha * 255.0) as u8;
         tex.set_alpha_mod(alpha);
         let _ = canvas.copy(tex, None, dst);
@@ -525,6 +535,39 @@ fn draw_sheep(
     );
     let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
     let flip = sheep.facing == Facing::Left;
+    let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
+}
+
+fn draw_pawn(
+    canvas: &mut Canvas<Window>,
+    game: &Game,
+    assets: &mut Assets,
+    cam: &Camera,
+    ts: f32,
+    idx: usize,
+) {
+    let pawn = &game.pawns[idx];
+    let faction_offset = match pawn.faction {
+        Faction::Blue => 0,
+        Faction::Red => asset_manifest::PAWN_SPECS.len(),
+    };
+    let tex_idx = faction_offset + pawn.sprite_index();
+    if tex_idx >= assets.pawn_textures.len() {
+        return;
+    }
+    let (ref tex, fw, _fh, _fc) = assets.pawn_textures[tex_idx];
+    let sheet = SpriteSheet {
+        frame_width: fw,
+        frame_height: fw,
+        frame_count: pawn.anim_frame_count(),
+    };
+    let (sx, sy, sw, sh) = sheet.frame_src_rect(pawn.animation.current_frame);
+    let draw_size = ts * (fw as f32 / TILE_SIZE);
+    let (screen_x, screen_y) = world_to_screen(pawn.x, pawn.y, cam);
+    let half = (draw_size / 2.0) as i32;
+    let dst = Rect::new(screen_x - half, screen_y - half, draw_size as u32, draw_size as u32);
+    let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
+    let flip = pawn.facing == Facing::Left;
     let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
 }
 

@@ -137,22 +137,15 @@ impl Game {
                 self.spawn_timer[fi] -= Self::SPAWN_INTERVAL;
 
                 let kind = self.spawn_queue[fi].remove(0);
-                // Spawn at the production building for this unit type
-                let target_bk = building::building_for_unit(kind);
+                // Spawn at the production building that trains this unit kind
                 let (sx, sy) = self
                     .buildings
                     .iter()
-                    .find(|b| b.faction == faction && b.kind == target_bk)
-                    .map(|b| {
-                        // Spawn 1 tile in front of the building (toward battlefield)
-                        match faction {
-                            Faction::Blue => (b.grid_x, b.grid_y + 1),
-                            _ => (b.grid_x, b.grid_y.saturating_sub(1)),
-                        }
-                    })
-                    .unwrap_or_else(|| match faction {
-                        Faction::Blue => self.zone_manager.blue_base,
-                        _ => self.zone_manager.red_base,
+                    .find(|b| b.faction == faction && b.produces == Some(kind))
+                    .map(|b| (b.grid_x, b.grid_y))
+                    .unwrap_or(match faction {
+                        Faction::Blue => self.blue_gather,
+                        _ => self.red_gather,
                     });
                 let id = self.spawn_unit(kind, faction, sx, sy, false);
                 // Set rally hold — unit waits at base until wave is complete
@@ -186,19 +179,18 @@ impl Game {
         // Create capture zones from BSP layout
         self.zone_manager = ZoneManager::create_from_layout(&layout);
 
-        // Place production buildings at both bases
-        let mut buildings = building::base_buildings(Faction::Blue, blue_cx, blue_cy);
-        buildings.extend(building::base_buildings(Faction::Red, red_cx, red_cy));
-        // Place defensive buildings (castle, towers, houses) at both bases
-        buildings.extend(building::base_defense_buildings(
-            Faction::Blue,
-            blue_cx,
-            blue_cy,
-        ));
-        buildings.extend(building::base_defense_buildings(
+        // Store gather points for unit rallying
+        self.blue_gather = layout.blue_gather;
+        self.red_gather = layout.red_gather;
+
+        // Procedurally generate all base buildings (castle, towers, production, houses)
+        let mut buildings =
+            building::generate_base_buildings(Faction::Blue, blue_cx, blue_cy, seed);
+        buildings.extend(building::generate_base_buildings(
             Faction::Red,
             red_cx,
             red_cy,
+            seed.wrapping_add(0xBEEF),
         ));
         // Place defense towers at capture zone centers
         for zone in &self.zone_manager.zones {
@@ -209,6 +201,8 @@ impl Game {
                 grid_y: zone.center_gy,
                 attack_cooldown: 0.0,
                 zone_id: Some(zone.id),
+                produces: None,
+                house_variant: 0,
             });
         }
         for b in &buildings {
@@ -222,9 +216,20 @@ impl Game {
         }
         self.buildings = buildings;
 
-        // Spawn ambient sheep at each base
-        self.spawn_base_sheep(blue_cx, blue_cy, seed);
-        self.spawn_base_sheep(red_cx, red_cy, seed.wrapping_add(7919));
+        // Spawn ambient sheep in rear pasture of each base
+        self.spawn_base_sheep(blue_cx, blue_cy, 1, seed);
+        self.spawn_base_sheep(red_cx, red_cy, -1, seed.wrapping_add(7919));
+
+        // Spawn one pawn worker per house
+        let mut pawn_seed = seed.wrapping_add(0xCAFE);
+        for b in &self.buildings {
+            if b.kind == building::BuildingKind::House {
+                let (wx, wy) = grid::grid_to_world(b.grid_x, b.grid_y);
+                pawn_seed = pawn_seed.wrapping_mul(1103515245).wrapping_add(12345);
+                self.pawns
+                    .push(Pawn::new(wx, wy, b.faction, pawn_seed));
+            }
+        }
 
         // Spawn player at base center
         self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_cx, blue_cy, true);
@@ -255,19 +260,27 @@ impl Game {
         self.compute_fov();
     }
 
-    /// Spawn a small flock of sheep around a base center.
-    fn spawn_base_sheep(&mut self, cx: u32, cy: u32, base_seed: u32) {
-        // Offsets relative to base center for sheep positions
-        let offsets: &[(i32, i32)] = &[(-5, -2), (3, -1), (-2, 3), (6, 1)];
-        for (i, &(dx, dy)) in offsets.iter().enumerate() {
+    /// Spawn 10 sheep at random positions in the rear pasture (behind the houses).
+    /// `fs` = front sign: 1 for Blue (front=+Y), -1 for Red (front=-Y).
+    fn spawn_base_sheep(&mut self, cx: u32, cy: u32, fs: i32, base_seed: u32) {
+        let mut seed = if base_seed == 0 { 1 } else { base_seed };
+        let mut next = || -> u32 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for _ in 0..10 {
+            // Random position in rear pasture: dx ∈ [-4,4], distance 11–14 behind center
+            let dx = (next() % 9) as i32 - 4;
+            let rear_dist = (next() % 4) as i32 + 11; // 11, 12, 13, or 14
             let gx = (cx as i32 + dx).max(0) as u32;
-            let gy = (cy as i32 + dy).max(0) as u32;
+            let gy = (cy as i32 - rear_dist * fs).max(0) as u32;
             if !self.grid.is_passable(gx, gy) {
                 continue;
             }
             let (wx, wy) = grid::grid_to_world(gx, gy);
-            let seed = base_seed.wrapping_mul(31).wrapping_add(i as u32 * 1013);
-            self.sheep.push(Sheep::new(wx, wy, seed));
+            self.sheep.push(Sheep::new(wx, wy, next()));
         }
     }
 }
@@ -284,6 +297,8 @@ mod tests {
             blue_base: (21, 21),
             red_base: (138, 138),
             zone_centers: vec![(50, 50), (80, 80), (110, 110)],
+            blue_gather: (21, 21),
+            red_gather: (138, 138),
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout);
         let z0gx = game.zone_manager.zones[0].center_gx;

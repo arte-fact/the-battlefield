@@ -17,6 +17,7 @@ use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::mapgen;
 use crate::particle::{Particle, Projectile};
 use crate::player_input::PlayerInput;
+use crate::pawn::Pawn;
 use crate::sheep::Sheep;
 use crate::unit::{
     Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS,
@@ -52,10 +53,16 @@ pub struct Game {
     pub blue_objective: (f32, f32),
     /// Strategic objective for Red faction (world-space coords of Blue spawn).
     pub red_objective: (f32, f32),
+    /// Rally point for Blue faction (grid coords, front-center of base).
+    pub blue_gather: (u32, u32),
+    /// Rally point for Red faction (grid coords, front-center of base).
+    pub red_gather: (u32, u32),
     /// Production buildings at faction bases.
     pub buildings: Vec<BaseBuilding>,
     /// Ambient sheep at faction bases.
     pub sheep: Vec<Sheep>,
+    /// Pawn workers at faction bases (one per house).
+    pub pawns: Vec<Pawn>,
     /// Capture zone manager.
     pub zone_manager: ZoneManager,
     /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
@@ -105,8 +112,11 @@ impl Game {
             player_aim_dir: 0.0,
             blue_objective: (0.0, 0.0),
             red_objective: (0.0, 0.0),
+            blue_gather: (0, 0),
+            red_gather: (0, 0),
             buildings: Vec::new(),
             sheep: Vec::new(),
+            pawns: Vec::new(),
             zone_manager: ZoneManager::empty(),
             winner: None,
             spawn_queue: [Vec::new(), Vec::new()],
@@ -148,6 +158,9 @@ impl Game {
 
         for sheep in &mut self.sheep {
             sheep.animation.update(dt);
+        }
+        for pawn in &mut self.pawns {
+            pawn.animation.update(dt);
         }
 
         for proj in &mut self.projectiles {
@@ -224,6 +237,7 @@ impl Game {
         self.update_movement_anims(&old_positions);
         self.tick_authority();
         self.tick_sheep(dt);
+        self.tick_pawns(dt);
 
         // Remove dead units from the recruited set
         let units = &self.units;
@@ -232,11 +246,18 @@ impl Game {
     }
 
     fn tick_sheep(&mut self, dt: f32) {
-        // Borrow split: take sheep out, pass units and grid by reference
         let mut sheep = std::mem::take(&mut self.sheep);
         for s in &mut sheep {
             s.update(dt, &self.units, &self.grid);
         }
         self.sheep = sheep;
+    }
+
+    fn tick_pawns(&mut self, dt: f32) {
+        let mut pawns = std::mem::take(&mut self.pawns);
+        for p in &mut pawns {
+            p.update(dt, &self.grid);
+        }
+        self.pawns = pawns;
     }
 }

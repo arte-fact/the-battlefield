@@ -1,4 +1,4 @@
-use battlefield_core::building::BuildingKind;
+use battlefield_core::asset_manifest;
 use battlefield_core::particle::ParticleKind;
 use battlefield_core::render_util;
 use battlefield_core::unit::{Faction, UnitAnim, UnitKind};
@@ -11,13 +11,14 @@ use std::collections::HashMap;
 use super::text::TextRenderer;
 use super::UnitTexKey;
 
-const ASSET_BASE: &str = "assets/Tiny Swords (Free Pack)";
+const ASSET_BASE: &str = asset_manifest::ASSET_BASE;
 
 /// All loaded textures for rendering.
 pub struct Assets<'a> {
     pub(super) unit_textures: HashMap<UnitTexKey, (Texture<'a>, u32, u32, u32)>,
     pub(super) particle_textures: HashMap<ParticleKind, Texture<'a>>,
-    pub(super) building_textures: HashMap<(Faction, BuildingKind), (Texture<'a>, u32, u32)>,
+    /// Indexed by `asset_manifest::building_tex_index()` (kind_index * 2 + faction_index).
+    pub(super) building_textures: Vec<Option<(Texture<'a>, u32, u32)>>,
     pub(super) arrow_texture: Option<Texture<'a>>,
     // Terrain
     pub(super) tilemap_texture: Option<Texture<'a>>,
@@ -50,6 +51,8 @@ pub struct Assets<'a> {
     pub fog_texture: Option<Texture<'a>>,
     // Sheep: (texture, frame_count) for Idle, Move, Grass
     pub(super) sheep_textures: Vec<(Texture<'a>, u32)>,
+    // Pawn: (texture, frame_w, frame_h, frame_count) — 5 per faction × 2 factions = 10
+    pub(super) pawn_textures: Vec<(Texture<'a>, u32, u32, u32)>,
     // Text rendering
     pub text: TextRenderer,
 }
@@ -217,78 +220,28 @@ impl<'a> Assets<'a> {
     pub fn load(tc: &'a TextureCreator<WindowContext>) -> Self {
         let mut unit_textures = HashMap::new();
         let mut particle_textures = HashMap::new();
-        let mut building_textures = HashMap::new();
         let mut arrow_texture = None;
 
-        // Load unit sprites
+        // Load unit sprites from shared manifest
+        let all_anims = [UnitAnim::Idle, UnitAnim::Run, UnitAnim::Attack, UnitAnim::Attack2];
         for &faction in &[Faction::Blue, Faction::Red] {
             let folder = faction.asset_folder();
-            for &kind in &[
-                UnitKind::Warrior,
-                UnitKind::Archer,
-                UnitKind::Lancer,
-                UnitKind::Monk,
-            ] {
-                let frame_size = kind.frame_size();
-                let anims: &[(UnitAnim, &str, u32)] = match kind {
-                    UnitKind::Warrior => &[
-                        (UnitAnim::Idle, "Warrior_Idle.png", kind.idle_frames()),
-                        (UnitAnim::Run, "Warrior_Run.png", kind.run_frames()),
-                        (
-                            UnitAnim::Attack,
-                            "Warrior_Attack1.png",
-                            kind.attack_frames(),
-                        ),
-                        (
-                            UnitAnim::Attack2,
-                            "Warrior_Attack2.png",
-                            kind.attack_frames(),
-                        ),
-                    ],
-                    UnitKind::Archer => &[
-                        (UnitAnim::Idle, "Archer_Idle.png", kind.idle_frames()),
-                        (UnitAnim::Run, "Archer_Run.png", kind.run_frames()),
-                        (UnitAnim::Attack, "Archer_Shoot.png", kind.attack_frames()),
-                    ],
-                    UnitKind::Lancer => &[
-                        (UnitAnim::Idle, "Lancer_Idle.png", kind.idle_frames()),
-                        (UnitAnim::Run, "Lancer_Run.png", kind.run_frames()),
-                        (
-                            UnitAnim::Attack,
-                            "Lancer_Right_Attack.png",
-                            kind.attack_frames(),
-                        ),
-                    ],
-                    UnitKind::Monk => &[
-                        (UnitAnim::Idle, "Idle.png", kind.idle_frames()),
-                        (UnitAnim::Run, "Run.png", kind.run_frames()),
-                        (UnitAnim::Attack, "Heal.png", kind.attack_frames()),
-                    ],
-                };
-
-                let kind_folder = match kind {
-                    UnitKind::Warrior => "Warrior",
-                    UnitKind::Archer => "Archer",
-                    UnitKind::Lancer => "Lancer",
-                    UnitKind::Monk => "Monk",
-                };
-
-                for &(anim, filename, frames) in anims {
-                    let path = format!("{ASSET_BASE}/Units/{folder}/{kind_folder}/{filename}");
+            for &kind in &[UnitKind::Warrior, UnitKind::Archer, UnitKind::Lancer, UnitKind::Monk] {
+                let kind_folder = asset_manifest::unit_kind_folder(kind);
+                for &anim in &all_anims {
+                    let Some(spec) = asset_manifest::unit_sprite(kind, anim) else {
+                        continue;
+                    };
+                    let path = format!("{ASSET_BASE}/Units/{folder}/{kind_folder}/{}", spec.filename);
                     if let Some(tex) = load_png_texture(tc, &path) {
                         unit_textures.insert(
-                            UnitTexKey {
-                                faction,
-                                kind,
-                                anim,
-                            },
-                            (tex, frame_size, frame_size, frames),
+                            UnitTexKey { faction, kind, anim },
+                            (tex, spec.frame_w, spec.frame_h, spec.frame_count),
                         );
                     } else {
                         log::warn!("Missing texture: {path}");
                     }
                 }
-
                 if kind == UnitKind::Archer && arrow_texture.is_none() {
                     let path = format!("{ASSET_BASE}/Units/{folder}/Archer/Arrow.png");
                     arrow_texture = load_png_texture(tc, &path);
@@ -304,27 +257,17 @@ impl<'a> Assets<'a> {
             }
         }
 
-        // Load building textures
-        for &faction in &[Faction::Blue, Faction::Red] {
-            let color = match faction {
-                Faction::Blue => "Blue",
-                Faction::Red => "Red",
-            };
-            for &bkind in &[
-                BuildingKind::Barracks,
-                BuildingKind::Archery,
-                BuildingKind::Monastery,
-                BuildingKind::Castle,
-                BuildingKind::DefenseTower,
-                BuildingKind::House,
-            ] {
-                let (sw, sh) = bkind.sprite_size();
-                let path = format!(
-                    "{ASSET_BASE}/Buildings/{color} Buildings/{}",
-                    bkind.asset_filename()
-                );
+        // Load building textures from shared manifest (indexed by kind*2 + faction)
+        let total_building_slots = asset_manifest::BUILDING_SPECS.len() * 2;
+        let mut building_textures: Vec<Option<(Texture, u32, u32)>> =
+            (0..total_building_slots).map(|_| None).collect();
+        for (spec_idx, &(sw, sh, filename)) in asset_manifest::BUILDING_SPECS.iter().enumerate() {
+            for (faction_idx, faction_folder) in
+                asset_manifest::BUILDING_FACTION_FOLDERS.iter().enumerate()
+            {
+                let path = format!("{ASSET_BASE}/Buildings/{faction_folder}/{filename}");
                 if let Some(tex) = load_png_texture(tc, &path) {
-                    building_textures.insert((faction, bkind), (tex, sw, sh));
+                    building_textures[spec_idx * 2 + faction_idx] = Some((tex, sw, sh));
                 }
             }
         }
@@ -516,6 +459,25 @@ impl<'a> Assets<'a> {
             }
         }
 
+        // Pawn sprites (5 animations × 2 factions)
+        let mut pawn_textures = Vec::new();
+        {
+            let faction_folders = ["Blue Units", "Red Units"];
+            for folder in &faction_folders {
+                for &(filename, frame_count) in asset_manifest::PAWN_SPECS {
+                    let path = format!("{ASSET_BASE}/Units/{folder}/Pawn/{filename}");
+                    let fc = if frame_count > 0 {
+                        frame_count
+                    } else {
+                        count_frames(&path, 192)
+                    };
+                    if let Some(tex) = load_png_texture(tc, &path) {
+                        pawn_textures.push((tex, 192u32, 192u32, fc));
+                    }
+                }
+            }
+        }
+
         Self {
             unit_textures,
             particle_textures,
@@ -541,6 +503,7 @@ impl<'a> Assets<'a> {
             _ui_swords: ui_swords,
             ui_wood_table,
             sheep_textures,
+            pawn_textures,
             fog_texture: {
                 use battlefield_core::grid::GRID_SIZE;
                 sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "1");

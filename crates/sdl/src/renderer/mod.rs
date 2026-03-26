@@ -56,6 +56,7 @@ enum Drawable {
     BaseBuilding(usize),
     Particle(usize),
     Sheep(usize),
+    Pawn(usize),
 }
 
 // ───────────────────────────────────────────────────────────────────────────

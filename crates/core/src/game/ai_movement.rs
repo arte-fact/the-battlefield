@@ -604,6 +604,8 @@ mod tests {
             blue_base: (21, 21),
             red_base: (138, 138),
             zone_centers: vec![(50, 50), (80, 80), (110, 110)],
+            blue_gather: (21, 21),
+            red_gather: (138, 138),
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout);
         game.blue_objective = grid::grid_to_world(138, 138);

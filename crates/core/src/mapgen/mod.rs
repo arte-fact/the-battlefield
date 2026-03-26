@@ -8,6 +8,10 @@ pub struct MapLayout {
     pub blue_base: (u32, u32),
     pub red_base: (u32, u32),
     pub zone_centers: Vec<(u32, u32)>,
+    /// Rally point for Blue: front-center of Blue base (toward battlefield).
+    pub blue_gather: (u32, u32),
+    /// Rally point for Red: front-center of Red base (toward battlefield).
+    pub red_gather: (u32, u32),
 }
 
 /// A rectangle used during BSP partitioning.
@@ -281,20 +285,20 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
     zone_centers.push(flank1);
     zone_centers.push(flank2);
 
-    // Clear 20x20 rect around each base center
+    // Clear 24×28 rect around each base (wider for flank towers, deeper for rear village)
     clear_rect(
         &mut grid,
-        blue_base.0.saturating_sub(10),
-        blue_base.1.saturating_sub(10),
-        20,
-        20,
+        blue_base.0.saturating_sub(12),
+        blue_base.1.saturating_sub(14),
+        24,
+        28,
     );
     clear_rect(
         &mut grid,
-        red_base.0.saturating_sub(10),
-        red_base.1.saturating_sub(10),
-        20,
-        20,
+        red_base.0.saturating_sub(12),
+        red_base.1.saturating_sub(14),
+        24,
+        28,
     );
 
     // Clear 6-tile radius around each zone center
@@ -307,10 +311,16 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
     // impassable neighbors cleared — ensuring all corridors are at least 3 tiles wide.
     widen_narrow_passages(&mut grid);
 
+    // Gather points: base center (open rally zone where units congregate).
+    let blue_gather = blue_base;
+    let red_gather = red_base;
+
     let layout = MapLayout {
         blue_base,
         red_base,
         zone_centers,
+        blue_gather,
+        red_gather,
     };
 
     (grid, layout)

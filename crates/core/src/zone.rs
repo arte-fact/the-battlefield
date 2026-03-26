@@ -402,6 +402,8 @@ mod tests {
                 (b + 35, b + 93), // flank
                 (b + 93, b + 35), // flank
             ],
+            blue_gather: (b + 5, b + 5),
+            red_gather: (b + PLAYABLE_SIZE - 6, b + PLAYABLE_SIZE - 6),
         }
     }
 
