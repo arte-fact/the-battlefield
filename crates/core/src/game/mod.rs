@@ -255,8 +255,31 @@ impl Game {
 
     fn tick_pawns(&mut self, dt: f32) {
         let mut pawns = std::mem::take(&mut self.pawns);
+        // Collect trees already claimed by pawns (walking to or chopping)
+        let claimed: Vec<(u32, u32)> = pawns.iter().filter_map(|p| p.claimed_tree()).collect();
         for p in &mut pawns {
-            p.update(dt, &self.grid);
+            p.update(dt, &self.grid, &claimed);
+        }
+        // Pawn-to-pawn collision: push overlapping pawns apart
+        let radius = crate::pawn::PAWN_RADIUS;
+        let min_dist = radius * 2.0;
+        let min_dist_sq = min_dist * min_dist;
+        for i in 0..pawns.len() {
+            for j in (i + 1)..pawns.len() {
+                let dx = pawns[j].x - pawns[i].x;
+                let dy = pawns[j].y - pawns[i].y;
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq < min_dist_sq && dist_sq > 0.01 {
+                    let dist = dist_sq.sqrt();
+                    let overlap = (min_dist - dist) * 0.5;
+                    let nx = dx / dist;
+                    let ny = dy / dist;
+                    pawns[i].x -= nx * overlap;
+                    pawns[i].y -= ny * overlap;
+                    pawns[j].x += nx * overlap;
+                    pawns[j].y += ny * overlap;
+                }
+            }
         }
         self.pawns = pawns;
     }

@@ -6,8 +6,10 @@ pub const PAWN_FRAME_SIZE: u32 = 192;
 
 const PAWN_WALK_SPEED: f32 = 60.0;
 const PAWN_CHOP_TIME: f32 = 3.0;
-const PAWN_RADIUS: f32 = 20.0;
-const PAWN_ARRIVE_DIST_SQ: f32 = (TILE_SIZE * 0.5) * (TILE_SIZE * 0.5);
+pub const PAWN_RADIUS: f32 = 20.0;
+const PAWN_ARRIVE_DIST_SQ: f32 = (TILE_SIZE * 0.4) * (TILE_SIZE * 0.4);
+/// How close the pawn walks to the tree edge before chopping.
+const PAWN_CHOP_DIST: f32 = TILE_SIZE * 0.6;
 /// Max A* path length (grid steps).
 const PAWN_PATH_MAX: u32 = 40;
 /// Seconds without progress before giving up and resetting.
@@ -198,8 +200,12 @@ impl Pawn {
         self.stuck_timer > STUCK_TIMEOUT
     }
 
-    /// Find nearest Forest tile within a search radius. Returns grid coords.
-    fn find_nearest_tree(&mut self, grid: &Grid) -> Option<(u32, u32)> {
+    /// Find nearest Forest tile not claimed by another pawn. Returns grid coords.
+    fn find_nearest_tree(
+        &mut self,
+        grid: &Grid,
+        claimed: &[(u32, u32)],
+    ) -> Option<(u32, u32)> {
         let (gx, gy) = grid::world_to_grid(self.x, self.y);
         let mut best: Option<((u32, u32), f32)> = None;
 
@@ -213,6 +219,10 @@ impl Pawn {
                 let ux = nx as u32;
                 let uy = ny as u32;
                 if grid.get(ux, uy) != TileKind::Forest {
+                    continue;
+                }
+                // Skip trees already targeted by another pawn
+                if claimed.contains(&(ux, uy)) {
                     continue;
                 }
                 let d = (dx * dx + dy * dy) as f32;
@@ -267,12 +277,20 @@ impl Pawn {
         self.set_anim(IDLE_FRAMES, 8.0);
     }
 
-    pub fn update(&mut self, dt: f32, grid: &Grid) {
+    /// Returns the tree tile this pawn is currently targeting (for claim tracking).
+    pub fn claimed_tree(&self) -> Option<(u32, u32)> {
+        match self.state {
+            PawnState::WalkingToTree | PawnState::Chopping => Some((self.target_gx, self.target_gy)),
+            _ => None,
+        }
+    }
+
+    pub fn update(&mut self, dt: f32, grid: &Grid, claimed: &[(u32, u32)]) {
         match self.state {
             PawnState::Idle => {
                 self.state_timer -= dt;
                 if self.state_timer <= 0.0 {
-                    if let Some((tree_gx, tree_gy)) = self.find_nearest_tree(grid) {
+                    if let Some((tree_gx, tree_gy)) = self.find_nearest_tree(grid, claimed) {
                         // Path to a passable tile adjacent to the tree
                         let goal = self.passable_near(tree_gx, tree_gy, grid);
                         if let Some((pgx, pgy)) = goal {
@@ -297,15 +315,38 @@ impl Pawn {
                     self.reset_to_idle();
                     return;
                 }
-                if self.follow_waypoints(dt, grid) {
+                let waypoints_done = self.follow_waypoints(dt, grid);
+                // After waypoints, walk directly toward tree edge for realistic proximity
+                let (twx, twy) = grid::grid_to_world(self.target_gx, self.target_gy);
+                let dx = twx - self.x;
+                let dy = twy - self.y;
+                let dist_to_tree = (dx * dx + dy * dy).sqrt();
+
+                if dist_to_tree <= PAWN_CHOP_DIST {
+                    // Close enough to chop
+                    self.vel_x = 0.0;
+                    self.vel_y = 0.0;
                     self.state = PawnState::Chopping;
                     self.state_timer = PAWN_CHOP_TIME;
                     self.set_anim(CHOP_FRAMES, 10.0);
-                    // Face the tree
-                    let (twx, _) = grid::grid_to_world(self.target_gx, self.target_gy);
-                    if twx > self.x + 0.5 {
+                    if dx > 0.5 {
                         self.facing = Facing::Right;
-                    } else if twx < self.x - 0.5 {
+                    } else if dx < -0.5 {
+                        self.facing = Facing::Left;
+                    }
+                } else if waypoints_done {
+                    // Waypoints exhausted but still too far — walk directly toward tree
+                    let vx = (dx / dist_to_tree) * PAWN_WALK_SPEED;
+                    let vy = (dy / dist_to_tree) * PAWN_WALK_SPEED;
+                    let new_x = self.x + vx * dt;
+                    let new_y = self.y + vy * dt;
+                    if grid.is_circle_passable(new_x, new_y, PAWN_RADIUS) {
+                        self.x = new_x;
+                        self.y = new_y;
+                    }
+                    if vx > 0.5 {
+                        self.facing = Facing::Right;
+                    } else if vx < -0.5 {
                         self.facing = Facing::Left;
                     }
                 }
@@ -365,7 +406,7 @@ mod tests {
         grid.set(10, 10, TileKind::Forest);
         let mut p = Pawn::new(500.0, 500.0, Faction::Blue, 42);
         p.state_timer = 0.0;
-        p.update(0.016, &grid);
+        p.update(0.016, &grid, &[]);
         assert_eq!(p.state, PawnState::WalkingToTree);
         assert!(!p.waypoints.is_empty());
     }
@@ -375,7 +416,7 @@ mod tests {
         let grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
         let mut p = Pawn::new(500.0, 500.0, Faction::Blue, 42);
         p.state_timer = 0.0;
-        p.update(0.016, &grid);
+        p.update(0.016, &grid, &[]);
         assert_eq!(p.state, PawnState::Idle);
         assert!(p.state_timer > 0.0);
     }
@@ -391,7 +432,7 @@ mod tests {
         let (wx, wy) = grid::grid_to_world(5, 5);
         let mut p = Pawn::new(wx, wy, Faction::Blue, 42);
         p.state_timer = 0.0;
-        p.update(0.016, &grid);
+        p.update(0.016, &grid, &[]);
         assert_eq!(p.state, PawnState::WalkingToTree);
         // Path should route around the building wall
         for &(gx, gy) in &p.waypoints {
