@@ -1,9 +1,9 @@
 #![allow(clippy::too_many_arguments)]
 
+use battlefield_core::asset_manifest;
 use battlefield_core::game::Game;
 use battlefield_core::grid::{self, TILE_SIZE};
 use battlefield_core::render_util;
-use battlefield_core::asset_manifest;
 use battlefield_core::unit::{Faction, UnitKind};
 use battlefield_core::zone::ZoneState;
 use sdl2::pixels::Color;
@@ -12,9 +12,7 @@ use sdl2::render::{BlendMode, Canvas, TextureCreator};
 use sdl2::video::{Window, WindowContext};
 
 use super::assets::Assets;
-use super::draw_helpers::{
-    draw_bar_3slice, draw_panel, draw_ribbon, fill_circle, stroke_circle,
-};
+use super::draw_helpers::{draw_bar_3slice, draw_panel, draw_ribbon, fill_circle, stroke_circle};
 use super::{ClickableButton, GameScreen};
 
 pub(super) fn draw_hud(
@@ -146,7 +144,6 @@ pub(super) fn draw_hud(
                 auth_h as u32,
             ));
         }
-
     }
 
     // Zone control indicators at top-center on paper panel

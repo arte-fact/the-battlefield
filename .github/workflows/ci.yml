@@ -18,7 +18,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown, wasm32-unknown-emscripten
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
@@ -32,7 +32,10 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
-      - name: Build WASM
-        run: |
-          cargo install wasm-pack
-          wasm-pack build crates/client --target web --out-dir ../../pkg
+      - name: Install Emscripten SDK
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Build SDL Emscripten
+        run: bash build-sdl-web.sh

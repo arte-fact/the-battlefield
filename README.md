@@ -2,7 +2,7 @@
 
 A roguelike, turn-based tactics game set on a medieval battlefield. You are one soldier in a massive battle between two armies. Survive. Fight. Turn the tide.
 
-Built for the web with Rust, WebAssembly, and HTML Canvas 2D. Mobile-first, playable offline as a PWA.
+Built with Rust, WebAssembly, and SDL2. Runs natively (desktop/ARM) and on the web via Emscripten (WebGL). Mobile-first, playable offline as a PWA.
 
 ## About
 
@@ -15,9 +15,10 @@ Every battle is different: terrain, faction pairings, army composition, and comm
 | Layer | Technology |
 |-------|-----------|
 | Language | Rust |
-| Compilation target | WebAssembly |
-| Rendering | HTML Canvas 2D |
-| Input | Touch-first (swipe, tap, pinch) + keyboard/mouse fallback |
+| Web target | WebAssembly via Emscripten |
+| Native target | SDL2 (Linux, ARM/Raspberry Pi) |
+| Rendering | SDL2 → WebGL (web) / GPU-accelerated (native) |
+| Input | Touch (joystick, buttons, pinch) + keyboard/mouse + gamepad |
 | Offline support | PWA with service worker |
 | Deployment | GitHub Pages via GitHub Actions |
 | Art | [Tiny Swords](https://pixelfrog-assets.itch.io/tiny-swords) by Pixel Frog (itch.io) |
@@ -27,28 +28,41 @@ Every battle is different: terrain, faction pairings, army composition, and comm
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (latest stable)
-- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
-- [cmake](https://cmake.org/) (required by the SDL2 native build)
+- [cmake](https://cmake.org/) (required by the SDL2 bundled build)
 - Any modern browser (Chrome, Firefox, Safari, Edge)
 
-### Build and Run
+### Build and Run (Native SDL2)
 
 ```bash
-# Build the WASM package
-wasm-pack build --target web
-
-# Serve locally (use any static file server)
-python3 -m http.server 8080
+cargo run -p battlefield-sdl
 ```
+
+### Build and Run (Web via Emscripten)
+
+```bash
+# One-time setup: install Emscripten SDK
+git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
+cd ~/emsdk && ./emsdk install latest && ./emsdk activate latest
+rustup target add wasm32-unknown-emscripten
+
+# Before each build session
+source ~/emsdk/emsdk_env.sh
+
+# Build
+./build-sdl-web.sh
+
+# Serve locally
+python3 -m http.server -d web-sdl/dist 8080
+```
+
+The build script compiles the SDL crate to WebAssembly via Emscripten, bundles
+game assets into a `.data` file, applies service worker cache-busting, and
+copies PWA files into `web-sdl/dist/`.
 
 ### Tests
 
 ```bash
-# Run unit tests
 cargo test
-
-# Run WASM tests in headless browser
-wasm-pack test --headless --chrome
 ```
 
 ### Linting

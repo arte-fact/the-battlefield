@@ -6,6 +6,7 @@ mod foreground;
 mod hud;
 mod terrain;
 mod text;
+mod touch;
 
 pub use assets::Assets;
 pub use battlefield_core::ui::GameScreen;
@@ -91,6 +92,7 @@ pub fn render_frame(
     focused_button: usize,
     gamepad_connected: bool,
     dpi_scale: f64,
+    input_state: &crate::input::InputState,
 ) -> Vec<ClickableButton> {
     let ts = TILE_SIZE * game.camera.zoom;
     let cam = &game.camera;
@@ -159,7 +161,12 @@ pub fn render_frame(
     // 15. Minimap
     hud::draw_minimap(canvas, game, assets);
 
-    // 16. Screen overlays (menu, death, result)
+    // 16. Touch controls (during gameplay)
+    if screen == GameScreen::Playing {
+        touch::draw_touch_controls(canvas, tc, input_state, &assets.text, dpi_scale);
+    }
+
+    // 17. Screen overlays (menu, death, result)
     let buttons = hud::draw_screen_overlay(
         canvas,
         tc,

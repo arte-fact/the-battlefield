@@ -225,19 +225,36 @@ impl<'a> Assets<'a> {
         let mut arrow_texture = None;
 
         // Load unit sprites from shared manifest
-        let all_anims = [UnitAnim::Idle, UnitAnim::Run, UnitAnim::Attack, UnitAnim::Attack2];
+        let all_anims = [
+            UnitAnim::Idle,
+            UnitAnim::Run,
+            UnitAnim::Attack,
+            UnitAnim::Attack2,
+        ];
         for &faction in &[Faction::Blue, Faction::Red] {
             let folder = faction.asset_folder();
-            for &kind in &[UnitKind::Warrior, UnitKind::Archer, UnitKind::Lancer, UnitKind::Monk] {
+            for &kind in &[
+                UnitKind::Warrior,
+                UnitKind::Archer,
+                UnitKind::Lancer,
+                UnitKind::Monk,
+            ] {
                 let kind_folder = asset_manifest::unit_kind_folder(kind);
                 for &anim in &all_anims {
                     let Some(spec) = asset_manifest::unit_sprite(kind, anim) else {
                         continue;
                     };
-                    let path = format!("{ASSET_BASE}/Units/{folder}/{kind_folder}/{}", spec.filename);
+                    let path = format!(
+                        "{ASSET_BASE}/Units/{folder}/{kind_folder}/{}",
+                        spec.filename
+                    );
                     if let Some(tex) = load_png_texture(tc, &path) {
                         unit_textures.insert(
-                            UnitTexKey { faction, kind, anim },
+                            UnitTexKey {
+                                faction,
+                                kind,
+                                anim,
+                            },
                             (tex, spec.frame_w, spec.frame_h, spec.frame_count),
                         );
                     } else {
@@ -514,8 +531,7 @@ impl<'a> Assets<'a> {
             sheep_textures,
             pawn_textures,
             avatar_textures: {
-                let avatar_base =
-                    format!("{ASSET_BASE}/UI Elements/UI Elements/Human Avatars");
+                let avatar_base = format!("{ASSET_BASE}/UI Elements/UI Elements/Human Avatars");
                 let mut v = Vec::new();
                 for filename in asset_manifest::AVATAR_FILES {
                     let path = format!("{avatar_base}/{filename}");

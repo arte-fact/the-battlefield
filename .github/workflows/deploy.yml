@@ -23,25 +23,28 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-emscripten
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack
+      - name: Install Emscripten SDK
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
 
-      - name: Build WASM
-        run: wasm-pack build crates/client --target web --out-dir ../../pkg
+      - name: Build SDL Emscripten
+        run: bash build-sdl-web.sh
 
       - name: Prepare deployment
         run: |
           mkdir -p _site
-          cp index.html _site/
-          cp manifest.json _site/
-          cp sw.js _site/
-          cp -r pkg _site/pkg
-          cp -r assets _site/assets
-          cp -r icons _site/icons
+          cp web-sdl/dist/index.html _site/
+          cp web-sdl/dist/battlefield.js _site/
+          cp web-sdl/dist/battlefield.wasm _site/
+          cp web-sdl/dist/battlefield.data _site/ 2>/dev/null || true
+          cp web-sdl/dist/manifest.json _site/
+          cp web-sdl/dist/sw.js _site/
+          cp -r web-sdl/dist/icons _site/icons 2>/dev/null || true
 
       - uses: actions/upload-pages-artifact@v3
 

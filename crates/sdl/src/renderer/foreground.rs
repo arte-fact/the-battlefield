@@ -445,9 +445,7 @@ fn draw_base_building(
             return;
         }
         let zone_alpha = match zone.state {
-            ZoneState::Capturing(_) => {
-                (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0)
-            }
+            ZoneState::Capturing(_) => (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0),
             _ => 1.0,
         };
         let alpha = (proximity_alpha * zone_alpha * 255.0) as u8;
@@ -572,7 +570,12 @@ fn draw_pawn(
     let draw_size = ts * (fw as f32 / TILE_SIZE);
     let (screen_x, screen_y) = world_to_screen(pawn.x, pawn.y, cam);
     let half = (draw_size / 2.0) as i32;
-    let dst = Rect::new(screen_x - half, screen_y - half, draw_size as u32, draw_size as u32);
+    let dst = Rect::new(
+        screen_x - half,
+        screen_y - half,
+        draw_size as u32,
+        draw_size as u32,
+    );
     let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
     let flip = pawn.facing == Facing::Left;
     let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
