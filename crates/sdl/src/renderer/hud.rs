@@ -312,34 +312,43 @@ fn draw_follower_panel(
 }
 
 pub(super) fn draw_minimap(canvas: &mut Canvas<Window>, game: &Game, assets: &Assets) {
-    let (canvas_w, canvas_h) = canvas.output_size().unwrap_or((960, 640));
-    let mm_size = 140_u32;
-    let mm_margin = 8_i32;
-    let frame_pad = 30_i32;
-    let mm_x = canvas_w as i32 - mm_margin + 18 - frame_pad - mm_size as i32;
-    let mm_y = canvas_h as i32 - mm_margin + 25 - frame_pad - mm_size as i32;
+    let (_canvas_w, canvas_h) = canvas.output_size().unwrap_or((960, 640));
+    let mm_size = 200_u32;
+    let pad = 20_i32;
+    let panel_size = mm_size + pad as u32 * 2;
+    let panel_margin = 10_i32;
+    let panel_x = panel_margin;
+    let panel_y = canvas_h as i32 - panel_margin - panel_size as i32;
+    let mm_x = panel_x + pad;
+    let mm_y = panel_y + pad;
 
     let grid_w = game.grid.width;
     let grid_h = game.grid.height;
     let scale_x = mm_size as f32 / grid_w as f32;
     let scale_y = mm_size as f32 / grid_h as f32;
 
-    if let Some((ref tex, tw, th)) = assets.ui_wood_table {
+    // Paper background
+    if let Some((ref tex, tw, th)) = assets.ui_special_paper {
         draw_panel(
             canvas,
             tex,
-            &render_util::NINE_SLICE_WOOD_TABLE,
+            &render_util::NINE_SLICE_SPECIAL_PAPER,
             tw as f64,
             th as f64,
-            (mm_x + 10 - frame_pad) as f64,
-            (mm_y + 8 - frame_pad) as f64,
-            (mm_size as i32 + frame_pad * 2 - 20) as f64,
-            (mm_size as i32 + frame_pad * 2) as f64,
+            panel_x as f64,
+            panel_y as f64,
+            panel_size as f64,
+            panel_size as f64,
         );
+    } else {
+        canvas.set_blend_mode(BlendMode::Blend);
+        canvas.set_draw_color(Color::RGBA(40, 30, 15, 220));
+        let _ = canvas.fill_rect(Rect::new(panel_x, panel_y, panel_size, panel_size));
     }
 
+    // Dark terrain background
     canvas.set_blend_mode(BlendMode::Blend);
-    canvas.set_draw_color(Color::RGBA(0, 0, 0, 180));
+    canvas.set_draw_color(Color::RGBA(0, 0, 0, 160));
     let _ = canvas.fill_rect(Rect::new(mm_x, mm_y, mm_size, mm_size));
 
     // Terrain dots

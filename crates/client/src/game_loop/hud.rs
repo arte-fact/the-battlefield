@@ -315,40 +315,49 @@ pub(super) fn draw_zone_hud(
     Ok(())
 }
 
-/// Draw the minimap HUD (top-left on touch devices, bottom-left on desktop).
+/// Draw the minimap HUD on a paper panel (bottom-left).
 pub(super) fn draw_minimap(
     r: &Canvas2dRenderer,
     game: &Game,
+    loaded: &LoadedTextures,
     terrain_canvas: &web_sys::HtmlCanvasElement,
     _canvas_w: f64,
     canvas_h: f64,
     dpr: f64,
-    is_touch: bool,
+    _is_touch: bool,
 ) -> Result<(), JsValue> {
-    let mm_size = (160.0 * dpr).min(canvas_h * 0.25);
-    let mm_margin = 8.0 * dpr;
-    let mm_x = mm_margin;
-    // Top-left on touch (below zone HUD), bottom-left on desktop
-    let mm_y = if is_touch {
-        mm_margin + 34.0 * dpr // below zone pips
-    } else {
-        canvas_h - mm_margin - mm_size
-    };
+    let mm_size = (200.0 * dpr).min(canvas_h * 0.3);
+    let pad = 20.0 * dpr;
+    let panel_size = mm_size + pad * 2.0;
+    let panel_margin = 10.0 * dpr;
+    let panel_x = panel_margin;
+    let panel_y = canvas_h - panel_margin - panel_size;
+    let mm_x = panel_x + pad;
+    let mm_y = panel_y + pad;
 
     let grid_w = game.grid.width as f64;
     let grid_h = game.grid.height as f64;
     let scale_x = mm_size / grid_w;
     let scale_y = mm_size / grid_h;
 
-    // Background border
-    r.set_fill_color("rgba(0,0,0,0.7)");
-    let border = 2.0 * dpr;
-    r.fill_rect(
-        mm_x - border,
-        mm_y - border,
-        mm_size + border * 2.0,
-        mm_size + border * 2.0,
-    );
+    // Paper background
+    if let Some((ref atlas, aw, ah)) = loaded.ui_panel_atlas {
+        use battlefield_core::render_util::NINE_SLICE_SPECIAL_PAPER;
+        super::screens::draw_9slice_panel(
+            r,
+            atlas,
+            &NINE_SLICE_SPECIAL_PAPER,
+            aw as f64,
+            ah as f64,
+            panel_x,
+            panel_y,
+            panel_size,
+            panel_size,
+        )?;
+    } else {
+        r.set_fill_color("rgba(40,30,15,0.85)");
+        r.fill_rect(panel_x, panel_y, panel_size, panel_size);
+    }
 
     // Draw pre-rendered terrain (nearest-neighbor for crisp pixels)
     r.save();

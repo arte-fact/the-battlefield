@@ -189,6 +189,7 @@ pub(super) fn render_frame(
     draw_minimap(
         r,
         game,
+        loaded,
         &state.minimap_terrain,
         canvas_w,
         canvas_h,

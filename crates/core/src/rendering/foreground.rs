@@ -209,9 +209,7 @@ fn draw_building(
     let anchor_x = b.grid_x as f64 * ts + ts / 2.0;
     let anchor_y = b.grid_y as f64 * ts + ts;
 
-    let bldg_cx = anchor_x;
-    let bldg_cy = anchor_y - sh * 0.5;
-    let proximity_alpha = render_util::tree_alpha(bldg_cx, bldg_cy, player_pos, ts);
+    let proximity_alpha = render_util::building_alpha(anchor_x, anchor_y, sw, sh, player_pos, ts);
 
     // Zone-linked towers
     if let Some(zid) = b.zone_id {

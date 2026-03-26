@@ -20,8 +20,10 @@ const DEFEND_LINE_MONK: f32 = TILE_SIZE * 6.5;
 /// Perpendicular spacing between units in the same line.
 const DEFEND_SPACING: f32 = TILE_SIZE;
 /// Defend units engage enemies within this distance of their post.
-/// Large enough for archers (5 tiles back, 7 tile range) to fire at approaching enemies.
-const DEFEND_LEASH: f32 = TILE_SIZE * 8.0;
+/// Melee defend leash — warriors/lancers stay close to their post (2 tiles).
+const DEFEND_LEASH_MELEE: f32 = TILE_SIZE * 2.0;
+/// Ranged defend leash — archers can fire at enemies approaching the formation.
+const DEFEND_LEASH_RANGED: f32 = TILE_SIZE * 8.0;
 
 /// Monks flee when enemies are closer than this (mirrors MONK_SAFE_DIST in ai.rs).
 const MONK_SAFE_DIST: f32 = TILE_SIZE * 3.0;
@@ -325,8 +327,13 @@ impl Game {
         let post_x = anchor_x + behind_x + perp_x * lateral_offset;
         let post_y = anchor_y + behind_y + perp_y * lateral_offset;
 
-        // Combat (leashed to formation post)
-        if self.ai_order_combat(ai_idx, post_x, post_y, DEFEND_LEASH, dt) {
+        // Combat (leashed to formation post — melee stays close, ranged has longer reach)
+        let leash = match kind {
+            UnitKind::Warrior | UnitKind::Lancer => DEFEND_LEASH_MELEE,
+            UnitKind::Archer => DEFEND_LEASH_RANGED,
+            UnitKind::Monk => DEFEND_LEASH_MELEE, // monks stay near post, only heal
+        };
+        if self.ai_order_combat(ai_idx, post_x, post_y, leash, dt) {
             return;
         }
 

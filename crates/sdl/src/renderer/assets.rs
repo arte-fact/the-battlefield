@@ -46,7 +46,7 @@ pub struct Assets<'a> {
     // Swords
     pub(super) _ui_swords: Option<Texture<'a>>,
     // Wood table frame for minimap
-    pub(super) ui_wood_table: Option<(Texture<'a>, u32, u32)>,
+    pub(super) _ui_wood_table: Option<(Texture<'a>, u32, u32)>,
     // Fog
     pub fog_texture: Option<Texture<'a>>,
     // Sheep: (texture, frame_count) for Idle, Move, Grass
@@ -503,7 +503,7 @@ impl<'a> Assets<'a> {
             ui_big_ribbons,
             ui_small_ribbons,
             _ui_swords: ui_swords,
-            ui_wood_table,
+            _ui_wood_table: ui_wood_table,
             sheep_textures,
             pawn_textures,
             avatar_textures: {

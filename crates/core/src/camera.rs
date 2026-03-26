@@ -54,15 +54,15 @@ impl Camera {
     }
 
     /// Calculate an ideal zoom level based on viewport dimensions.
-    /// Targets ~15 tiles visible along the shortest axis (landscape)
-    /// or ~10 tiles in portrait for a more zoomed-in mobile feel.
+    /// Targets ~20 tiles visible along the shortest axis (landscape)
+    /// or ~14 tiles in portrait for a more zoomed-in mobile feel.
     pub fn ideal_zoom(&self) -> f32 {
         let tile = crate::grid::TILE_SIZE;
         let short = self.viewport_w.min(self.viewport_h);
         let target_tiles = if self.viewport_h > self.viewport_w {
-            10.0 // portrait: show fewer tiles (more zoomed in)
+            14.0 // portrait: show fewer tiles (more zoomed in)
         } else {
-            15.0 // landscape
+            20.0 // landscape
         };
         let raw = short / (target_tiles * tile);
         let snapped = (raw * 64.0).round() / 64.0;

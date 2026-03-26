@@ -108,6 +108,45 @@ pub fn is_visible_to_player(
 // Tree rendering
 // ---------------------------------------------------------------------------
 
+/// Compute building alpha — fade when the player stands on the 1-2 tiles just
+/// behind the building footprint (where the tall sprite visually covers them).
+/// Only triggers in a tight zone: horizontally within the building width,
+/// vertically within ~2 tiles behind the anchor row.
+pub fn building_alpha(
+    anchor_x: f64,
+    anchor_y: f64,
+    sprite_w: f64,
+    _sprite_h: f64,
+    player_pos: Option<(f64, f64)>,
+    ts: f64,
+) -> f64 {
+    let Some((px, py)) = player_pos else {
+        return 1.0;
+    };
+
+    let half_w = sprite_w * 0.5 + ts * 0.5;
+
+    // Player must be horizontally within the building's footprint span
+    let dx = (px - anchor_x).abs();
+    if dx > half_w {
+        return 1.0;
+    }
+
+    // Player must be just behind the building: 0 to 2 tiles above the anchor
+    // (anchor_y is the bottom of the sprite / foot row; "behind" = lower Y)
+    let dy = anchor_y - py; // positive = player is above anchor (behind)
+    if dy < 0.0 || dy > ts * 2.5 {
+        return 1.0;
+    }
+
+    // Progressive: closer behind = more transparent
+    let vert_factor = 1.0 - (dy / (ts * 2.5)); // 1.0 right at anchor, 0.0 at 2.5 tiles away
+    let horiz_factor = 1.0 - (dx / half_w); // 1.0 at center, 0.0 at edge
+    let occlusion = vert_factor * horiz_factor;
+
+    1.0 - occlusion * 0.65
+}
+
 /// Compute tree alpha based on distance to the player (fade when near).
 pub fn tree_alpha(tree_wx: f64, tree_wy: f64, player_pos: Option<(f64, f64)>, ts: f64) -> f64 {
     if let Some((px, py)) = player_pos {
