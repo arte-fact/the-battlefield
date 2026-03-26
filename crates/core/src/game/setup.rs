@@ -77,28 +77,56 @@ impl Game {
 
     /// Tick capture zone progress based on unit positions.
     pub fn tick_zones(&mut self, dt: f32) {
-        let blue_before = self
-            .zone_manager
-            .zones
-            .iter()
-            .filter(|z| z.state == ZoneState::Controlled(Faction::Blue))
-            .count();
+        // Snapshot per-zone state before tick
+        let states_before: Vec<ZoneState> =
+            self.zone_manager.zones.iter().map(|z| z.state).collect();
 
         self.zone_manager.count_units(&self.units);
         self.zone_manager.tick_capture(dt);
 
-        let blue_after = self
-            .zone_manager
-            .zones
-            .iter()
-            .filter(|z| z.state == ZoneState::Controlled(Faction::Blue))
-            .count();
+        // Collect zone state changes, then apply reputation
+        let mut captured = false;
+        let mut captured_fov = false;
+        let mut lost = false;
+        let mut lost_fov = false;
+        let mut decap = false;
+        let mut decap_fov = false;
+        for (i, zone) in self.zone_manager.zones.iter().enumerate() {
+            let before = states_before[i];
+            let after = zone.state;
+            if before == after {
+                continue;
+            }
+            let idx = (zone.center_gy * self.grid.width + zone.center_gx) as usize;
+            let in_fov = idx < self.visible.len() && self.visible[idx];
 
-        if blue_after > blue_before {
-            self.on_zone_captured();
+            if before != ZoneState::Controlled(Faction::Blue)
+                && after == ZoneState::Controlled(Faction::Blue)
+            {
+                captured = true;
+                captured_fov |= in_fov;
+            }
+            if before == ZoneState::Controlled(Faction::Blue)
+                && after != ZoneState::Controlled(Faction::Blue)
+            {
+                lost = true;
+                lost_fov |= in_fov;
+            }
+            if before == ZoneState::Controlled(Faction::Red)
+                && after != ZoneState::Controlled(Faction::Red)
+            {
+                decap = true;
+                decap_fov |= in_fov;
+            }
         }
-        if blue_after < blue_before {
-            self.on_zone_lost();
+        if captured {
+            self.on_zone_captured(captured_fov);
+        }
+        if lost {
+            self.on_zone_lost(lost_fov);
+        }
+        if decap {
+            self.on_zone_decaptured(decap_fov);
         }
 
         if self.winner.is_none() {

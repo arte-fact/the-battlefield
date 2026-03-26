@@ -108,10 +108,14 @@ pub fn is_visible_to_player(
 // Tree rendering
 // ---------------------------------------------------------------------------
 
-/// Compute building alpha — fade when the player stands on the 1-2 tiles just
-/// behind the building footprint (where the tall sprite visually covers them).
-/// Only triggers in a tight zone: horizontally within the building width,
-/// vertically within ~2 tiles behind the anchor row.
+/// Compute building alpha — fade when the player stands on tiles just behind
+/// the building footprint (where the tall sprite visually occludes them).
+///
+/// In the Y-sorted view, the building sprite is drawn at anchor_y and extends
+/// upward (lower Y). A player at lower Y than the anchor is "behind" the
+/// building and gets covered by the sprite. The footprint occupies ~2 tiles
+/// above the anchor, so the fade zone starts 2 tiles above anchor and extends
+/// another 2 tiles further up.
 pub fn building_alpha(
     anchor_x: f64,
     anchor_y: f64,
@@ -124,24 +128,27 @@ pub fn building_alpha(
         return 1.0;
     };
 
-    let half_w = sprite_w * 0.5 + ts * 0.5;
+    let half_w = sprite_w * 0.5 + ts * 0.25;
 
-    // Player must be horizontally within the building's footprint span
+    // Player must be horizontally within the building's width
     let dx = (px - anchor_x).abs();
     if dx > half_w {
         return 1.0;
     }
 
-    // Player must be just behind the building: 0 to 2 tiles above the anchor
-    // (anchor_y is the bottom of the sprite / foot row; "behind" = lower Y)
-    let dy = anchor_y - py; // positive = player is above anchor (behind)
-    if dy < 0.0 || dy > ts * 2.5 {
+    // dy = how far above the anchor the player is (positive = above = behind)
+    let dy = anchor_y - py;
+
+    // Fade zone: starts 2 tiles above anchor (past the footprint) and extends 2 more tiles
+    let fade_start = ts * 2.0; // footprint ends ~2 tiles above anchor
+    let fade_end = ts * 4.0; // fade zone extends 2 tiles beyond footprint
+    if dy < fade_start || dy > fade_end {
         return 1.0;
     }
 
-    // Progressive: closer behind = more transparent
-    let vert_factor = 1.0 - (dy / (ts * 2.5)); // 1.0 right at anchor, 0.0 at 2.5 tiles away
-    let horiz_factor = 1.0 - (dx / half_w); // 1.0 at center, 0.0 at edge
+    // Progressive: closer to footprint = more transparent
+    let vert_factor = 1.0 - ((dy - fade_start) / (fade_end - fade_start));
+    let horiz_factor = 1.0 - (dx / half_w);
     let occlusion = vert_factor * horiz_factor;
 
     1.0 - occlusion * 0.65
