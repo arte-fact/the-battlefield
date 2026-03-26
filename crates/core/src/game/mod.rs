@@ -131,6 +131,23 @@ impl Game {
         }
     }
 
+    /// Count recruited alive units by kind: [warriors, archers, lancers, monks].
+    pub fn recruited_counts(&self) -> [usize; 4] {
+        let mut counts = [0usize; 4];
+        for u in &self.units {
+            if u.alive && self.recruited.contains(&u.id) {
+                let idx = match u.kind {
+                    UnitKind::Warrior => 0,
+                    UnitKind::Archer => 1,
+                    UnitKind::Lancer => 2,
+                    UnitKind::Monk => 3,
+                };
+                counts[idx] += 1;
+            }
+        }
+        counts
+    }
+
     /// Tick all alive units' cooldowns by dt seconds.
     pub fn tick_cooldowns(&mut self, dt: f32) {
         for unit in &mut self.units {

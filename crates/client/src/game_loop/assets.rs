@@ -72,6 +72,8 @@ pub(super) struct LoadedTextures {
     pub(super) sheep_textures: Vec<(TextureId, u32, u32)>,
     /// Pawn sprite sheets: indexed by faction_offset + sprite_index (5 per faction, 10 total)
     pub(super) pawn_textures: Vec<(TextureId, u32, u32)>,
+    /// Unit avatar portraits (256×256 each): 0=Warrior, 1=Lancer, 2=Archer, 3=Monk
+    pub(super) avatar_textures: Vec<TextureId>,
 }
 
 impl LoadedTextures {
@@ -106,6 +108,7 @@ impl LoadedTextures {
             ui_big_ribbons: None,
             sheep_textures: Vec::new(),
             pawn_textures: Vec::new(),
+            avatar_textures: Vec::new(),
         }
     }
 }
@@ -414,6 +417,18 @@ pub(super) async fn load_textures(
                         .pawn_textures
                         .push((tex_id, 192, 192));
                 }
+            }
+        }
+    }
+
+    // Unit avatar portraits (256×256 each)
+    {
+        use battlefield_core::asset_manifest::AVATAR_FILES;
+        let avatar_base = format!("{ASSET_BASE}/UI Elements/UI Elements/Human Avatars");
+        for filename in AVATAR_FILES {
+            let url = format!("{avatar_base}/{filename}");
+            if let Ok(tex_id) = load_texture(state, &url, 256, 256, 1).await {
+                loaded.borrow_mut().avatar_textures.push(tex_id);
             }
         }
     }

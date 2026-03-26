@@ -56,6 +56,7 @@ impl WasmDrawBackend<'_> {
             SpriteKey::Arrow => self.loaded.arrow_texture,
             SpriteKey::Sheep(idx) => self.loaded.sheep_textures.get(idx).map(|&(id, _, _)| id),
             SpriteKey::Pawn(idx) => self.loaded.pawn_textures.get(idx).map(|&(id, _, _)| id),
+            SpriteKey::Avatar(idx) => self.loaded.avatar_textures.get(idx).copied(),
         }
     }
 }

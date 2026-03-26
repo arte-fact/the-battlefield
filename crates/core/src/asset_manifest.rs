@@ -167,6 +167,29 @@ pub const PAWN_SPECS: &[(&str, u32)] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// Unit avatars (portraits for HUD)
+// ---------------------------------------------------------------------------
+
+/// Avatar filenames for each unit kind. 256×256 each.
+/// Index: 0=Warrior, 1=Lancer, 2=Archer, 3=Monk.
+pub const AVATAR_FILES: &[&str] = &[
+    "Avatars_01.png", // Warrior (knight helmet with plume)
+    "Avatars_02.png", // Lancer (round helmet)
+    "Avatars_03.png", // Archer (pointy hat)
+    "Avatars_04.png", // Monk (curly hair)
+];
+
+/// Map UnitKind to avatar index.
+pub fn avatar_index(kind: UnitKind) -> usize {
+    match kind {
+        UnitKind::Warrior => 0,
+        UnitKind::Lancer => 1,
+        UnitKind::Archer => 2,
+        UnitKind::Monk => 3,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Variant index helpers (spatial hashing)
 // ---------------------------------------------------------------------------
 

@@ -3,7 +3,9 @@
 use battlefield_core::game::Game;
 use battlefield_core::grid::{self, TILE_SIZE};
 use battlefield_core::render_util;
-use battlefield_core::unit::Faction;
+use battlefield_core::asset_manifest;
+use battlefield_core::unit::{Faction, UnitKind};
+use battlefield_core::zone::ZoneState;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 use sdl2::render::{BlendMode, Canvas, TextureCreator};
@@ -11,7 +13,7 @@ use sdl2::video::{Window, WindowContext};
 
 use super::assets::Assets;
 use super::draw_helpers::{
-    draw_bar_3slice, draw_panel, draw_ribbon, draw_small_ribbon, fill_circle,
+    draw_bar_3slice, draw_panel, draw_ribbon, fill_circle, stroke_circle,
 };
 use super::{ClickableButton, GameScreen};
 
@@ -20,7 +22,7 @@ pub(super) fn draw_hud(
     tc: &TextureCreator<WindowContext>,
     game: &Game,
     assets: &mut Assets,
-    dpi_scale: f64,
+    _dpi_scale: f64,
 ) {
     let (w, _h) = canvas.output_size().unwrap_or((960, 640));
 
@@ -145,93 +147,167 @@ pub(super) fn draw_hud(
             ));
         }
 
-        // Rank name + follower count
-        let rank = game.authority_rank_name();
-        let followers = game.follower_count();
-        let max_followers = game.authority_max_followers();
-        let label = format!("{rank}  {followers} of {max_followers}");
-        let rank_font = 32.0_f32 * dpi_scale as f32;
-        let (tw, _th) = assets.text.measure_text(&label, rank_font);
-        let ribbon_h = 54.0;
-        let rank_cx = (auth_x + auth_w / 2.0) as i32;
-        let rank_ry = auth_y + auth_h + 4.0;
-        let rank_rw = tw as f64 + 8.0;
-        if let Some(ref tex) = assets.ui_small_ribbons {
-            draw_small_ribbon(
-                canvas,
-                tex,
-                1,
-                rank_cx as f64,
-                rank_ry + ribbon_h / 2.0,
-                rank_rw,
-                1.0,
-            );
-        }
-        assets.text.draw_text_centered(
-            canvas,
-            tc,
-            &label,
-            rank_cx,
-            (rank_ry + ribbon_h / 2.0) as i32,
-            rank_font,
-            Color::RGBA(255, 255, 255, 220),
-        );
     }
 
-    // Zone control pips at top-center
+    // Zone control indicators at top-center on paper panel
     let zone_count = game.zone_manager.zones.len() as u32;
     if zone_count > 0 {
-        let pip_size = 14_u32;
-        let gap = 4_u32;
-        let total_w = zone_count * pip_size + (zone_count - 1) * gap;
-        let start_x = (w / 2 - total_w / 2) as i32;
-        let ribbon_h = 54.0;
-        let pip_y = ((ribbon_h - pip_size as f64) / 2.0) as i32;
+        let pip_r = 14i32;
+        let pip_d = pip_r * 2;
+        let gap_z = 12i32;
+        let pad_z = 18i32;
+        let n = zone_count as i32;
+        let zone_panel_w = (n * pip_d + (n - 1) * gap_z + pad_z * 2) as u32;
+        let zone_panel_h = (pip_d + pad_z * 2) as u32;
+        let zone_panel_x = w as i32 / 2 - zone_panel_w as i32 / 2;
+        let zone_panel_y = 10i32;
 
-        let bg_pad = 6_i32;
-        let pip_bg_x = (start_x - bg_pad) as f64;
-        let pip_bg_w = (total_w + bg_pad as u32 * 2) as f64;
-        if let Some(ref tex) = assets.ui_small_ribbons {
-            draw_small_ribbon(
+        if let Some((ref tex, bw, bh)) = assets.ui_special_paper {
+            draw_panel(
                 canvas,
                 tex,
-                9,
-                pip_bg_x + pip_bg_w / 2.0,
-                ribbon_h / 2.0,
-                pip_bg_w,
-                1.0,
+                &render_util::NINE_SLICE_SPECIAL_PAPER,
+                bw as f64,
+                bh as f64,
+                zone_panel_x as f64,
+                zone_panel_y as f64,
+                zone_panel_w as f64,
+                zone_panel_h as f64,
             );
         } else {
             canvas.set_blend_mode(BlendMode::Blend);
-            canvas.set_draw_color(Color::RGBA(0, 0, 0, 140));
+            canvas.set_draw_color(Color::RGBA(40, 30, 15, 220));
             let _ = canvas.fill_rect(Rect::new(
-                start_x - bg_pad,
-                pip_y - bg_pad,
-                total_w + bg_pad as u32 * 2,
-                pip_size + bg_pad as u32 * 2,
+                zone_panel_x,
+                zone_panel_y,
+                zone_panel_w,
+                zone_panel_h,
             ));
         }
 
         for (i, zone) in game.zone_manager.zones.iter().enumerate() {
-            let px = start_x + (i as u32 * (pip_size + gap)) as i32;
-            canvas.set_draw_color(Color::RGBA(40, 40, 40, 180));
-            let _ = canvas.fill_rect(Rect::new(px, pip_y, pip_size, pip_size));
+            let cx = zone_panel_x + pad_z + pip_r + (i as i32) * (pip_d + gap_z);
+            let cy = zone_panel_y + pad_z + pip_r;
+            let progress = zone.progress.abs();
 
-            let (r, g, b) = render_util::zone_pip_rgb(zone.state);
-            let fill_h = (pip_size as f32 * zone.progress.abs()) as u32;
-            if fill_h > 0 {
-                canvas.set_draw_color(Color::RGBA(r, g, b, 200));
-                let _ = canvas.fill_rect(Rect::new(
-                    px,
-                    pip_y + (pip_size - fill_h) as i32,
-                    pip_size,
-                    fill_h,
-                ));
-            }
+            let (cr, cg, cb, alpha) = match zone.state {
+                ZoneState::Neutral => (100u8, 100, 100, 80u8),
+                ZoneState::Contested => (255, 200, 0, 160),
+                ZoneState::Capturing(Faction::Blue) => (60, 130, 255, 180),
+                ZoneState::Controlled(Faction::Blue) => (60, 130, 255, 255),
+                ZoneState::Capturing(Faction::Red) => (255, 60, 60, 180),
+                ZoneState::Controlled(Faction::Red) => (255, 60, 60, 255),
+            };
 
-            canvas.set_draw_color(Color::RGBA(255, 255, 255, 80));
-            let _ = canvas.draw_rect(Rect::new(px, pip_y, pip_size, pip_size));
+            // Background circle
+            canvas.set_draw_color(Color::RGBA(30, 25, 20, 130));
+            fill_circle(canvas, cx, cy, pip_r);
+
+            // Inner fill scaled by progress
+            let inner_r = ((pip_r as f32) * progress.max(0.15)) as i32;
+            canvas.set_draw_color(Color::RGBA(cr, cg, cb, alpha));
+            fill_circle(canvas, cx, cy, inner_r);
+
+            // Ring
+            canvas.set_draw_color(Color::RGBA(cr, cg, cb, alpha.saturating_sub(40)));
+            stroke_circle(canvas, cx, cy, pip_r);
         }
+    }
+
+    // Follower portrait panel — top-right
+    draw_follower_panel(canvas, tc, game, assets, w);
+}
+
+fn draw_follower_panel(
+    canvas: &mut Canvas<Window>,
+    tc: &TextureCreator<WindowContext>,
+    game: &Game,
+    assets: &mut Assets,
+    screen_w: u32,
+) {
+    let counts = game.recruited_counts();
+
+    let icon_size = 48u32;
+    let pad = 12u32;
+    let gap = 6u32;
+    let header_h = 22u32;
+    let entry_w = icon_size + 4;
+
+    let all_kinds: [(UnitKind, usize); 4] = [
+        (UnitKind::Warrior, counts[0]),
+        (UnitKind::Archer, counts[1]),
+        (UnitKind::Lancer, counts[2]),
+        (UnitKind::Monk, counts[3]),
+    ];
+    let cols = 4u32;
+    let panel_w = cols * entry_w + cols.saturating_sub(1) * gap + pad * 2;
+    let panel_h = header_h + icon_size + 20 + pad * 2;
+    let panel_x = (screen_w - panel_w - 10) as i32;
+    let panel_y = 8i32;
+
+    // Paper background (9-slice or fallback)
+    if let Some((ref tex, bw, bh)) = assets.ui_special_paper {
+        draw_panel(
+            canvas,
+            tex,
+            &render_util::NINE_SLICE_SPECIAL_PAPER,
+            bw as f64,
+            bh as f64,
+            panel_x as f64,
+            panel_y as f64,
+            panel_w as f64,
+            panel_h as f64,
+        );
+    } else {
+        canvas.set_blend_mode(BlendMode::Blend);
+        canvas.set_draw_color(Color::RGBA(40, 30, 15, 220));
+        let _ = canvas.fill_rect(Rect::new(panel_x, panel_y, panel_w, panel_h));
+    }
+
+    // Header: rank + follower count
+    let rank = game.authority_rank_name();
+    let followers = game.follower_count();
+    let max_followers = game.authority_max_followers();
+    let header = format!("{rank}  {followers} of {max_followers}");
+    let hcx = panel_x + panel_w as i32 / 2;
+    let hcy = panel_y + pad as i32 + header_h as i32 / 2;
+    assets.text.draw_text_centered(
+        canvas,
+        tc,
+        &header,
+        hcx,
+        hcy,
+        28.0,
+        Color::RGBA(255, 255, 255, 240),
+    );
+
+    // Portraits + counts (all 4 types always visible)
+    let row_y = panel_y + pad as i32 + header_h as i32 + 2;
+    for (i, &(kind, count)) in all_kinds.iter().enumerate() {
+        let cx = panel_x + pad as i32 + (i as u32 * (entry_w + gap)) as i32 + entry_w as i32 / 2;
+        let ix = cx - icon_size as i32 / 2;
+
+        let avatar_idx = asset_manifest::avatar_index(kind);
+        if let Some(tex) = assets.avatar_textures.get_mut(avatar_idx) {
+            if count == 0 {
+                tex.set_alpha_mod(90);
+            }
+            let dst = Rect::new(ix, row_y, icon_size, icon_size);
+            let _ = canvas.copy(tex, None, dst);
+            if count == 0 {
+                tex.set_alpha_mod(255);
+            }
+        }
+
+        assets.text.draw_text_centered(
+            canvas,
+            tc,
+            &count.to_string(),
+            cx,
+            row_y + icon_size as i32 + 10,
+            26.0,
+            Color::RGBA(255, 255, 255, 240),
+        );
     }
 }
 

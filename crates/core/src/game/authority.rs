@@ -16,18 +16,18 @@ impl Game {
         3 + (self.authority * 0.27) as usize
     }
 
-    /// Current rank name.
+    /// Current reputation name based on authority level.
     pub fn authority_rank_name(&self) -> &'static str {
         if self.authority >= 80.0 {
-            "Commander"
+            "Legend"
         } else if self.authority >= 60.0 {
-            "Captain"
+            "Hero"
         } else if self.authority >= 40.0 {
-            "Sergeant"
+            "Veteran"
         } else if self.authority >= 20.0 {
-            "Soldier"
+            "Known"
         } else {
-            "Recruit"
+            "Unknown"
         }
     }
 

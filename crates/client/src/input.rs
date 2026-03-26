@@ -172,8 +172,6 @@ pub struct Input {
     pub attack_pressed: bool,
     /// Keyboard attack key (space) was pressed this frame (consumed on read).
     attack_key_pressed: bool,
-    /// Recruit key pressed this frame (consumed on read).
-    recruit_pressed: bool,
     /// Order keys pressed this frame (consumed on read).
     order_follow_pressed: bool,
     order_charge_pressed: bool,
@@ -215,7 +213,6 @@ impl Input {
             has_used_joystick: false,
             attack_pressed: false,
             attack_key_pressed: false,
-            recruit_pressed: false,
             order_follow_pressed: false,
             order_charge_pressed: false,
             order_defend_pressed: false,
@@ -278,16 +275,14 @@ impl Input {
         if key == " " && !self.keys_down.contains(" ") {
             self.attack_key_pressed = true;
         }
-        if key == "r" && !self.keys_down.contains("r") {
-            self.recruit_pressed = true;
-        }
-        if key == "f" && !self.keys_down.contains("f") {
+        // R key removed — recruit is now bundled into J/K/L order keys
+        if key == "j" && !self.keys_down.contains("j") {
             self.order_follow_pressed = true;
         }
-        if key == "c" && !self.keys_down.contains("c") {
+        if key == "l" && !self.keys_down.contains("l") {
             self.order_charge_pressed = true;
         }
-        if key == "v" && !self.keys_down.contains("v") {
+        if key == "k" && !self.keys_down.contains("k") {
             self.order_defend_pressed = true;
         }
         self.keys_down.insert(key);
@@ -351,14 +346,7 @@ impl Input {
         r
     }
 
-    /// Consume Recruit key press (R).
-    pub fn take_recruit(&mut self) -> bool {
-        let r = self.recruit_pressed;
-        self.recruit_pressed = false;
-        r
-    }
-
-    /// Consume Follow order key press (F).
+    /// Consume Follow order key press (J or touch recruit button).
     pub fn take_order_follow(&mut self) -> bool {
         let r = self.order_follow_pressed;
         self.order_follow_pressed = false;
@@ -389,7 +377,6 @@ impl Input {
         self.keys_down.clear();
         self.scroll_delta = 0.0;
         self.attack_key_pressed = false;
-        self.recruit_pressed = false;
         self.order_follow_pressed = false;
         self.order_charge_pressed = false;
         self.order_defend_pressed = false;
@@ -405,7 +392,7 @@ impl Input {
     fn try_order_buttons(&mut self, touch_id: i32, x: f32, y: f32) -> bool {
         if self.recruit_btn.contains(x, y) {
             self.recruit_btn.press(touch_id);
-            self.recruit_pressed = true;
+            self.order_follow_pressed = true; // recruit button now triggers follow (which includes recruit)
             return true;
         }
         if self.order_follow_btn.contains(x, y) {

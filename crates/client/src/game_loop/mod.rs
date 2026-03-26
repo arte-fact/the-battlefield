@@ -368,29 +368,22 @@ pub fn run(
                         haptic(25);
                     }
 
-                    // Recruit: R key or touch button
-                    if inp.take_recruit() && game.recruit_units() > 0 && inp.is_touch_device {
-                        haptic(15);
+                    // Every order key also recruits nearby units first
+                    // J = recruit + follow, K = recruit + defend, L = recruit + charge
+                    if inp.take_order_follow() {
+                        game.recruit_units();
+                        game.issue_order("follow");
+                        if inp.is_touch_device { haptic(15); }
                     }
-
-                    // Player orders: F=Follow, C=Charge, V=Defend
-                    if inp.take_order_follow()
-                        && game.issue_order("follow") > 0
-                        && inp.is_touch_device
-                    {
-                        haptic(15);
+                    if inp.take_order_charge() {
+                        game.recruit_units();
+                        game.issue_order("charge");
+                        if inp.is_touch_device { haptic(15); }
                     }
-                    if inp.take_order_charge()
-                        && game.issue_order("charge") > 0
-                        && inp.is_touch_device
-                    {
-                        haptic(15);
-                    }
-                    if inp.take_order_defend()
-                        && game.issue_order("defend") > 0
-                        && inp.is_touch_device
-                    {
-                        haptic(15);
+                    if inp.take_order_defend() {
+                        game.recruit_units();
+                        game.issue_order("defend");
+                        if inp.is_touch_device { haptic(15); }
                     }
 
                     // Resolve circle-circle collisions

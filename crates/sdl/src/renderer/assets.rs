@@ -53,6 +53,8 @@ pub struct Assets<'a> {
     pub(super) sheep_textures: Vec<(Texture<'a>, u32)>,
     // Pawn: (texture, frame_w, frame_h, frame_count) — 5 per faction × 2 factions = 10
     pub(super) pawn_textures: Vec<(Texture<'a>, u32, u32, u32)>,
+    // Unit avatar portraits (256×256): 0=Warrior, 1=Lancer, 2=Archer, 3=Monk
+    pub(super) avatar_textures: Vec<Texture<'a>>,
     // Text rendering
     pub text: TextRenderer,
 }
@@ -504,6 +506,18 @@ impl<'a> Assets<'a> {
             ui_wood_table,
             sheep_textures,
             pawn_textures,
+            avatar_textures: {
+                let avatar_base =
+                    format!("{ASSET_BASE}/UI Elements/UI Elements/Human Avatars");
+                let mut v = Vec::new();
+                for filename in asset_manifest::AVATAR_FILES {
+                    let path = format!("{avatar_base}/{filename}");
+                    if let Some(tex) = load_png_texture(tc, &path) {
+                        v.push(tex);
+                    }
+                }
+                v
+            },
             fog_texture: {
                 use battlefield_core::grid::GRID_SIZE;
                 sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "1");

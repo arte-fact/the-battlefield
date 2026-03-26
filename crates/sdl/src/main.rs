@@ -195,22 +195,24 @@ fn main() {
                             let _ = gc.set_rumble(0x4000, 0x8000, 80);
                         }
                     }
-                    if player_input.recruit && game.recruit_units() > 0 {
+                    // Every order key also recruits nearby units first
+                    if player_input.order_follow {
+                        game.recruit_units();
+                        game.issue_order("follow");
                         if let Some(ref mut gc) = active_controller {
                             let _ = gc.set_rumble(0x2000, 0x4000, 50);
                         }
                     }
-                    if player_input.order_follow && game.issue_order("follow") > 0 {
+                    if player_input.order_charge {
+                        game.recruit_units();
+                        game.issue_order("charge");
                         if let Some(ref mut gc) = active_controller {
                             let _ = gc.set_rumble(0x2000, 0x4000, 50);
                         }
                     }
-                    if player_input.order_charge && game.issue_order("charge") > 0 {
-                        if let Some(ref mut gc) = active_controller {
-                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
-                        }
-                    }
-                    if player_input.order_defend && game.issue_order("defend") > 0 {
+                    if player_input.order_defend {
+                        game.recruit_units();
+                        game.issue_order("defend");
                         if let Some(ref mut gc) = active_controller {
                             let _ = gc.set_rumble(0x2000, 0x4000, 50);
                         }

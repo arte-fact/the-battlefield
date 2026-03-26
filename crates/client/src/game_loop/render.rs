@@ -3,7 +3,8 @@ use super::environment::{draw_bushes, draw_foam, draw_rocks, draw_water};
 use super::fog::update_fog_canvas;
 use super::foreground::draw_foreground;
 use super::hud::{
-    draw_authority_bar, draw_minimap, draw_overlays, draw_player_hp_bar, draw_unit_bars,
+    draw_authority_bar, draw_follower_panel, draw_minimap, draw_overlays, draw_player_hp_bar,
+    draw_unit_bars,
     draw_victory_progress, draw_zone_hud, draw_zone_overlays,
 };
 use super::screens::{draw_death_screen, draw_main_menu, draw_result_screen, GameScreen};
@@ -182,7 +183,7 @@ pub(super) fn render_frame(
     r.restore();
 
     // Draw zone HUD pips
-    draw_zone_hud(r, game, canvas_w, r.dpr(), input.is_touch_device)?;
+    draw_zone_hud(r, game, loaded, canvas_w, r.dpr(), input.is_touch_device)?;
 
     // Draw minimap (top-left on touch to avoid joystick, bottom-left on desktop)
     draw_minimap(
@@ -199,6 +200,7 @@ pub(super) fn render_frame(
     if state.screen == GameScreen::Playing {
         draw_player_hp_bar(r, game, loaded, r.dpr())?;
         draw_authority_bar(r, game, loaded, r.dpr())?;
+        draw_follower_panel(r, game, loaded, canvas_w, r.dpr())?;
     }
 
     // Draw victory progress bar (only during gameplay)

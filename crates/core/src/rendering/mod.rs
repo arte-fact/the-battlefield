@@ -40,6 +40,8 @@ pub enum SpriteKey {
     Sheep(usize),
     /// Pawn worker: faction_index * PAWN_SPECS.len() + sprite_index.
     Pawn(usize),
+    /// Unit avatar portrait (index from `asset_manifest::avatar_index`).
+    Avatar(usize),
 }
 
 /// Metadata returned by `DrawBackend::sprite_info`.

@@ -4,7 +4,8 @@ use battlefield_core::animation::TurnAnimator;
 use battlefield_core::game::{Game, ATTACK_CONE_HALF_ANGLE, ORDER_FLASH_DURATION};
 use battlefield_core::grid::{self, Decoration, TileKind, TILE_SIZE};
 use battlefield_core::render_util;
-use battlefield_core::unit::Faction;
+use battlefield_core::asset_manifest;
+use battlefield_core::unit::{Faction, UnitKind};
 use battlefield_core::zone::ZoneState;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -214,63 +215,103 @@ pub(super) fn draw_zone_overlays(
     Ok(())
 }
 
-/// Draw capture zone HUD pips in screen space (top-center on touch, top-right on desktop).
+/// Draw capture zone indicators on a paper panel at top-center.
 pub(super) fn draw_zone_hud(
     r: &Canvas2dRenderer,
     game: &Game,
+    loaded: &LoadedTextures,
     canvas_w: f64,
     dpr: f64,
-    is_touch: bool,
+    _is_touch: bool,
 ) -> Result<(), JsValue> {
     let zones = &game.zone_manager.zones;
     if zones.is_empty() {
         return Ok(());
     }
 
-    let pip_size = if is_touch { 20.0 * dpr } else { 14.0 * dpr };
-    let gap = if is_touch { 5.0 * dpr } else { 3.0 * dpr };
-    let margin = 10.0 * dpr;
-    let total_w = zones.len() as f64 * (pip_size + gap) - gap;
-    // Center horizontally on touch, right-align on desktop
-    let start_x = if is_touch {
-        (canvas_w - total_w) / 2.0
+    let pip_r = 14.0 * dpr; // circle radius
+    let pip_d = pip_r * 2.0;
+    let gap = 12.0 * dpr;
+    let pad = 18.0 * dpr;
+    let n = zones.len() as f64;
+    let panel_w = n * pip_d + (n - 1.0) * gap + pad * 2.0;
+    let panel_h = pip_d + pad * 2.0;
+    let panel_x = (canvas_w - panel_w) / 2.0;
+    let panel_y = 10.0 * dpr;
+
+    // Paper background
+    if let Some((ref atlas, aw, ah)) = loaded.ui_panel_atlas {
+        use battlefield_core::render_util::NINE_SLICE_SPECIAL_PAPER;
+        super::screens::draw_9slice_panel(
+            r,
+            atlas,
+            &NINE_SLICE_SPECIAL_PAPER,
+            aw as f64,
+            ah as f64,
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+        )?;
     } else {
-        canvas_w - margin - total_w
-    };
-    let y = margin;
+        r.set_fill_color("rgba(40,30,15,0.85)");
+        r.fill_rect(panel_x, panel_y, panel_w, panel_h);
+    }
 
     for (i, zone) in zones.iter().enumerate() {
-        let x = start_x + i as f64 * (pip_size + gap);
+        let cx = panel_x + pad + pip_r + i as f64 * (pip_d + gap);
+        let cy = panel_y + pad + pip_r;
+        let progress = zone.progress.abs() as f64;
 
-        // Background pip
-        r.set_fill_color("rgba(0,0,0,0.5)");
-        r.fill_rect(x, y, pip_size, pip_size);
-
-        // Color and fill ratio by state
-        let (color, fill_ratio) = match zone.state {
-            ZoneState::Neutral => ("rgba(150,150,150,0.5)", 0.0),
-            ZoneState::Contested => ("rgba(255,200,0,0.7)", zone.progress.abs() as f64),
-            ZoneState::Capturing(Faction::Blue) | ZoneState::Controlled(Faction::Blue) => {
-                ("rgba(60,120,255,0.8)", zone.progress.abs() as f64)
+        let (fill_color, ring_color, inner_alpha) = match zone.state {
+            ZoneState::Neutral => ("rgba(100,100,100,0.3)", "rgba(160,160,160,0.4)", 0.3),
+            ZoneState::Contested => ("rgba(255,200,0,0.6)", "rgba(255,220,60,0.7)", 0.6),
+            ZoneState::Capturing(Faction::Blue) => {
+                ("rgba(60,130,255,0.7)", "rgba(100,170,255,0.8)", 0.7)
             }
-            ZoneState::Capturing(Faction::Red) | ZoneState::Controlled(Faction::Red) => {
-                ("rgba(255,60,60,0.8)", zone.progress.abs() as f64)
+            ZoneState::Controlled(Faction::Blue) => {
+                ("rgba(60,130,255,1.0)", "rgba(140,200,255,1.0)", 1.0)
+            }
+            ZoneState::Capturing(Faction::Red) => {
+                ("rgba(255,60,60,0.7)", "rgba(255,110,110,0.8)", 0.7)
+            }
+            ZoneState::Controlled(Faction::Red) => {
+                ("rgba(255,60,60,1.0)", "rgba(255,150,150,1.0)", 1.0)
             }
         };
 
-        if fill_ratio > 0.01 {
-            r.set_fill_color(color);
-            let fill_h = pip_size * fill_ratio;
-            r.fill_rect(x, y + pip_size - fill_h, pip_size, fill_h);
-        }
+        // Background circle
+        r.begin_path();
+        let _ = r.arc(cx, cy, pip_r, 0.0, std::f64::consts::TAU);
+        r.set_fill_color("rgba(30,25,20,0.5)");
+        r.fill();
 
-        // Border
-        r.set_stroke_color("rgba(255,255,255,0.35)");
-        r.set_line_width(1.0);
-        r.stroke_rect(x, y, pip_size, pip_size);
+        // Inner fill circle scaled by progress
+        let inner_r = pip_r * progress.max(0.15);
+        r.begin_path();
+        let _ = r.arc(cx, cy, inner_r, 0.0, std::f64::consts::TAU);
+        r.set_fill_color(fill_color);
+        r.fill();
+
+        // Outer ring
+        r.begin_path();
+        let _ = r.arc(cx, cy, pip_r, 0.0, std::f64::consts::TAU);
+        r.set_stroke_color(ring_color);
+        r.set_line_width(2.0 * dpr);
+        r.stroke();
+
+        // Glow for fully controlled
+        if inner_alpha >= 1.0 {
+            r.set_alpha(0.3);
+            r.begin_path();
+            let _ = r.arc(cx, cy, pip_r + 2.0 * dpr, 0.0, std::f64::consts::TAU);
+            r.set_stroke_color(ring_color);
+            r.set_line_width(2.0 * dpr);
+            r.stroke();
+            r.set_alpha(1.0);
+        }
     }
 
-    r.set_alpha(1.0);
     Ok(())
 }
 
@@ -668,18 +709,101 @@ pub(super) fn draw_authority_bar(
         r.stroke_rect(bar_x, bar_y, bar_w, bar_h);
     }
 
-    // Rank name + follower count (on top of everything)
+    Ok(())
+}
+
+/// Draw a panel showing recruited follower counts with avatar portraits on a paper background.
+/// Includes rank name and follower count. Positioned at top-right.
+pub(super) fn draw_follower_panel(
+    r: &Canvas2dRenderer,
+    game: &Game,
+    loaded: &LoadedTextures,
+    canvas_w: f64,
+    dpr: f64,
+) -> Result<(), JsValue> {
+    let counts = game.recruited_counts();
+
+    let icon_size = 48.0 * dpr;
+    let pad = 12.0 * dpr;
+    let gap = 6.0 * dpr;
+    let count_font = 14.0 * dpr;
+    let header_font = 11.0 * dpr;
+    let header_h = 18.0 * dpr;
+    let entry_w = icon_size + 4.0 * dpr;
+
+    // Always show all 4 unit types
+    let all_kinds: [(UnitKind, usize); 4] = [
+        (UnitKind::Warrior, counts[0]),
+        (UnitKind::Archer, counts[1]),
+        (UnitKind::Lancer, counts[2]),
+        (UnitKind::Monk, counts[3]),
+    ];
+
+    let cols = 4.0_f64;
+    let panel_w = cols * entry_w + (cols - 1.0).max(0.0) * gap + pad * 2.0;
+    let panel_h = header_h + icon_size + count_font + pad * 2.0 + gap;
+    let panel_x = canvas_w - panel_w - 10.0 * dpr;
+    let panel_y = 8.0 * dpr;
+
+    // Paper 9-slice background
+    if let Some((ref atlas, aw, ah)) = loaded.ui_panel_atlas {
+        use battlefield_core::render_util::NINE_SLICE_SPECIAL_PAPER;
+        super::screens::draw_9slice_panel(
+            r,
+            atlas,
+            &NINE_SLICE_SPECIAL_PAPER,
+            aw as f64,
+            ah as f64,
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+        )?;
+    } else {
+        r.set_fill_color("rgba(40,30,15,0.85)");
+        r.fill_rect(panel_x, panel_y, panel_w, panel_h);
+    }
+
+    // Header: rank + follower count
     let rank = game.authority_rank_name();
     let followers = game.follower_count();
     let max_followers = game.authority_max_followers();
-    let label = format!("{rank}  {followers} of {max_followers}");
-
-    let font_size = 10.0 * dpr;
-    r.set_font(&format!("bold {font_size}px sans-serif"));
-    r.set_fill_color("rgba(255,255,255,0.86)");
+    let header = format!("{rank}  {followers} of {max_followers}");
+    r.set_font(&format!("bold {header_font}px sans-serif"));
+    r.set_fill_color("rgba(255,255,255,0.95)");
     r.set_text_align("center");
-    r.set_text_baseline("middle");
-    r.fill_text(&label, bar_x + bar_w / 2.0, bar_y + bar_h / 2.0);
+    r.set_text_baseline("top");
+    r.fill_text(&header, panel_x + panel_w / 2.0, panel_y + pad * 0.6);
+
+    // Portraits + counts
+    let row_y = panel_y + pad + header_h;
+    r.set_font(&format!("bold {count_font}px sans-serif"));
+    r.set_text_align("center");
+    r.set_text_baseline("top");
+
+    for (i, &(kind, count)) in all_kinds.iter().enumerate() {
+        let cx = panel_x + pad + i as f64 * (entry_w + gap) + entry_w / 2.0;
+        let ix = cx - icon_size / 2.0;
+
+        // Dim avatars with 0 count
+        if count == 0 {
+            r.set_alpha(0.35);
+        }
+
+        let avatar_idx = asset_manifest::avatar_index(kind);
+        if let Some(&tex_id) = loaded.avatar_textures.get(avatar_idx) {
+            r.draw_texture(
+                tex_id, 0.0, 0.0, 256.0, 256.0, ix, row_y, icon_size, icon_size,
+            )?;
+        }
+
+        if count == 0 {
+            r.set_alpha(1.0);
+        }
+
+        r.set_fill_color("rgba(255,255,255,0.95)");
+        r.fill_text(&format!("{count}"), cx, row_y + icon_size + 2.0 * dpr);
+    }
 
     Ok(())
 }

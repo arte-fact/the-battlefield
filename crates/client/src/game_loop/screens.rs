@@ -42,7 +42,7 @@ pub(super) struct OverlayButton {
 ///
 /// Uses `NineSlice::compute()` to split the atlas into 9 source-to-dest draw
 /// commands. Corners keep their source pixel size; edges and center stretch.
-fn draw_9slice_panel(
+pub(super) fn draw_9slice_panel(
     r: &Canvas2dRenderer,
     atlas: &HtmlCanvasElement,
     ns: &NineSlice,

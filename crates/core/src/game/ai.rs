@@ -248,13 +248,21 @@ impl Game {
             return;
         }
 
-        // Follow nearest friendly combatant at standoff distance
+        // Follow nearest ADVANCING combatant (not rally_hold, not player, not monk).
+        // This prevents monks from orbiting the base when the player stays home.
+        let max_follow = TILE_SIZE * 15.0;
         let follow_target = self
             .units
             .iter()
             .filter(|u| {
-                u.alive && u.faction == faction && u.id != ai_id && u.kind != UnitKind::Monk
+                u.alive
+                    && u.faction == faction
+                    && u.id != ai_id
+                    && u.kind != UnitKind::Monk
+                    && !u.is_player
+                    && !u.rally_hold
             })
+            .filter(|u| u.distance_to_pos(ax, ay) <= max_follow)
             .min_by(|a, b| {
                 let da = a.distance_to_pos(ax, ay);
                 let db = b.distance_to_pos(ax, ay);

@@ -214,13 +214,12 @@ impl InputState {
             attack: kb_attack || gp_attack,
             aim_dir: self.aim_dir,
             aim_lock,
-            recruit: self.pressed_this_frame.contains(&Scancode::R)
-                || self.gamepad_pressed(Button::RightShoulder),
-            order_follow: self.pressed_this_frame.contains(&Scancode::F)
+            recruit: false, // recruit is now bundled into order keys (J/K/L)
+            order_follow: self.pressed_this_frame.contains(&Scancode::J)
                 || self.gamepad_pressed(Button::X),
-            order_charge: self.pressed_this_frame.contains(&Scancode::C)
+            order_charge: self.pressed_this_frame.contains(&Scancode::L)
                 || self.gamepad_pressed(Button::B),
-            order_defend: self.pressed_this_frame.contains(&Scancode::V)
+            order_defend: self.pressed_this_frame.contains(&Scancode::K)
                 || self.gamepad_pressed(Button::Y),
         }
     }
