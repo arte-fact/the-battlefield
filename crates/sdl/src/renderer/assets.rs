@@ -258,6 +258,13 @@ impl<'a> Assets<'a> {
                 particle_textures.insert(kind, tex);
             }
         }
+        // Heal effect (from Monk sprite folder)
+        {
+            let path = format!("{ASSET_BASE}/Units/Blue Units/Monk/Heal_Effect.png");
+            if let Some(tex) = load_png_texture(tc, &path) {
+                particle_textures.insert(ParticleKind::HealEffect, tex);
+            }
+        }
 
         // Load building textures from shared manifest (indexed by kind*2 + faction)
         let total_building_slots = asset_manifest::BUILDING_SPECS.len() * 2;

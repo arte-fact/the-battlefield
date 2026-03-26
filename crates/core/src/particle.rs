@@ -5,6 +5,7 @@ use crate::unit::Faction;
 pub enum ParticleKind {
     Dust,
     ExplosionLarge,
+    HealEffect,
 }
 
 impl ParticleKind {
@@ -12,13 +13,14 @@ impl ParticleKind {
         match self {
             ParticleKind::Dust => 8,
             ParticleKind::ExplosionLarge => 10,
+            ParticleKind::HealEffect => 11,
         }
     }
 
     pub fn frame_size(self) -> u32 {
         match self {
             ParticleKind::Dust => 64,
-            ParticleKind::ExplosionLarge => 192,
+            ParticleKind::ExplosionLarge | ParticleKind::HealEffect => 192,
         }
     }
 
@@ -26,6 +28,7 @@ impl ParticleKind {
         match self {
             ParticleKind::Dust => "Dust_01.png",
             ParticleKind::ExplosionLarge => "Explosion_02.png",
+            ParticleKind::HealEffect => "Heal_Effect.png",
         }
     }
 }
@@ -34,6 +37,8 @@ pub struct Particle {
     pub kind: ParticleKind,
     pub world_x: f32,
     pub world_y: f32,
+    /// If set, particle follows this unit's position each frame.
+    pub follow_unit: Option<crate::unit::UnitId>,
     pub animation: AnimationState,
     pub finished: bool,
 }
@@ -44,6 +49,18 @@ impl Particle {
             kind,
             world_x,
             world_y,
+            follow_unit: None,
+            animation: AnimationState::new(kind.frame_count(), 15.0),
+            finished: false,
+        }
+    }
+
+    pub fn new_follow(kind: ParticleKind, unit_id: crate::unit::UnitId, x: f32, y: f32) -> Self {
+        Self {
+            kind,
+            world_x: x,
+            world_y: y,
+            follow_unit: Some(unit_id),
             animation: AnimationState::new(kind.frame_count(), 15.0),
             finished: false,
         }

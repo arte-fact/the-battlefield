@@ -50,7 +50,11 @@ impl WasmDrawBackend<'_> {
                     .map(|&(id, _, _)| id)
             }
             SpriteKey::Particle(idx) => {
-                let filename = asset_manifest::PARTICLE_SPECS.get(idx).map(|s| s.2)?;
+                let filename = if idx == asset_manifest::HEAL_EFFECT_INDEX {
+                    asset_manifest::HEAL_EFFECT_SPEC.2
+                } else {
+                    asset_manifest::PARTICLE_SPECS.get(idx).map(|s| s.2)?
+                };
                 self.loaded.particle_textures.get(filename).copied()
             }
             SpriteKey::Arrow => self.loaded.arrow_texture,

@@ -480,7 +480,11 @@ fn draw_particle(
     if p.finished {
         return;
     }
-    if let Some(tex) = assets.particle_textures.get(&p.kind) {
+    if let Some(tex) = assets.particle_textures.get_mut(&p.kind) {
+        let is_heal = p.kind == battlefield_core::particle::ParticleKind::HealEffect;
+        if is_heal {
+            tex.set_alpha_mod(153); // ~60% opacity
+        }
         let fs = p.kind.frame_size();
         let sheet = SpriteSheet {
             frame_width: fs,
@@ -500,6 +504,9 @@ fn draw_particle(
         );
         let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
         let _ = canvas.copy(tex, src, dst);
+        if is_heal {
+            tex.set_alpha_mod(255);
+        }
     }
 }
 

@@ -272,7 +272,12 @@ fn draw_particle(backend: &mut impl DrawBackend, game: &Game, idx: usize) {
     let dx = p.world_x as f64 - size / 2.0;
     let dy = p.world_y as f64 - size / 2.0;
 
-    backend.draw_sprite(key, p.animation.current_frame, dx, dy, size, size, false, 1.0);
+    let alpha = if p.kind == crate::particle::ParticleKind::HealEffect {
+        0.6
+    } else {
+        1.0
+    };
+    backend.draw_sprite(key, p.animation.current_frame, dx, dy, size, size, false, alpha);
 }
 
 fn draw_sheep(backend: &mut impl DrawBackend, game: &Game, idx: usize) {

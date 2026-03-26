@@ -15,7 +15,7 @@ use crate::combat as crate_combat;
 use crate::flowfield::FactionFlowState;
 use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::mapgen;
-use crate::particle::{Particle, Projectile};
+use crate::particle::{Particle, ParticleKind, Projectile};
 use crate::player_input::PlayerInput;
 use crate::pawn::Pawn;
 use crate::sheep::Sheep;
@@ -169,6 +169,15 @@ impl Game {
         }
 
         for particle in &mut self.particles {
+            // Track following particles to their target unit
+            if let Some(uid) = particle.follow_unit {
+                if let Some(u) = self.units.iter().find(|u| u.id == uid && u.alive) {
+                    particle.world_x = u.x;
+                    particle.world_y = u.y;
+                } else {
+                    particle.finished = true;
+                }
+            }
             particle.update(dt);
         }
         self.particles.retain(|p| !p.finished);

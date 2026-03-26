@@ -127,17 +127,24 @@ pub const WATER_ROCK_FRAME_COUNT: u32 = 16;
 // ---------------------------------------------------------------------------
 
 /// Particle specs loaded at startup: (frame_size, frame_count, filename).
+/// Particle specs from Particle FX folder: (frame_size, frame_count, filename).
 pub const PARTICLE_SPECS: &[(u32, u32, &str)] = &[
-    (64, 8, "Dust_01.png"),
-    (192, 8, "Explosion_01.png"),
-    (192, 10, "Explosion_02.png"),
+    (64, 8, "Dust_01.png"),       // 0
+    (192, 8, "Explosion_01.png"), // 1
+    (192, 10, "Explosion_02.png"), // 2
 ];
+
+/// Heal effect particle (from Units/Blue Units/Monk/).
+pub const HEAL_EFFECT_SPEC: (u32, u32, &str) = (192, 11, "Heal_Effect.png");
+/// Index of heal effect in the particle texture array (after PARTICLE_SPECS).
+pub const HEAL_EFFECT_INDEX: usize = 3;
 
 /// Map a ParticleKind to its index in PARTICLE_SPECS / the particle texture array.
 pub fn particle_sprite_index(kind: ParticleKind) -> usize {
     match kind {
         ParticleKind::Dust => 0,
-        ParticleKind::ExplosionLarge => 2, // Explosion_02.png
+        ParticleKind::ExplosionLarge => 2,
+        ParticleKind::HealEffect => HEAL_EFFECT_INDEX,
     }
 }
 

@@ -133,6 +133,12 @@ impl Game {
         };
 
         let amount = crate_combat::execute_heal(healer, target);
+        // Spawn heal effect particle that follows the healed unit
+        let tid = target.id;
+        let tx = target.x;
+        let ty = target.y;
+        self.particles
+            .push(Particle::new_follow(ParticleKind::HealEffect, tid, tx, ty));
         self.turn_events.push(TurnEvent::Heal {
             healer_id,
             target_id,

@@ -257,6 +257,15 @@ pub(super) async fn load_textures(
             .particle_textures
             .insert(filename, tex_id);
     }
+    // Heal effect (from Monk sprite folder)
+    {
+        let url = format!("{}/Units/Blue Units/Monk/Heal_Effect.png", ASSET_BASE);
+        let tex_id = load_texture(state, &url, 192, 192, 11).await?;
+        loaded
+            .borrow_mut()
+            .particle_textures
+            .insert("Heal_Effect.png", tex_id);
+    }
 
     // Load arrow projectile
     {
