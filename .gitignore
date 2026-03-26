@@ -49,3 +49,12 @@ pi/qemu-system/images/
 
 # Core dumps
 *.core
+
+# SDL Emscripten build output
+web-sdl/dist/
+
+# Editor tags
+tags
+
+# Claude Code
+.claude/
