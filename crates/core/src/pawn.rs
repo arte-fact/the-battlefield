@@ -124,9 +124,14 @@ impl Pawn {
         if sx < 0 || sy < 0 {
             return false;
         }
-        if let Some(path) =
-            grid.find_path(sx as u32, sy as u32, goal_gx, goal_gy, PAWN_PATH_MAX, |_, _| false)
-        {
+        if let Some(path) = grid.find_path(
+            sx as u32,
+            sy as u32,
+            goal_gx,
+            goal_gy,
+            PAWN_PATH_MAX,
+            |_, _| false,
+        ) {
             self.waypoints = path;
             self.waypoint_idx = 0;
             self.stuck_timer = 0.0;
@@ -201,11 +206,7 @@ impl Pawn {
     }
 
     /// Find nearest Forest tile not claimed by another pawn. Returns grid coords.
-    fn find_nearest_tree(
-        &mut self,
-        grid: &Grid,
-        claimed: &[(u32, u32)],
-    ) -> Option<(u32, u32)> {
+    fn find_nearest_tree(&mut self, grid: &Grid, claimed: &[(u32, u32)]) -> Option<(u32, u32)> {
         let (gx, gy) = grid::world_to_grid(self.x, self.y);
         let mut best: Option<((u32, u32), f32)> = None;
 
@@ -280,7 +281,9 @@ impl Pawn {
     /// Returns the tree tile this pawn is currently targeting (for claim tracking).
     pub fn claimed_tree(&self) -> Option<(u32, u32)> {
         match self.state {
-            PawnState::WalkingToTree | PawnState::Chopping => Some((self.target_gx, self.target_gy)),
+            PawnState::WalkingToTree | PawnState::Chopping => {
+                Some((self.target_gx, self.target_gy))
+            }
             _ => None,
         }
     }

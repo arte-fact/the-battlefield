@@ -129,8 +129,8 @@ pub const WATER_ROCK_FRAME_COUNT: u32 = 16;
 /// Particle specs loaded at startup: (frame_size, frame_count, filename).
 /// Particle specs from Particle FX folder: (frame_size, frame_count, filename).
 pub const PARTICLE_SPECS: &[(u32, u32, &str)] = &[
-    (64, 8, "Dust_01.png"),       // 0
-    (192, 8, "Explosion_01.png"), // 1
+    (64, 8, "Dust_01.png"),        // 0
+    (192, 8, "Explosion_01.png"),  // 1
     (192, 10, "Explosion_02.png"), // 2
 ];
 

@@ -253,8 +253,7 @@ impl Game {
             if b.kind == building::BuildingKind::House {
                 let (wx, wy) = grid::grid_to_world(b.grid_x, b.grid_y);
                 pawn_seed = pawn_seed.wrapping_mul(1103515245).wrapping_add(12345);
-                self.pawns
-                    .push(Pawn::new(wx, wy, b.faction, pawn_seed));
+                self.pawns.push(Pawn::new(wx, wy, b.faction, pawn_seed));
             }
         }
 

@@ -138,7 +138,16 @@ fn draw_unit(backend: &mut impl DrawBackend, game: &Game, idx: usize, elapsed: f
     let dx = unit.x as f64 - sprite_size / 2.0;
     let dy = unit.y as f64 - sprite_size / 2.0;
 
-    backend.draw_sprite(key, anim_frame, dx, dy, sprite_size, sprite_size, flip, alpha);
+    backend.draw_sprite(
+        key,
+        anim_frame,
+        dx,
+        dy,
+        sprite_size,
+        sprite_size,
+        flip,
+        alpha,
+    );
 }
 
 fn draw_tree(
@@ -192,7 +201,16 @@ fn draw_water_rock(backend: &mut impl DrawBackend, gx: u32, gy: u32, elapsed: f6
     let frame = render_util::compute_wave_frame(elapsed, gx, gy, info.frame_count, 0.2);
     let flip = render_util::tile_flip(gx, gy);
 
-    backend.draw_sprite(key, frame, gx as f64 * ts, gy as f64 * ts, ts, ts, flip, 1.0);
+    backend.draw_sprite(
+        key,
+        frame,
+        gx as f64 * ts,
+        gy as f64 * ts,
+        ts,
+        ts,
+        flip,
+        1.0,
+    );
 }
 
 fn draw_building(
@@ -277,7 +295,16 @@ fn draw_particle(backend: &mut impl DrawBackend, game: &Game, idx: usize) {
     } else {
         1.0
     };
-    backend.draw_sprite(key, p.animation.current_frame, dx, dy, size, size, false, alpha);
+    backend.draw_sprite(
+        key,
+        p.animation.current_frame,
+        dx,
+        dy,
+        size,
+        size,
+        false,
+        alpha,
+    );
 }
 
 fn draw_sheep(backend: &mut impl DrawBackend, game: &Game, idx: usize) {
@@ -321,7 +348,16 @@ fn draw_pawn(backend: &mut impl DrawBackend, game: &Game, idx: usize) {
     let dx = pawn.x as f64 - size / 2.0;
     let dy = pawn.y as f64 - size / 2.0;
 
-    backend.draw_sprite(key, pawn.animation.current_frame, dx, dy, size, size, flip, 1.0);
+    backend.draw_sprite(
+        key,
+        pawn.animation.current_frame,
+        dx,
+        dy,
+        size,
+        size,
+        flip,
+        1.0,
+    );
 }
 
 fn draw_projectiles(backend: &mut impl DrawBackend, game: &Game) {

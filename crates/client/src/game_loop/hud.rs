@@ -1,10 +1,10 @@
 use super::assets::LoadedTextures;
 use crate::renderer::{Canvas2dRenderer, Renderer};
 use battlefield_core::animation::TurnAnimator;
+use battlefield_core::asset_manifest;
 use battlefield_core::game::{Game, ATTACK_CONE_HALF_ANGLE, ORDER_FLASH_DURATION};
 use battlefield_core::grid::{self, Decoration, TileKind, TILE_SIZE};
 use battlefield_core::render_util;
-use battlefield_core::asset_manifest;
 use battlefield_core::unit::{Faction, UnitKind};
 use battlefield_core::zone::ZoneState;
 use wasm_bindgen::prelude::*;

@@ -16,8 +16,8 @@ use crate::flowfield::FactionFlowState;
 use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::mapgen;
 use crate::particle::{Particle, ParticleKind, Projectile};
-use crate::player_input::PlayerInput;
 use crate::pawn::Pawn;
+use crate::player_input::PlayerInput;
 use crate::sheep::Sheep;
 use crate::unit::{
     Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS,

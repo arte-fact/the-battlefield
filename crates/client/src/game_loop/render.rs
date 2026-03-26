@@ -4,8 +4,7 @@ use super::fog::update_fog_canvas;
 use super::foreground::draw_foreground;
 use super::hud::{
     draw_authority_bar, draw_follower_panel, draw_minimap, draw_overlays, draw_player_hp_bar,
-    draw_unit_bars,
-    draw_victory_progress, draw_zone_hud, draw_zone_overlays,
+    draw_unit_bars, draw_victory_progress, draw_zone_hud, draw_zone_overlays,
 };
 use super::screens::{draw_death_screen, draw_main_menu, draw_result_screen, GameScreen};
 use super::terrain::{render_terrain_chunk, CHUNK_TILES};

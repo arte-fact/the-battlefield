@@ -78,14 +78,7 @@ pub trait DrawBackend {
     );
 
     /// Draw a sprite rotated around its center (used for arrow projectiles).
-    fn draw_rotated(
-        &mut self,
-        key: SpriteKey,
-        center_x: f64,
-        center_y: f64,
-        size: f64,
-        angle: f64,
-    );
+    fn draw_rotated(&mut self, key: SpriteKey, center_x: f64, center_y: f64, size: f64, angle: f64);
 
     /// Query sprite metadata. Returns `None` if the texture isn't loaded.
     fn sprite_info(&self, key: SpriteKey) -> Option<SpriteInfo>;

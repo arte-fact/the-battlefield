@@ -43,12 +43,11 @@ impl WasmDrawBackend<'_> {
             SpriteKey::Tree(idx) => self.loaded.tree_textures.get(idx).map(|&(id, _, _)| id),
             SpriteKey::Rock(idx) => self.loaded.rock_textures.get(idx).copied(),
             SpriteKey::Bush(idx) => self.loaded.bush_textures.get(idx).map(|&(id, _, _)| id),
-            SpriteKey::WaterRock(idx) => {
-                self.loaded
-                    .water_rock_textures
-                    .get(idx)
-                    .map(|&(id, _, _)| id)
-            }
+            SpriteKey::WaterRock(idx) => self
+                .loaded
+                .water_rock_textures
+                .get(idx)
+                .map(|&(id, _, _)| id),
             SpriteKey::Particle(idx) => {
                 let filename = if idx == asset_manifest::HEAL_EFFECT_INDEX {
                     asset_manifest::HEAL_EFFECT_SPEC.2
@@ -113,9 +112,9 @@ impl DrawBackend for WasmDrawBackend<'_> {
                 let fh = info.frame_height as f64;
                 let sheet_w = info.frame_count as f64 * fw;
                 let flipped_sx = sheet_w - sx - fw;
-                let _ =
-                    self.r
-                        .draw_canvas_region(canvas, flipped_sx, 0.0, fw, fh, x, y, w, h);
+                let _ = self
+                    .r
+                    .draw_canvas_region(canvas, flipped_sx, 0.0, fw, fh, x, y, w, h);
                 if (alpha - 1.0).abs() > 0.001 {
                     self.r.set_alpha(1.0);
                 }
@@ -142,9 +141,9 @@ impl DrawBackend for WasmDrawBackend<'_> {
         let _ = self.r.translate(cx, cy);
         let _ = self.r.rotate(draw_angle);
         let half = size / 2.0;
-        let _ =
-            self.r
-                .draw_texture(tex_id, 0.0, 0.0, size, size, -half, -half, size, size);
+        let _ = self
+            .r
+            .draw_texture(tex_id, 0.0, 0.0, size, size, -half, -half, size, size);
         self.r.restore();
     }
 

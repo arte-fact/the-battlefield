@@ -290,10 +290,10 @@ pub fn generate_base_buildings(faction: Faction, cx: u32, cy: u32, seed: u32) ->
     // --- 2 front-flank towers + 2 mid-flank towers ---
     // Placed after production buildings to avoid exclusion conflicts.
     let tower_positions: [(i32, i32); 4] = [
-        (-7, fs * 7),  // front-left
-        (7, fs * 7),   // front-right
-        (-10, 0),      // mid-left flank
-        (10, 0),       // mid-right flank
+        (-7, fs * 7), // front-left
+        (7, fs * 7),  // front-right
+        (-10, 0),     // mid-left flank
+        (10, 0),      // mid-right flank
     ];
     for &(dx, dy) in &tower_positions {
         let tx = icx + dx;

@@ -421,10 +421,7 @@ pub(super) async fn load_textures(
             for &(filename, frame_count) in PAWN_SPECS {
                 let url = format!("{}/Units/{}/Pawn/{}", ASSET_BASE, folder, filename);
                 if let Ok(tex_id) = load_texture(state, &url, 192, 192, frame_count).await {
-                    loaded
-                        .borrow_mut()
-                        .pawn_textures
-                        .push((tex_id, 192, 192));
+                    loaded.borrow_mut().pawn_textures.push((tex_id, 192, 192));
                 }
             }
         }

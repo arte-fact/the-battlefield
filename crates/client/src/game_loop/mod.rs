@@ -373,17 +373,23 @@ pub fn run(
                     if inp.take_order_follow() {
                         game.recruit_units();
                         game.issue_order("follow");
-                        if inp.is_touch_device { haptic(15); }
+                        if inp.is_touch_device {
+                            haptic(15);
+                        }
                     }
                     if inp.take_order_charge() {
                         game.recruit_units();
                         game.issue_order("charge");
-                        if inp.is_touch_device { haptic(15); }
+                        if inp.is_touch_device {
+                            haptic(15);
+                        }
                     }
                     if inp.take_order_defend() {
                         game.recruit_units();
                         game.issue_order("defend");
-                        if inp.is_touch_device { haptic(15); }
+                        if inp.is_touch_device {
+                            haptic(15);
+                        }
                     }
 
                     // Resolve circle-circle collisions
