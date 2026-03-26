@@ -382,7 +382,6 @@ impl ZoneManager {
             0.0
         }
     }
-
 }
 
 #[cfg(test)]

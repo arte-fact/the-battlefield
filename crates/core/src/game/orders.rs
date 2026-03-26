@@ -162,6 +162,7 @@ impl Game {
             // Newly recruited units default to Follow
             self.units[idx].order = Some(OrderKind::Follow);
             self.units[idx].order_flash = ORDER_FLASH_DURATION;
+            self.units[idx].zone_lock_timer = 0.0;
             self.units[idx].ai_waypoints.clear();
             self.units[idx].ai_waypoint_idx = 0;
             self.units[idx].ai_path_cooldown = 0.0;
@@ -211,6 +212,7 @@ impl Game {
 
             self.units[idx].order = Some(order);
             self.units[idx].order_flash = ORDER_FLASH_DURATION;
+            self.units[idx].zone_lock_timer = 0.0;
             self.units[idx].ai_waypoints.clear();
             self.units[idx].ai_waypoint_idx = 0;
             self.units[idx].ai_path_cooldown = 0.0;

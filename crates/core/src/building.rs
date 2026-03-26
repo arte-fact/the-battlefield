@@ -35,20 +35,10 @@ impl BuildingKind {
             }
             BuildingKind::Monastery => {
                 // 192x320 sprite = 3×5 tiles; walls span 3 rows
-                &[
-                    (-1, -1),
-                    (0, -1),
-                    (1, -1),
-                ]
+                &[(-1, -1), (0, -1), (1, -1)]
             }
             // Castle: 320x256 sprite; ground-level walls = 5×2
-            BuildingKind::Castle => &[
-                (-2, -1),
-                (-1, -1),
-                (0, -1),
-                (1, -1),
-                (2, -1),
-            ],
+            BuildingKind::Castle => &[(-2, -1), (-1, -1), (0, -1), (1, -1), (2, -1)],
             // DefenseTower: 128x256 sprite; circular base = 2×2
             BuildingKind::DefenseTower => &[(0, -1)],
             // House: 128x192 sprite; walls = 2×2

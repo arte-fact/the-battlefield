@@ -22,7 +22,9 @@ impl Game {
 
         // Recompute macro objectives periodically
         self.objective_timer += dt;
-        if self.objective_timer >= Self::OBJECTIVE_INTERVAL || self.macro_objectives[0].is_empty() {
+        let refresh_objectives =
+            self.objective_timer >= Self::OBJECTIVE_INTERVAL || self.macro_objectives[0].is_empty();
+        if refresh_objectives {
             self.objective_timer = 0.0;
             self.macro_objectives[0] = self.zone_manager.score_all_zones(Faction::Blue);
             self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red);
@@ -31,6 +33,11 @@ impl Game {
         // Update flow fields for both factions before unit loop
         self.update_flow_fields(Faction::Blue);
         self.update_flow_fields(Faction::Red);
+
+        // Assign per-unit zone objectives when macro objectives are refreshed
+        if refresh_objectives {
+            self.assign_unit_objectives();
+        }
 
         let ai_indices: Vec<usize> = self
             .units

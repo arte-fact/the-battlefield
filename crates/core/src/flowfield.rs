@@ -58,7 +58,12 @@ impl FlowField {
         }
 
         if heap.is_empty() {
-            return Self { directions, integration, width: w, height: h };
+            return Self {
+                directions,
+                integration,
+                width: w,
+                height: h,
+            };
         }
 
         // Dijkstra from all seeded goals simultaneously
@@ -122,7 +127,12 @@ impl FlowField {
             }
         }
 
-        Self { directions, integration, width: w, height: h }
+        Self {
+            directions,
+            integration,
+            width: w,
+            height: h,
+        }
     }
 
     /// O(1) direction lookup at grid cell (gx, gy).
@@ -146,9 +156,16 @@ impl FlowField {
 /// Per-faction cached flow field state.
 #[derive(Default)]
 pub struct FactionFlowState {
+    /// Unified multi-source field (fallback navigation).
     pub field: Option<FlowField>,
     /// Cached (gx, gy, initial_cost) tuples used to detect when regeneration is needed.
     pub cached_goals: Vec<(u32, u32, u32)>,
+    /// Per-zone flow fields, indexed by zone id.
+    pub zone_fields: Vec<Option<FlowField>>,
+    /// Cached (gx, gy) per zone for change detection.
+    pub cached_zone_goals: Vec<Option<(u32, u32)>>,
+    /// Number of units assigned to each zone (updated each scoring cycle).
+    pub zone_congestion: Vec<u32>,
 }
 
 impl FactionFlowState {
@@ -245,6 +262,10 @@ mod tests {
         // Net: should flow toward A despite being slightly closer to B in raw distance
         let ff = FlowField::generate_multi_source(&grid, &[(2, 5, 0), (17, 5, 50)]);
         let dir = ff.direction_at(10, 5);
-        assert_eq!(dir, (-1, 0), "score bias should redirect toward higher-priority goal A");
+        assert_eq!(
+            dir,
+            (-1, 0),
+            "score bias should redirect toward higher-priority goal A"
+        );
     }
 }
