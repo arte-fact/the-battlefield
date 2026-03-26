@@ -55,15 +55,11 @@ impl Camera {
 
     /// Calculate an ideal zoom level based on viewport dimensions.
     /// Targets ~14 tiles visible along the shortest axis for a close,
-    /// action-focused view on both portrait and landscape mobile.
+    /// action-focused view on both portrait and landscape.
     pub fn ideal_zoom(&self) -> f32 {
         let tile = crate::grid::TILE_SIZE;
         let short = self.viewport_w.min(self.viewport_h);
-        let target_tiles = if self.viewport_h > self.viewport_w {
-            14.0 // portrait
-        } else {
-            14.0 // landscape
-        };
+        let target_tiles = 14.0;
         let raw = short / (target_tiles * tile);
         let snapped = (raw * 64.0).round() / 64.0;
         snapped.clamp(MIN_ZOOM, MAX_ZOOM)

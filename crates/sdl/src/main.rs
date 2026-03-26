@@ -41,6 +41,8 @@ struct GameLoop {
     seed: u32,
     player_was_alive: bool,
     dpi_scale: f64,
+    /// Actual device pixel ratio (for touch button sizing on mobile).
+    touch_dpr: f32,
 
     last_time: Instant,
     start_time: Instant,
@@ -106,7 +108,11 @@ impl GameLoop {
             if vw != cur_sdl_w {
                 let _ = self.canvas.window_mut().set_size(vw, vh);
             }
-            self.dpi_scale = dpr;
+            // On Emscripten, the canvas is already at device-pixel resolution.
+            // Text/HUD sizes are designed for the canvas pixel space, so dpi_scale = 1.0.
+            // Touch buttons need actual DPR to be finger-sized in CSS pixels.
+            self.dpi_scale = 1.0;
+            self.touch_dpr = dpr as f32;
         }
         let (cur_w, cur_h) = self.canvas.output_size().unwrap_or((WINDOW_W, WINDOW_H));
         if cur_w as f32 != self.game.camera.viewport_w
@@ -119,6 +125,7 @@ impl GameLoop {
                 let (lw, _lh) = self.canvas.window().size();
                 if lw > 0 {
                     self.dpi_scale = cur_w as f64 / lw as f64;
+                    self.touch_dpr = self.dpi_scale as f32;
                 }
             }
         }
@@ -126,7 +133,7 @@ impl GameLoop {
         // Update touch input with current canvas dimensions and layout
         self.input_state.set_canvas_size(cur_w as f32, cur_h as f32);
         self.input_state
-            .update_layout(cur_w as f32, cur_h as f32, self.dpi_scale as f32);
+            .update_layout(cur_w as f32, cur_h as f32, self.touch_dpr);
 
         // Screen transition logic
         let keyboard = self.event_pump.keyboard_state();
@@ -324,6 +331,7 @@ impl GameLoop {
             self.input_state.gamepad_connected,
             self.dpi_scale,
             &self.input_state,
+            self.touch_dpr as f64,
         );
 
         if self.profiling {
@@ -501,18 +509,19 @@ fn main() {
     // Compute DPI scale factor
     let (output_w, output_h) = canvas.output_size().unwrap_or((init_w, init_h));
     #[cfg(not(target_os = "emscripten"))]
-    let dpi_scale = {
+    let (dpi_scale, touch_dpr) = {
         let (logical_w, _logical_h) = canvas.window().size();
-        if logical_w > 0 {
+        let s = if logical_w > 0 {
             output_w as f64 / logical_w as f64
         } else {
             1.0
-        }
+        };
+        (s, s as f32)
     };
-    // On Emscripten, output_size == window_size (SDL2 doesn't distinguish),
-    // so use the browser's devicePixelRatio directly.
+    // On Emscripten, the canvas is already at device-pixel resolution.
+    // Text/HUD rendering uses dpi_scale=1.0; touch buttons use actual DPR.
     #[cfg(target_os = "emscripten")]
-    let dpi_scale = em_dpr;
+    let (dpi_scale, touch_dpr) = (1.0_f64, em_dpr as f32);
     log::info!("DPI scale: {dpi_scale} (output {output_w}x{output_h})");
 
     // Initialize game
@@ -561,6 +570,7 @@ fn main() {
         seed,
         player_was_alive: true,
         dpi_scale,
+        touch_dpr,
         last_time: now,
         start_time: now,
         profiling,
