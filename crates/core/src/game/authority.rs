@@ -39,15 +39,38 @@ impl Game {
             .count()
     }
 
-    /// Check if a unit's grid position is within the player's field of view.
+    /// Radius (in tiles) around the player for reputation events.
+    const REP_FOV_RADIUS: f32 = 15.0;
+
+    /// Check if a unit is within the player's personal FOV radius.
     fn is_unit_in_fov(&self, unit_id: UnitId) -> bool {
+        let Some(player) = self.player_unit() else {
+            return false;
+        };
+        let (px, py) = (player.x, player.y);
         if let Some(u) = self.units.iter().find(|u| u.id == unit_id) {
-            let (gx, gy) = u.grid_cell();
-            let idx = (gy * self.grid.width + gx) as usize;
-            idx < self.visible.len() && self.visible[idx]
+            let dx = u.x - px;
+            let dy = u.y - py;
+            let dist_sq = dx * dx + dy * dy;
+            let range = Self::REP_FOV_RADIUS * TILE_SIZE;
+            dist_sq <= range * range
         } else {
             false
         }
+    }
+
+    /// Check if a grid position is within the player's personal FOV radius.
+    pub(super) fn is_tile_in_fov(&self, gx: u32, gy: u32) -> bool {
+        let Some(player) = self.player_unit() else {
+            return false;
+        };
+        let (px, py) = (player.x, player.y);
+        let (wx, wy) = grid::grid_to_world(gx, gy);
+        let dx = wx - px;
+        let dy = wy - py;
+        let dist_sq = dx * dx + dy * dy;
+        let range = Self::REP_FOV_RADIUS * TILE_SIZE;
+        dist_sq <= range * range
     }
 
     /// Update authority based on combat events this frame.

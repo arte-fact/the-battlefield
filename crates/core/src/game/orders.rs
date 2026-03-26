@@ -254,6 +254,7 @@ impl Game {
     }
 
     /// Charge order AI: rush to target, fight enemies on the way, then switch to Follow.
+    /// Archers and lancers stop to fight when enemies are in their attack range.
     pub(super) fn ai_order_charge_tick(
         &mut self,
         ai_idx: usize,
@@ -261,15 +262,32 @@ impl Game {
         target_y: f32,
         dt: f32,
     ) {
-        // Combat (leashed to charge target)
-        if self.ai_order_combat(ai_idx, target_x, target_y, ORDER_LEASH, dt) {
+        let kind = self.units[ai_idx].kind;
+
+        // Archers and lancers engage enemies within their own range (no leash)
+        // Warriors keep charging — they need to close distance
+        let leash = match kind {
+            UnitKind::Archer | UnitKind::Lancer => {
+                let range = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
+                // Use unit position as leash center with their attack range
+                let ax = self.units[ai_idx].x;
+                let ay = self.units[ai_idx].y;
+                if self.ai_order_combat(ai_idx, ax, ay, range, dt) {
+                    return;
+                }
+                ORDER_LEASH // fallback for melee self-defense via normal leash
+            }
+            _ => ORDER_LEASH,
+        };
+
+        // Standard combat (leashed to charge target) — mostly for warriors
+        if self.ai_order_combat(ai_idx, target_x, target_y, leash, dt) {
             return;
         }
 
         // Move toward charge target
         let dist = self.units[ai_idx].distance_to_pos(target_x, target_y);
         if dist < CHARGE_ARRIVAL {
-            // Arrived — transition to Follow
             self.units[ai_idx].order = Some(OrderKind::Follow);
             self.units[ai_idx].ai_waypoints.clear();
             self.units[ai_idx].ai_waypoint_idx = 0;

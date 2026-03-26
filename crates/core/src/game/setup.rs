@@ -97,8 +97,7 @@ impl Game {
             if before == after {
                 continue;
             }
-            let idx = (zone.center_gy * self.grid.width + zone.center_gx) as usize;
-            let in_fov = idx < self.visible.len() && self.visible[idx];
+            let in_fov = self.is_tile_in_fov(zone.center_gx, zone.center_gy);
 
             if before != ZoneState::Controlled(Faction::Blue)
                 && after == ZoneState::Controlled(Faction::Blue)
