@@ -18,28 +18,34 @@ impl Game {
             || self.units[ai_idx].ai_waypoint_idx >= self.units[ai_idx].ai_waypoints.len();
 
         if needs_repath {
-            let (ax, ay) = self.units[ai_idx].grid_cell();
-            let (gx, gy) = grid::world_to_grid(target_x, target_y);
-            let gx = gx.max(0) as u32;
-            let gy = gy.max(0) as u32;
-
-            // Path ignoring occupied tiles — unit radius is wider than 1 tile
-            // so occupied-cell avoidance causes more problems than it solves
-            let path = self.grid.find_path(ax, ay, gx, gy, 40, |_, _| false);
-
-            if let Some(steps) = path {
-                self.units[ai_idx].ai_waypoints = steps
-                    .iter()
-                    .map(|&(x, y)| grid::grid_to_world(x, y))
-                    .collect();
-                self.units[ai_idx].ai_waypoint_idx = 0;
-                // Jitter cooldown by unit ID to prevent synchronized repath bursts
-                self.units[ai_idx].ai_path_cooldown =
-                    0.4 + (self.units[ai_idx].id as f32 * 0.17) % 0.2;
+            // Cap A* calls per frame to prevent spike frames
+            if self.astar_budget == 0 {
+                // Defer to next frame — keep following current waypoints
+                self.units[ai_idx].ai_path_cooldown = 0.05;
             } else {
-                self.units[ai_idx].ai_waypoints.clear();
-                self.units[ai_idx].ai_waypoint_idx = 0;
-                self.units[ai_idx].ai_path_cooldown = 0.1;
+                self.astar_budget -= 1;
+
+                let (ax, ay) = self.units[ai_idx].grid_cell();
+                let (gx, gy) = grid::world_to_grid(target_x, target_y);
+                let gx = gx.max(0) as u32;
+                let gy = gy.max(0) as u32;
+
+                let path = self.grid.find_path(ax, ay, gx, gy, 40, |_, _| false);
+
+                if let Some(steps) = path {
+                    self.units[ai_idx].ai_waypoints = steps
+                        .iter()
+                        .map(|&(x, y)| grid::grid_to_world(x, y))
+                        .collect();
+                    self.units[ai_idx].ai_waypoint_idx = 0;
+                    // Jitter cooldown by unit ID to prevent synchronized repath bursts
+                    self.units[ai_idx].ai_path_cooldown =
+                        0.4 + (self.units[ai_idx].id as f32 * 0.17) % 0.2;
+                } else {
+                    self.units[ai_idx].ai_waypoints.clear();
+                    self.units[ai_idx].ai_waypoint_idx = 0;
+                    self.units[ai_idx].ai_path_cooldown = 0.1;
+                }
             }
         }
 

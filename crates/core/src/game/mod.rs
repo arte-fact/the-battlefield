@@ -83,6 +83,8 @@ pub struct Game {
     objective_timer: f32,
     /// Alternates each frame to stagger Blue/Red flow field updates.
     flow_field_turn: bool,
+    /// Per-frame A* pathfind budget (reset each tick, decremented per find_path call).
+    pub(crate) astar_budget: u8,
     /// Player authority level (0..100), governing order radius, follow chance, and rank.
     pub authority: f32,
     /// Persistently recruited unit IDs. Orders apply only to these units.
@@ -129,6 +131,7 @@ impl Game {
             macro_objectives: [Vec::new(), Vec::new()],
             objective_timer: 0.0,
             flow_field_turn: false,
+            astar_budget: 0,
             authority: 0.0,
             recruited: HashSet::new(),
         }

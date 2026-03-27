@@ -11,7 +11,13 @@ impl Game {
     const OBJECTIVE_INTERVAL: f32 = 2.0;
 
     /// Real-time AI tick: all units get decisions every frame, pathfinding is rate-limited.
+    /// Max A* pathfind calls per tick to prevent frame spikes.
+    const ASTAR_BUDGET_PER_TICK: u8 = 3;
+
     pub fn tick_ai(&mut self, dt: f32) {
+        // Reset per-tick A* budget
+        self.astar_budget = Self::ASTAR_BUDGET_PER_TICK;
+
         // Build occupied set once per frame (shared across all pathfinding calls)
         self.ai_occupied_cache = self
             .units
@@ -20,14 +26,27 @@ impl Game {
             .map(|u| u.grid_cell())
             .collect();
 
-        // Recompute macro objectives periodically
+        // Recompute macro objectives periodically, staggering factions to avoid
+        // both score_all_zones() calls landing on the same frame.
         self.objective_timer += dt;
-        let refresh_objectives =
-            self.objective_timer >= Self::OBJECTIVE_INTERVAL || self.macro_objectives[0].is_empty();
-        if refresh_objectives {
+        let mut refresh_objectives = false;
+        let half_interval = Self::OBJECTIVE_INTERVAL / 2.0;
+        if self.macro_objectives[0].is_empty() && self.macro_objectives[1].is_empty() {
+            // First time: compute both
             self.objective_timer = 0.0;
             self.macro_objectives[0] = self.zone_manager.score_all_zones(Faction::Blue);
             self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red);
+            refresh_objectives = true;
+        } else if self.objective_timer >= Self::OBJECTIVE_INTERVAL {
+            // Blue scores at 0s, Red at 1s (half interval offset)
+            self.objective_timer = 0.0;
+            self.macro_objectives[0] = self.zone_manager.score_all_zones(Faction::Blue);
+            refresh_objectives = true;
+        } else if self.objective_timer >= half_interval && self.objective_timer - dt < half_interval
+        {
+            // Red scores at the midpoint
+            self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red);
+            refresh_objectives = true;
         }
 
         // Stagger flow field updates: one faction per frame to halve per-frame cost
