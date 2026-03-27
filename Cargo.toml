@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/assets", "crates/sdl", "crates/native", "crates/emscripten"]
+members = ["crates/core", "crates/assets", "crates/sdl", "crates/native", "crates/emscripten", "crates/wgpu", "crates/wgpu-native"]
 default-members = ["crates/core", "crates/assets", "crates/sdl", "crates/native"]
 resolver = "2"
 
