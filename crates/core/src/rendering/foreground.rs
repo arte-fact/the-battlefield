@@ -59,7 +59,9 @@ pub fn draw_foreground(
                 drawables.push((foot_y, Drawable::WaterRock(gx, gy)));
             }
             if game.grid.elevation(gx, gy) >= 2 {
-                drawables.push((foot_y, Drawable::ElevatedTile(gx, gy)));
+                // Sort slightly before trees/units so the elevated surface
+                // draws behind entities standing on top of it.
+                drawables.push((foot_y - 0.5, Drawable::ElevatedTile(gx, gy)));
             }
         }
     }
@@ -87,7 +89,7 @@ pub fn draw_foreground(
     }
 
     // Sort by Y foot position
-    drawables.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    drawables.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     // Draw in sorted order
     for (_, drawable) in &drawables {

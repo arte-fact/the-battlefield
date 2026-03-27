@@ -221,9 +221,11 @@ pub(super) fn draw_foreground(
                     .push((foot_y, Drawable::WaterRock(gx, gy)));
             }
             if game.grid.elevation(gx, gy) >= 2 {
+                // Sort slightly before trees/units at the same row so the
+                // elevated surface draws behind entities standing on top of it.
                 assets
                     .drawable_buf
-                    .push((foot_y, Drawable::ElevatedTile(gx, gy)));
+                    .push((foot_y - 0.5, Drawable::ElevatedTile(gx, gy)));
             }
         }
     }
@@ -261,7 +263,7 @@ pub(super) fn draw_foreground(
 
     assets
         .drawable_buf
-        .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     // Take the buffer out to avoid borrow conflict (draw functions need &mut assets)
     let drawables = std::mem::take(&mut assets.drawable_buf);
