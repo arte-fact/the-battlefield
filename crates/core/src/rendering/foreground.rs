@@ -30,7 +30,7 @@ pub fn draw_foreground(
     let player_pos = game.player_unit().map(|u| (u.x as f64, u.y as f64));
     let (min_gx, min_gy, max_gx, max_gy) = viewport;
 
-    let mut drawables: Vec<(f64, Drawable)> = Vec::new();
+    let mut drawables: Vec<(f64, Drawable)> = Vec::with_capacity(512);
 
     // Units
     for (i, u) in game.units.iter().enumerate() {
@@ -87,7 +87,7 @@ pub fn draw_foreground(
     }
 
     // Sort by Y foot position
-    drawables.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    drawables.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     // Draw in sorted order
     for (_, drawable) in &drawables {

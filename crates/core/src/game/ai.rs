@@ -30,9 +30,13 @@ impl Game {
             self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red);
         }
 
-        // Update flow fields for both factions before unit loop
-        self.update_flow_fields(Faction::Blue);
-        self.update_flow_fields(Faction::Red);
+        // Stagger flow field updates: one faction per frame to halve per-frame cost
+        if self.flow_field_turn {
+            self.update_flow_fields(Faction::Blue);
+        } else {
+            self.update_flow_fields(Faction::Red);
+        }
+        self.flow_field_turn = !self.flow_field_turn;
 
         // Assign per-unit zone objectives when macro objectives are refreshed
         if refresh_objectives {

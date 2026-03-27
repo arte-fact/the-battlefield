@@ -25,6 +25,7 @@ use sdl2::video::{Window, WindowContext};
 /// The sdl2-rs 0.37 implementation panics when the underlying
 /// `SDL_SetTextureAlphaMod` returns an error (e.g. invalid texture on
 /// Emscripten/WebGL). This wrapper silently ignores such errors.
+#[inline(always)]
 fn safe_set_alpha(tex: &mut Texture, alpha: u8) {
     unsafe {
         sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), alpha);
@@ -32,6 +33,7 @@ fn safe_set_alpha(tex: &mut Texture, alpha: u8) {
 }
 
 /// Safe wrapper around `Texture::set_color_mod` that does not panic.
+#[inline(always)]
 fn safe_set_color_mod(tex: &mut Texture, r: u8, g: u8, b: u8) {
     unsafe {
         sdl2::sys::SDL_SetTextureColorMod(tex.raw(), r, g, b);
@@ -39,6 +41,7 @@ fn safe_set_color_mod(tex: &mut Texture, r: u8, g: u8, b: u8) {
 }
 
 /// Safe `canvas.set_draw_color` + `canvas.clear` that won't panic on WebGL context loss.
+#[inline(always)]
 fn safe_clear(canvas: &mut Canvas<Window>, r: u8, g: u8, b: u8) {
     unsafe {
         sdl2::sys::SDL_SetRenderDrawColor(canvas.raw(), r, g, b, 255);
@@ -106,11 +109,11 @@ fn src_rect(sx: f64, sy: f64, sw: f64, sh: f64) -> Rect {
 // Main render entry point
 // ───────────────────────────────────────────────────────────────────────────
 
-pub fn render_frame(
+pub fn render_frame<'a>(
     canvas: &mut Canvas<Window>,
-    tc: &TextureCreator<WindowContext>,
+    tc: &'a TextureCreator<WindowContext>,
     game: &Game,
-    assets: &mut Assets,
+    assets: &mut Assets<'a>,
     screen: GameScreen,
     elapsed: f64,
     mouse_x: i32,
@@ -129,32 +132,122 @@ pub fn render_frame(
     // 1. Clear
     safe_clear(canvas, 26, 26, 38);
 
-    // 2. Water background
-    terrain::draw_water(
-        canvas, game, assets, cam, ts, min_gx, min_gy, max_gx, max_gy,
-    );
+    // 2-4. Static terrain (water + ground + rocks): cached to render-target texture.
+    // Only redrawn when the visible tile range or zoom changes.
+    let zoom_key = (cam.zoom * 1000.0) as u32;
+    let cache_key = (min_gx, min_gy, max_gx, max_gy, zoom_key);
+    let cache_w = ((max_gx - min_gx) as f32 * ts).ceil() as u32;
+    let cache_h = ((max_gy - min_gy) as f32 * ts).ceil() as u32;
 
-    // 3. Foam animation
+    if cache_w > 0 && cache_h > 0 {
+        let need_redraw = assets.terrain_cache_key != cache_key || assets.terrain_cache.is_none();
+
+        if need_redraw {
+            // (Re)create the render-target texture if size changed
+            let size_changed = assets.terrain_cache.as_ref().is_none_or(|tex| {
+                let q = tex.query();
+                q.width != cache_w || q.height != cache_h
+            });
+            if size_changed {
+                assets.terrain_cache =
+                    tc.create_texture_target(None, cache_w, cache_h)
+                        .ok()
+                        .map(|mut t| {
+                            t.set_blend_mode(sdl2::render::BlendMode::Blend);
+                            t
+                        });
+            }
+
+            // Render static terrain layers to the cache texture.
+            // Take the texture out to avoid borrow conflict (draw functions need &mut assets).
+            if let Some(mut cache_tex) = assets.terrain_cache.take() {
+                let offset_cam = {
+                    let mut c = *cam;
+                    let half_w = cache_w as f32 / 2.0;
+                    let half_h = cache_h as f32 / 2.0;
+                    c.viewport_w = cache_w as f32;
+                    c.viewport_h = cache_h as f32;
+                    c.x = min_gx as f32 * TILE_SIZE + half_w / cam.zoom;
+                    c.y = min_gy as f32 * TILE_SIZE + half_h / cam.zoom;
+                    c
+                };
+
+                let _ = canvas.with_texture_canvas(&mut cache_tex, |c| {
+                    c.set_draw_color(sdl2::pixels::Color::RGBA(0, 0, 0, 0));
+                    c.clear();
+                    terrain::draw_water(
+                        c,
+                        game,
+                        assets,
+                        &offset_cam,
+                        ts,
+                        min_gx,
+                        min_gy,
+                        max_gx,
+                        max_gy,
+                    );
+                    terrain::draw_terrain(
+                        c,
+                        game,
+                        assets,
+                        &offset_cam,
+                        ts,
+                        min_gx,
+                        min_gy,
+                        max_gx,
+                        max_gy,
+                    );
+                    terrain::draw_rocks(
+                        c,
+                        game,
+                        assets,
+                        &offset_cam,
+                        ts,
+                        min_gx,
+                        min_gy,
+                        max_gx,
+                        max_gy,
+                    );
+                });
+                assets.terrain_cache = Some(cache_tex);
+                assets.terrain_cache_key = cache_key;
+            }
+        }
+
+        // Blit cached terrain to screen
+        if assets.terrain_cache.is_some() {
+            let (sx, sy) =
+                world_to_screen(min_gx as f32 * TILE_SIZE, min_gy as f32 * TILE_SIZE, cam);
+            let dst = Rect::new(sx, sy, cache_w, cache_h);
+            // Temporarily take the texture out to avoid borrow conflict with canvas
+            let cache_tex = assets.terrain_cache.take().unwrap();
+            let _ = canvas.copy(&cache_tex, None, dst);
+            assets.terrain_cache = Some(cache_tex);
+        }
+    } else {
+        // Fallback: draw directly if cache dimensions are zero
+        terrain::draw_water(
+            canvas, game, assets, cam, ts, min_gx, min_gy, max_gx, max_gy,
+        );
+        terrain::draw_terrain(
+            canvas, game, assets, cam, ts, min_gx, min_gy, max_gx, max_gy,
+        );
+        terrain::draw_rocks(
+            canvas, game, assets, cam, ts, min_gx, min_gy, max_gx, max_gy,
+        );
+    }
+
+    // 3b. Foam animation (animated, cannot be cached)
     terrain::draw_foam(
         canvas, game, assets, cam, ts, min_gx, min_gy, max_gx, max_gy, elapsed,
-    );
-
-    // 4. Terrain (autotiled ground, roads, elevation)
-    terrain::draw_terrain(
-        canvas, game, assets, cam, ts, min_gx, min_gy, max_gx, max_gy,
     );
 
     // 5. Zone overlays (in world space)
     foreground::draw_zones(canvas, tc, assets, game, cam, ts, dpi_scale);
 
-    // 6. Bushes (ground level, behind units)
+    // 6. Bushes (animated, cannot be cached)
     terrain::draw_bushes(
         canvas, game, assets, cam, ts, min_gx, min_gy, max_gx, max_gy, elapsed,
-    );
-
-    // 7. Rocks (ground level, behind units)
-    terrain::draw_rocks(
-        canvas, game, assets, cam, ts, min_gx, min_gy, max_gx, max_gy,
     );
 
     // 8. Player aim cone overlay
@@ -168,10 +261,8 @@ pub fn render_frame(
     // 10. Projectiles (fly above everything)
     foreground::draw_projectiles(canvas, game, assets, cam);
 
-    // 11. HP bars, unit markers, and order labels
-    foreground::draw_hp_bars(canvas, game, cam);
-    foreground::draw_unit_markers(canvas, game, cam);
-    foreground::draw_order_labels(canvas, tc, assets, game, cam, dpi_scale);
+    // 11. HP bars, unit markers, and order labels (merged into single pass)
+    foreground::draw_unit_overlays(canvas, tc, assets, game, cam, dpi_scale);
 
     // 12. Fog of war
     foreground::draw_fog(

@@ -1,5 +1,6 @@
 /// Orthographic camera for viewing the battlefield.
 /// Tracks position in world space and zoom level.
+#[derive(Clone, Copy)]
 pub struct Camera {
     /// Center of the camera in world-space pixels.
     pub x: f32,

@@ -58,6 +58,11 @@ pub struct Assets<'a> {
     pub(super) avatar_textures: Vec<Texture<'a>>,
     // Text rendering
     pub text: TextRenderer,
+    // Reusable buffer for Y-sorted drawable collection (avoids per-frame allocation)
+    pub(super) drawable_buf: Vec<(f64, super::Drawable)>,
+    // Terrain cache: render-target texture for static terrain layers (water, ground, rocks)
+    pub(super) terrain_cache: Option<Texture<'a>>,
+    pub(super) terrain_cache_key: (u32, u32, u32, u32, u32), // (min_gx, min_gy, max_gx, max_gy, zoom×1000)
 }
 
 /// Decode a PNG from a byte slice into an SDL2 texture.
@@ -559,6 +564,9 @@ impl<'a> Assets<'a> {
                 tex
             },
             text: TextRenderer::new(),
+            drawable_buf: Vec::with_capacity(512),
+            terrain_cache: None,
+            terrain_cache_key: (0, 0, 0, 0, 0),
         }
     }
 }

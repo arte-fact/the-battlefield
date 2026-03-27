@@ -33,7 +33,9 @@ impl Game {
                     .map(|&(x, y)| grid::grid_to_world(x, y))
                     .collect();
                 self.units[ai_idx].ai_waypoint_idx = 0;
-                self.units[ai_idx].ai_path_cooldown = 0.5;
+                // Jitter cooldown by unit ID to prevent synchronized repath bursts
+                self.units[ai_idx].ai_path_cooldown =
+                    0.4 + (self.units[ai_idx].id as f32 * 0.17) % 0.2;
             } else {
                 self.units[ai_idx].ai_waypoints.clear();
                 self.units[ai_idx].ai_waypoint_idx = 0;

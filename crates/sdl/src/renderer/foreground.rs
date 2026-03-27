@@ -187,7 +187,8 @@ pub(super) fn draw_foreground(
     let ts_f64 = TILE_SIZE as f64;
     let player_pos = game.player_unit().map(|u| (u.x as f64, u.y as f64));
 
-    let mut drawables: Vec<(f64, Drawable)> = Vec::new();
+    // Reuse persistent buffer to avoid per-frame allocation
+    assets.drawable_buf.clear();
 
     // Units
     for (i, u) in game.units.iter().enumerate() {
@@ -198,7 +199,9 @@ pub(super) fn draw_foreground(
         if !render_util::is_visible_to_player(u.faction, gx, gy, &game.visible, game.grid.width) {
             continue;
         }
-        drawables.push((u.y as f64 + ts_f64 * 0.5, Drawable::Unit(i)));
+        assets
+            .drawable_buf
+            .push((u.y as f64 + ts_f64 * 0.5, Drawable::Unit(i)));
     }
 
     // Trees, water rocks, and elevated tiles
@@ -208,16 +211,19 @@ pub(super) fn draw_foreground(
             let tile = game.grid.get(gx, gy);
             let foot_y = ((gy + 1) as f64) * ts_f64;
             if tile == TileKind::Forest && !assets.tree_textures.is_empty() {
-                drawables.push((foot_y, Drawable::Tree(gx, gy)));
+                assets.drawable_buf.push((foot_y, Drawable::Tree(gx, gy)));
             }
             if game.grid.decoration(gx, gy) == Some(Decoration::WaterRock)
                 && !assets.water_rock_textures.is_empty()
             {
-                drawables.push((foot_y, Drawable::WaterRock(gx, gy)));
+                assets
+                    .drawable_buf
+                    .push((foot_y, Drawable::WaterRock(gx, gy)));
             }
-            // Elevated tiles: Y-sorted so cliff face appears in front of ground-level units
             if game.grid.elevation(gx, gy) >= 2 {
-                drawables.push((foot_y, Drawable::ElevatedTile(gx, gy)));
+                assets
+                    .drawable_buf
+                    .push((foot_y, Drawable::ElevatedTile(gx, gy)));
             }
         }
     }
@@ -225,27 +231,40 @@ pub(super) fn draw_foreground(
     // Production buildings
     for (i, b) in game.buildings.iter().enumerate() {
         let foot_y = b.grid_y as f64 * ts_f64;
-        drawables.push((foot_y, Drawable::BaseBuilding(i)));
+        assets
+            .drawable_buf
+            .push((foot_y, Drawable::BaseBuilding(i)));
     }
 
     // Sheep
     for (i, s) in game.sheep.iter().enumerate() {
-        drawables.push((s.y as f64 + ts_f64 * 0.5, Drawable::Sheep(i)));
+        assets
+            .drawable_buf
+            .push((s.y as f64 + ts_f64 * 0.5, Drawable::Sheep(i)));
     }
 
     // Pawns
     for (i, p) in game.pawns.iter().enumerate() {
-        drawables.push((p.y as f64 + ts_f64 * 0.5, Drawable::Pawn(i)));
+        assets
+            .drawable_buf
+            .push((p.y as f64 + ts_f64 * 0.5, Drawable::Pawn(i)));
     }
 
     // Particles
     for (i, p) in game.particles.iter().enumerate() {
         if !p.finished {
-            drawables.push((p.world_y as f64 + ts_f64 * 0.5, Drawable::Particle(i)));
+            assets
+                .drawable_buf
+                .push((p.world_y as f64 + ts_f64 * 0.5, Drawable::Particle(i)));
         }
     }
 
-    drawables.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    assets
+        .drawable_buf
+        .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Take the buffer out to avoid borrow conflict (draw functions need &mut assets)
+    let drawables = std::mem::take(&mut assets.drawable_buf);
 
     for (_, drawable) in &drawables {
         match drawable {
@@ -275,6 +294,9 @@ pub(super) fn draw_foreground(
             }
         }
     }
+
+    // Return the buffer for reuse next frame
+    assets.drawable_buf = drawables;
 }
 
 fn draw_unit(
@@ -616,37 +638,16 @@ pub(super) fn draw_projectiles(
     }
 }
 
-pub(super) fn draw_hp_bars(canvas: &mut Canvas<Window>, game: &Game, cam: &Camera) {
-    canvas.set_blend_mode(BlendMode::Blend);
-    for unit in &game.units {
-        if !unit.alive {
-            continue;
-        }
-        let (gx, gy) = unit.grid_cell();
-        if !render_util::is_visible_to_player(unit.faction, gx, gy, &game.visible, game.grid.width)
-        {
-            continue;
-        }
-
-        let zoom = game.camera.zoom;
-        let (sx, sy) = world_to_screen(unit.x, unit.y, cam);
-        let bar_w = (36.0 * zoom) as i32;
-        let bar_h = (4.0 * zoom).max(2.0) as i32;
-        let bar_y = sy - (TILE_SIZE * zoom * 0.7) as i32;
-        let bar_x = sx - bar_w / 2;
-
-        canvas.set_draw_color(Color::RGBA(40, 40, 40, 200));
-        let _ = canvas.fill_rect(Rect::new(bar_x, bar_y, bar_w as u32, bar_h as u32));
-
-        let ratio = unit.hp as f32 / unit.stats.max_hp as f32;
-        let fill_w = (bar_w as f32 * ratio) as u32;
-        let (hr, hg, hb) = render_util::hp_bar_color(ratio as f64);
-        canvas.set_draw_color(Color::RGB(hr, hg, hb));
-        let _ = canvas.fill_rect(Rect::new(bar_x, bar_y, fill_w, bar_h as u32));
-    }
-}
-
-pub(super) fn draw_unit_markers(canvas: &mut Canvas<Window>, game: &Game, cam: &Camera) {
+/// Merged pass for HP bars, unit markers, and order labels.
+/// Single iteration over units instead of 3 separate passes.
+pub(super) fn draw_unit_overlays(
+    canvas: &mut Canvas<Window>,
+    tc: &TextureCreator<WindowContext>,
+    assets: &Assets,
+    game: &Game,
+    cam: &Camera,
+    dpi_scale: f64,
+) {
     canvas.set_blend_mode(BlendMode::Blend);
     let zoom = game.camera.zoom;
     let dot_r = (4.0 * zoom).max(2.0) as i32;
@@ -661,77 +662,74 @@ pub(super) fn draw_unit_markers(canvas: &mut Canvas<Window>, game: &Game, cam: &
             continue;
         }
 
-        let color = if unit.is_player {
-            // Green dot for player
-            Color::RGBA(50, 220, 50, 220)
+        let (sx, sy) = world_to_screen(unit.x, unit.y, cam);
+
+        // HP bar
+        let bar_w = (36.0 * zoom) as i32;
+        let bar_h = (4.0 * zoom).max(2.0) as i32;
+        let bar_y = sy - (TILE_SIZE * zoom * 0.7) as i32;
+        let bar_x = sx - bar_w / 2;
+
+        canvas.set_draw_color(Color::RGBA(40, 40, 40, 200));
+        let _ = canvas.fill_rect(Rect::new(bar_x, bar_y, bar_w as u32, bar_h as u32));
+
+        let ratio = unit.hp as f32 / unit.stats.max_hp as f32;
+        let fill_w = (bar_w as f32 * ratio) as u32;
+        let (hr, hg, hb) = render_util::hp_bar_color(ratio as f64);
+        canvas.set_draw_color(Color::RGB(hr, hg, hb));
+        let _ = canvas.fill_rect(Rect::new(bar_x, bar_y, fill_w, bar_h as u32));
+
+        // Unit marker (player = green, recruited = yellow)
+        let marker_color = if unit.is_player {
+            Some(Color::RGBA(50, 220, 50, 220))
         } else if game.recruited.contains(&unit.id) {
-            // Yellow dot for recruited units
-            Color::RGBA(255, 220, 50, 220)
+            Some(Color::RGBA(255, 220, 50, 220))
         } else {
-            continue;
+            None
         };
-
-        let (sx, sy) = world_to_screen(unit.x, unit.y, cam);
-        let marker_y = sy - (TILE_SIZE * zoom * 0.95) as i32;
-        canvas.set_draw_color(color);
-        // Draw a small filled circle
-        for dy in -dot_r..=dot_r {
-            let dx = ((dot_r * dot_r - dy * dy) as f32).sqrt() as i32;
-            let _ = canvas.draw_line((sx - dx, marker_y + dy), (sx + dx, marker_y + dy));
-        }
-    }
-}
-
-pub(super) fn draw_order_labels(
-    canvas: &mut Canvas<Window>,
-    tc: &TextureCreator<WindowContext>,
-    assets: &Assets,
-    game: &Game,
-    cam: &Camera,
-    dpi_scale: f64,
-) {
-    canvas.set_blend_mode(BlendMode::Blend);
-    let zoom = game.camera.zoom;
-    for unit in &game.units {
-        if !unit.alive || unit.order_flash <= 0.0 {
-            continue;
-        }
-        let label = match render_util::order_label(unit.order.as_ref()) {
-            Some(l) => l,
-            None => continue,
-        };
-
-        let alpha = ((unit.order_flash / ORDER_FLASH_DURATION) * 255.0) as u8;
-        let (sx, sy) = world_to_screen(unit.x, unit.y, cam);
-        let label_y = sy - (TILE_SIZE * zoom) as i32;
-
-        let font_size = (24.0 * dpi_scale as f32) * zoom;
-        let ribbon_h = 54.0 * zoom as f64;
-        let label_cy = label_y - (ribbon_h / 2.0) as i32;
-
-        if let Some(ref tex) = assets.ui_small_ribbons {
-            let (tw, _th) = assets.text.measure_text(label, font_size);
-            let center_w = tw as f64 + 4.0 * zoom as f64;
-            draw_small_ribbon(
-                canvas,
-                tex,
-                5, // Yellow row
-                sx as f64,
-                label_cy as f64,
-                center_w,
-                zoom as f64,
-            );
+        if let Some(color) = marker_color {
+            let marker_y = sy - (TILE_SIZE * zoom * 0.95) as i32;
+            canvas.set_draw_color(color);
+            for dy in -dot_r..=dot_r {
+                let dx = ((dot_r * dot_r - dy * dy) as f32).sqrt() as i32;
+                let _ = canvas.draw_line((sx - dx, marker_y + dy), (sx + dx, marker_y + dy));
+            }
         }
 
-        assets.text.draw_text_centered(
-            canvas,
-            tc,
-            label,
-            sx,
-            label_cy,
-            font_size,
-            Color::RGBA(255, 215, 0, alpha),
-        );
+        // Order label (flashing text above unit)
+        if unit.order_flash > 0.0 {
+            if let Some(label) = render_util::order_label(unit.order.as_ref()) {
+                let alpha = ((unit.order_flash / ORDER_FLASH_DURATION) * 255.0) as u8;
+                let label_y = sy - (TILE_SIZE * zoom) as i32;
+                let font_size = (24.0 * dpi_scale as f32) * zoom;
+                let ribbon_h = 54.0 * zoom as f64;
+                let label_cy = label_y - (ribbon_h / 2.0) as i32;
+
+                if let Some(ref tex) = assets.ui_small_ribbons {
+                    let (tw, _th) = assets.text.measure_text(label, font_size);
+                    let center_w = tw as f64 + 4.0 * zoom as f64;
+                    draw_small_ribbon(
+                        canvas,
+                        tex,
+                        5, // Yellow row
+                        sx as f64,
+                        label_cy as f64,
+                        center_w,
+                        zoom as f64,
+                    );
+                }
+
+                assets.text.draw_text_centered(
+                    canvas,
+                    tc,
+                    label,
+                    sx,
+                    label_cy,
+                    font_size,
+                    Color::RGBA(255, 215, 0, alpha),
+                );
+            }
+        }
     }
 }
 

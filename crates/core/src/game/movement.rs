@@ -81,43 +81,70 @@ impl Game {
         }
     }
 
-    /// Resolve circle-circle collisions between all alive units.
+    /// Resolve circle-circle collisions between all alive units using spatial hashing.
     pub fn resolve_collisions(&mut self) {
+        const CELL_SIZE: f32 = 128.0; // 2 tiles — covers UNIT_RADIUS*2 with margin
         let min_dist = UNIT_RADIUS * 2.0;
 
-        for i in 0..self.units.len() {
-            if !self.units[i].alive {
-                continue;
+        // Build spatial grid: map cell -> list of alive unit indices
+        let mut grid_cells: std::collections::HashMap<(i32, i32), Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, u) in self.units.iter().enumerate() {
+            if u.alive {
+                let cx = (u.x / CELL_SIZE) as i32;
+                let cy = (u.y / CELL_SIZE) as i32;
+                grid_cells.entry((cx, cy)).or_default().push(i);
             }
-            for j in (i + 1)..self.units.len() {
-                if !self.units[j].alive {
-                    continue;
+        }
+
+        // Check collisions only within same cell + 4 forward neighbors
+        // (right, below-left, below, below-right) to avoid duplicate pairs
+        let neighbor_offsets: [(i32, i32); 4] = [(1, 0), (-1, 1), (0, 1), (1, 1)];
+
+        for (&(cx, cy), indices) in &grid_cells {
+            // Pairs within the same cell
+            for a in 0..indices.len() {
+                for b in (a + 1)..indices.len() {
+                    self.resolve_pair(indices[a], indices[b], min_dist);
                 }
-                let dx = self.units[j].x - self.units[i].x;
-                let dy = self.units[j].y - self.units[i].y;
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist < min_dist && dist > 0.001 {
-                    let overlap = (min_dist - dist) / 2.0;
-                    let nx = dx / dist;
-                    let ny = dy / dist;
-
-                    let same_faction = self.units[i].faction == self.units[j].faction;
-                    let strength = if same_faction { 0.4 } else { 1.0 };
-                    let push = overlap * strength;
-
-                    let i_is_player = self.units[i].is_player;
-                    let j_is_player = self.units[j].is_player;
-
-                    let (left, right) = self.units.split_at_mut(j);
-                    // Player is not pushed by same-faction units (prevents followers
-                    // from shoving the player around). The other unit gets full push.
-                    if !(i_is_player && same_faction) {
-                        Self::try_push(&self.grid, &mut left[i], -nx * push, -ny * push);
-                    }
-                    if !(j_is_player && same_faction) {
-                        Self::try_push(&self.grid, &mut right[0], nx * push, ny * push);
+            }
+            // Pairs with neighboring cells
+            for &(dx, dy) in &neighbor_offsets {
+                if let Some(neighbor) = grid_cells.get(&(cx + dx, cy + dy)) {
+                    for &i in indices {
+                        for &j in neighbor {
+                            self.resolve_pair(i, j, min_dist);
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    /// Resolve a single collision pair between units i and j.
+    fn resolve_pair(&mut self, i: usize, j: usize, min_dist: f32) {
+        let (i, j) = if i < j { (i, j) } else { (j, i) };
+        let dx = self.units[j].x - self.units[i].x;
+        let dy = self.units[j].y - self.units[i].y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist < min_dist && dist > 0.001 {
+            let overlap = (min_dist - dist) / 2.0;
+            let nx = dx / dist;
+            let ny = dy / dist;
+
+            let same_faction = self.units[i].faction == self.units[j].faction;
+            let strength = if same_faction { 0.4 } else { 1.0 };
+            let push = overlap * strength;
+
+            let i_is_player = self.units[i].is_player;
+            let j_is_player = self.units[j].is_player;
+
+            let (left, right) = self.units.split_at_mut(j);
+            if !(i_is_player && same_faction) {
+                Self::try_push(&self.grid, &mut left[i], -nx * push, -ny * push);
+            }
+            if !(j_is_player && same_faction) {
+                Self::try_push(&self.grid, &mut right[0], nx * push, ny * push);
             }
         }
     }

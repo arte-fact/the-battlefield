@@ -81,6 +81,8 @@ pub struct Game {
     pub macro_objectives: [Vec<(f32, f32, f32)>; 2],
     /// Timer for periodic macro objective recomputation.
     objective_timer: f32,
+    /// Alternates each frame to stagger Blue/Red flow field updates.
+    flow_field_turn: bool,
     /// Player authority level (0..100), governing order radius, follow chance, and rank.
     pub authority: f32,
     /// Persistently recruited unit IDs. Orders apply only to these units.
@@ -126,6 +128,7 @@ impl Game {
             red_flow: FactionFlowState::new(),
             macro_objectives: [Vec::new(), Vec::new()],
             objective_timer: 0.0,
+            flow_field_turn: false,
             authority: 0.0,
             recruited: HashSet::new(),
         }
