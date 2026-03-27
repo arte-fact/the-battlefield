@@ -1,17 +1,11 @@
-#![allow(clippy::too_many_arguments)]
-
-#[cfg(target_os = "emscripten")]
-mod emscripten;
-mod input;
-mod renderer;
-
 use battlefield_core::game::Game;
 use battlefield_core::grid::{GRID_SIZE, TILE_SIZE};
-use battlefield_core::particle::Particle;
-use battlefield_core::ui::ButtonAction;
+use battlefield_core::ui;
 use battlefield_core::unit::Faction;
-use input::InputState;
-use renderer::GameScreen;
+
+use crate::input::InputState;
+use crate::renderer::GameScreen;
+
 use sdl2::controller::Button;
 use sdl2::event::Event;
 use sdl2::keyboard::Scancode;
@@ -19,35 +13,54 @@ use sdl2::render::{Canvas, TextureCreator};
 use sdl2::video::{Window, WindowContext};
 use std::time::Instant;
 
-const WINDOW_W: u32 = 960;
-const WINDOW_H: u32 = 640;
+pub const WINDOW_W: u32 = 960;
+pub const WINDOW_H: u32 = 640;
+
+/// Configuration for constructing a [`GameLoop`].
+pub struct GameLoopConfig {
+    /// Initial HUD DPI scale factor.
+    pub dpi_scale: f64,
+    /// Initial touch-button DPR multiplier.
+    pub touch_dpr: f32,
+    /// If `true`, Escape / Quit events exit the application.
+    /// If `false`, they return to the main menu (browser behaviour).
+    pub quit_on_escape: bool,
+    /// If `true`, `step()` recalculates DPI from SDL output_size each frame.
+    /// Set to `false` on Emscripten where the caller sets DPI directly.
+    pub compute_dpi: bool,
+    /// Enable frame-timing profiler output.
+    pub profiling: bool,
+}
 
 // ---------------------------------------------------------------------------
 // GameLoop: holds all per-frame state so it can be driven by either a
 // blocking loop (native) or a callback (Emscripten).
 // ---------------------------------------------------------------------------
 
-struct GameLoop {
-    canvas: Canvas<Window>,
+pub struct GameLoop {
+    pub canvas: Canvas<Window>,
     texture_creator: &'static TextureCreator<WindowContext>,
-    event_pump: sdl2::EventPump,
+    pub event_pump: sdl2::EventPump,
     game_controller_subsystem: sdl2::GameControllerSubsystem,
     active_controller: Option<sdl2::controller::GameController>,
 
-    game: Game,
-    assets: renderer::Assets<'static>,
-    input_state: InputState,
-    screen: GameScreen,
-    seed: u32,
+    pub game: Game,
+    assets: crate::renderer::Assets<'static>,
+    pub input_state: InputState,
+    pub screen: GameScreen,
+    pub seed: u32,
     player_was_alive: bool,
-    dpi_scale: f64,
+    pub dpi_scale: f64,
     /// Actual device pixel ratio (for touch button sizing on mobile).
-    touch_dpr: f32,
+    pub touch_dpr: f32,
+
+    quit_on_escape: bool,
+    compute_dpi: bool,
 
     last_time: Instant,
     start_time: Instant,
 
-    // Frame profiler (enabled by PERF_PROFILE=1 on native)
+    // Frame profiler
     profiling: bool,
     prof_tick_us: Vec<u128>,
     prof_update_us: Vec<u128>,
@@ -58,8 +71,86 @@ struct GameLoop {
 }
 
 impl GameLoop {
-    /// Run one frame. Returns `false` when the game should exit (native only).
-    fn step(&mut self) -> bool {
+    /// Create a new game loop with the given SDL resources and configuration.
+    pub fn new(
+        canvas: Canvas<Window>,
+        texture_creator: &'static TextureCreator<WindowContext>,
+        event_pump: sdl2::EventPump,
+        game_controller_subsystem: sdl2::GameControllerSubsystem,
+        config: GameLoopConfig,
+    ) -> Self {
+        let assets = crate::renderer::Assets::load(texture_creator);
+        log::info!("Assets loaded");
+
+        let (output_w, output_h) = canvas.output_size().unwrap_or((WINDOW_W, WINDOW_H));
+        let mut game = Game::new(output_w as f32, output_h as f32);
+        let seed = ui::generate_seed();
+        game.setup_demo_battle_with_seed(seed);
+        log::info!("Game initialized ({}x{} grid)", GRID_SIZE, GRID_SIZE);
+
+        let mut input_state = InputState::new();
+
+        // Try to open the first available game controller
+        let mut active_controller: Option<sdl2::controller::GameController> = None;
+        for i in 0..game_controller_subsystem.num_joysticks().unwrap_or(0) {
+            if game_controller_subsystem.is_game_controller(i) {
+                if let Ok(gc) = game_controller_subsystem.open(i) {
+                    log::info!("Controller connected: {}", gc.name());
+                    input_state.gamepad_connected = true;
+                    active_controller = Some(gc);
+                    break;
+                }
+            }
+        }
+
+        log::info!(
+            "DPI scale: {} (output {}x{})",
+            config.dpi_scale,
+            output_w,
+            output_h
+        );
+
+        let now = Instant::now();
+
+        GameLoop {
+            canvas,
+            texture_creator,
+            event_pump,
+            game_controller_subsystem,
+            active_controller,
+            game,
+            assets,
+            input_state,
+            screen: GameScreen::MainMenu,
+            seed,
+            player_was_alive: true,
+            dpi_scale: config.dpi_scale,
+            touch_dpr: config.touch_dpr,
+            quit_on_escape: config.quit_on_escape,
+            compute_dpi: config.compute_dpi,
+            last_time: now,
+            start_time: now,
+            profiling: config.profiling,
+            prof_tick_us: Vec::new(),
+            prof_update_us: Vec::new(),
+            prof_render_us: Vec::new(),
+            prof_frame_us: Vec::new(),
+            prof_last_report: now,
+            prof_interval: std::time::Duration::from_secs(3),
+        }
+    }
+
+    /// Resize the SDL canvas if the dimensions have changed.
+    /// Call this before [`step()`] on Emscripten to sync with the browser viewport.
+    pub fn resize_if_needed(&mut self, w: u32, h: u32) {
+        let (cur_w, _) = self.canvas.window().size();
+        if w != cur_w {
+            let _ = self.canvas.window_mut().set_size(w, h);
+        }
+    }
+
+    /// Run one frame. Returns `false` when the game should exit.
+    pub fn step(&mut self) -> bool {
         let now = Instant::now();
         let dt = now.duration_since(self.last_time).as_secs_f64().min(0.1);
         let elapsed = now.duration_since(self.start_time).as_secs_f64();
@@ -71,8 +162,7 @@ impl GameLoop {
         for event in self.event_pump.poll_iter() {
             match event {
                 Event::Quit { .. } => {
-                    #[cfg(not(target_os = "emscripten"))]
-                    {
+                    if self.quit_on_escape {
                         return false;
                     }
                 }
@@ -101,27 +191,13 @@ impl GameLoop {
         }
 
         // Handle window resize and DPI changes
-        #[cfg(target_os = "emscripten")]
-        {
-            let (vw, vh, dpr) = emscripten::viewport_size_device_pixels();
-            let (cur_sdl_w, _) = self.canvas.window().size();
-            if vw != cur_sdl_w {
-                let _ = self.canvas.window_mut().set_size(vw, vh);
-            }
-            // On Emscripten, the canvas is already at device-pixel resolution.
-            // Text/HUD sizes are designed for the canvas pixel space, so dpi_scale = 1.0.
-            // Touch buttons need actual DPR to be finger-sized in CSS pixels.
-            self.dpi_scale = 1.0;
-            self.touch_dpr = dpr as f32;
-        }
         let (cur_w, cur_h) = self.canvas.output_size().unwrap_or((WINDOW_W, WINDOW_H));
         if cur_w as f32 != self.game.camera.viewport_w
             || cur_h as f32 != self.game.camera.viewport_h
         {
             self.game.camera.resize(cur_w as f32, cur_h as f32);
             self.game.camera.zoom = self.game.camera.ideal_zoom();
-            #[cfg(not(target_os = "emscripten"))]
-            {
+            if self.compute_dpi {
                 let (lw, _lh) = self.canvas.window().size();
                 if lw > 0 {
                     self.dpi_scale = cur_w as f64 / lw as f64;
@@ -152,12 +228,9 @@ impl GameLoop {
                 if self.input_state.pressed_this_frame(Scancode::Escape)
                     || self.input_state.gamepad_pressed(Button::Back)
                 {
-                    #[cfg(not(target_os = "emscripten"))]
-                    {
+                    if self.quit_on_escape {
                         return false;
-                    }
-                    #[cfg(target_os = "emscripten")]
-                    {
+                    } else {
                         self.screen = GameScreen::MainMenu;
                         return true;
                     }
@@ -234,18 +307,7 @@ impl GameLoop {
                 }
 
                 // Process turn events -> spawn particles
-                if !self.game.turn_events.is_empty() {
-                    let events = self.game.turn_events.drain(..).collect::<Vec<_>>();
-                    for event in &events {
-                        if let battlefield_core::animation::TurnEvent::Move { from, .. } = event {
-                            self.game.particles.push(Particle::new(
-                                battlefield_core::particle::ParticleKind::Dust,
-                                from.0,
-                                from.1,
-                            ));
-                        }
-                    }
-                }
+                self.game.process_turn_events();
 
                 // Update animations, particles, camera follow
                 let t0 = Instant::now();
@@ -280,12 +342,9 @@ impl GameLoop {
                 if self.input_state.pressed_this_frame(Scancode::Escape)
                     || self.input_state.gamepad_pressed(Button::Back)
                 {
-                    #[cfg(not(target_os = "emscripten"))]
-                    {
+                    if self.quit_on_escape {
                         return false;
-                    }
-                    #[cfg(target_os = "emscripten")]
-                    {
+                    } else {
                         self.screen = GameScreen::MainMenu;
                         return true;
                     }
@@ -306,7 +365,7 @@ impl GameLoop {
                 } else if self.input_state.pressed_this_frame(Scancode::Space)
                     || self.input_state.gamepad_pressed(Button::X)
                 {
-                    self.seed = generate_seed();
+                    self.seed = ui::generate_seed();
                     self.game = Game::new(cur_w as f32, cur_h as f32);
                     self.game.setup_demo_battle_with_seed(self.seed);
                     self.screen = GameScreen::Playing;
@@ -318,7 +377,7 @@ impl GameLoop {
 
         // Render
         let t0 = Instant::now();
-        let buttons = renderer::render_frame(
+        let buttons = crate::renderer::render_frame(
             &mut self.canvas,
             self.texture_creator,
             &self.game,
@@ -402,7 +461,7 @@ impl GameLoop {
         if self.input_state.mouse_clicked {
             for btn in &buttons {
                 if btn.contains(self.input_state.mouse_x, self.input_state.mouse_y) {
-                    handle_button_action(
+                    ui::handle_button_action(
                         btn.action,
                         &mut self.screen,
                         &mut self.game,
@@ -438,7 +497,7 @@ impl GameLoop {
                 self.input_state.focused_button.min(buttons.len() - 1);
 
             if self.screen != GameScreen::Playing && self.input_state.gamepad_pressed(Button::A) {
-                handle_button_action(
+                ui::handle_button_action(
                     buttons[self.input_state.focused_button].action,
                     &mut self.screen,
                     &mut self.game,
@@ -452,202 +511,5 @@ impl GameLoop {
         }
 
         true
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
-fn main() {
-    #[cfg(not(target_os = "emscripten"))]
-    env_logger::init();
-
-    log::info!("The Battlefield -- SDL2 starting up");
-
-    let sdl = sdl2::init().expect("SDL2 init failed");
-    let video = sdl.video().expect("SDL2 video init failed");
-    let game_controller_subsystem = sdl.game_controller().expect("controller subsystem failed");
-
-    // On Emscripten, use device-pixel-resolution (CSS size * DPR) for sharp rendering.
-    #[cfg(target_os = "emscripten")]
-    let (init_w, init_h, em_dpr) = emscripten::viewport_size_device_pixels();
-    #[cfg(not(target_os = "emscripten"))]
-    let (init_w, init_h) = (WINDOW_W, WINDOW_H);
-
-    let window = {
-        let mut wb = video.window("The Battlefield", init_w, init_h);
-        wb.resizable();
-        #[cfg(not(target_os = "emscripten"))]
-        {
-            wb.position_centered();
-            wb.allow_highdpi();
-        }
-        wb.build().expect("Window creation failed")
-    };
-
-    let mut canvas = window
-        .into_canvas()
-        .accelerated()
-        .present_vsync()
-        .build()
-        .expect("Canvas creation failed");
-
-    canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
-
-    // Nearest-neighbor scaling for pixel art sprites (no blurring)
-    sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "0");
-
-    // Leak the TextureCreator so Assets can have 'static lifetime,
-    // needed for the Emscripten callback pattern. The TextureCreator
-    // lives for the entire program duration anyway.
-    let texture_creator: &'static TextureCreator<WindowContext> =
-        Box::leak(Box::new(canvas.texture_creator()));
-    let assets = renderer::Assets::load(texture_creator);
-    log::info!("Assets loaded");
-
-    // Compute DPI scale factor
-    let (output_w, output_h) = canvas.output_size().unwrap_or((init_w, init_h));
-    #[cfg(not(target_os = "emscripten"))]
-    let (dpi_scale, touch_dpr) = {
-        let (logical_w, _logical_h) = canvas.window().size();
-        let s = if logical_w > 0 {
-            output_w as f64 / logical_w as f64
-        } else {
-            1.0
-        };
-        (s, s as f32)
-    };
-    // On Emscripten, the canvas is already at device-pixel resolution.
-    // Text/HUD rendering uses dpi_scale=1.0; touch buttons use actual DPR.
-    #[cfg(target_os = "emscripten")]
-    let (dpi_scale, touch_dpr) = (1.0_f64, em_dpr as f32);
-    log::info!("DPI scale: {dpi_scale} (output {output_w}x{output_h})");
-
-    // Initialize game
-    let (w, h) = (output_w, output_h);
-    let mut game = Game::new(w as f32, h as f32);
-    let seed = generate_seed();
-    game.setup_demo_battle_with_seed(seed);
-    log::info!("Game initialized ({}x{} grid)", GRID_SIZE, GRID_SIZE);
-
-    let mut input_state = InputState::new();
-
-    // Try to open the first available game controller
-    let mut active_controller: Option<sdl2::controller::GameController> = None;
-    for i in 0..game_controller_subsystem.num_joysticks().unwrap_or(0) {
-        if game_controller_subsystem.is_game_controller(i) {
-            if let Ok(gc) = game_controller_subsystem.open(i) {
-                log::info!("Controller connected: {}", gc.name());
-                input_state.gamepad_connected = true;
-                active_controller = Some(gc);
-                break;
-            }
-        }
-    }
-
-    let event_pump = sdl.event_pump().expect("Event pump failed");
-
-    // Frame profiler (enabled by PERF_PROFILE=1 on native)
-    #[cfg(not(target_os = "emscripten"))]
-    let profiling = std::env::var("PERF_PROFILE").is_ok();
-    #[cfg(target_os = "emscripten")]
-    let profiling = false;
-
-    let now = Instant::now();
-
-    #[allow(unused_mut)]
-    let mut game_loop = GameLoop {
-        canvas,
-        texture_creator,
-        event_pump,
-        game_controller_subsystem,
-        active_controller,
-        game,
-        assets,
-        input_state,
-        screen: GameScreen::MainMenu,
-        seed,
-        player_was_alive: true,
-        dpi_scale,
-        touch_dpr,
-        last_time: now,
-        start_time: now,
-        profiling,
-        prof_tick_us: Vec::new(),
-        prof_update_us: Vec::new(),
-        prof_render_us: Vec::new(),
-        prof_frame_us: Vec::new(),
-        prof_last_report: now,
-        prof_interval: std::time::Duration::from_secs(3),
-    };
-
-    #[cfg(not(target_os = "emscripten"))]
-    {
-        loop {
-            if !game_loop.step() {
-                break;
-            }
-        }
-        log::info!("Shutting down");
-    }
-
-    #[cfg(target_os = "emscripten")]
-    {
-        let raw = Box::into_raw(Box::new(game_loop));
-        unsafe {
-            emscripten::emscripten_set_main_loop_arg(
-                em_frame_callback,
-                raw as *mut std::ffi::c_void,
-                0, // let the browser use requestAnimationFrame
-                1, // simulate_infinite_loop (never returns)
-            );
-        }
-    }
-}
-
-#[cfg(target_os = "emscripten")]
-extern "C" fn em_frame_callback(arg: *mut std::ffi::c_void) {
-    let game_loop = unsafe { &mut *(arg as *mut GameLoop) };
-    game_loop.step();
-}
-
-fn generate_seed() -> u32 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as u32)
-        .unwrap_or(42)
-}
-
-fn handle_button_action(
-    action: ButtonAction,
-    screen: &mut GameScreen,
-    game: &mut Game,
-    seed: &mut u32,
-    player_was_alive: &mut bool,
-    viewport_w: u32,
-    viewport_h: u32,
-    source: &str,
-) {
-    match action {
-        ButtonAction::Play => {
-            *screen = GameScreen::Playing;
-            log::info!("Game started ({source})");
-        }
-        ButtonAction::Retry => {
-            *game = Game::new(viewport_w as f32, viewport_h as f32);
-            game.setup_demo_battle_with_seed(*seed);
-            *screen = GameScreen::Playing;
-            *player_was_alive = true;
-            log::info!("Retrying with seed {} ({source})", *seed);
-        }
-        ButtonAction::NewGame => {
-            *seed = generate_seed();
-            *game = Game::new(viewport_w as f32, viewport_h as f32);
-            game.setup_demo_battle_with_seed(*seed);
-            *screen = GameScreen::Playing;
-            *player_was_alive = true;
-            log::info!("New game with seed {} ({source})", *seed);
-        }
     }
 }

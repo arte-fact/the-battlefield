@@ -3,6 +3,53 @@
 //! Defines WHAT to draw on overlay screens -- frontends decide HOW.
 //! All offsets are in logical pixels, relative to screen center.
 
+use crate::game::Game;
+
+/// Generate a seed from the current system time.
+pub fn generate_seed() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(42)
+}
+
+/// Apply a UI button action to the game state.
+///
+/// Handles Play, Retry (same seed), and NewGame (fresh seed) transitions.
+#[allow(clippy::too_many_arguments)]
+pub fn handle_button_action(
+    action: ButtonAction,
+    screen: &mut GameScreen,
+    game: &mut Game,
+    seed: &mut u32,
+    player_was_alive: &mut bool,
+    viewport_w: u32,
+    viewport_h: u32,
+    source: &str,
+) {
+    match action {
+        ButtonAction::Play => {
+            *screen = GameScreen::Playing;
+            log::info!("Game started ({source})");
+        }
+        ButtonAction::Retry => {
+            *game = Game::new(viewport_w as f32, viewport_h as f32);
+            game.setup_demo_battle_with_seed(*seed);
+            *screen = GameScreen::Playing;
+            *player_was_alive = true;
+            log::info!("Retrying with seed {} ({source})", *seed);
+        }
+        ButtonAction::NewGame => {
+            *seed = generate_seed();
+            *game = Game::new(viewport_w as f32, viewport_h as f32);
+            game.setup_demo_battle_with_seed(*seed);
+            *screen = GameScreen::Playing;
+            *player_was_alive = true;
+            log::info!("New game with seed {} ({source})", *seed);
+        }
+    }
+}
+
 /// Which screen the game is currently showing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GameScreen {

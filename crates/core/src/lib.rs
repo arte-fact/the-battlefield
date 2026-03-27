@@ -15,6 +15,7 @@ pub mod render_util;
 pub mod rendering;
 pub mod sheep;
 pub mod sprite;
+pub mod touch_input;
 pub mod ui;
 pub mod unit;
 pub mod zone;

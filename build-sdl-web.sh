@@ -9,9 +9,9 @@ if [ -z "$EMSDK" ]; then
     exit 1
 fi
 
-echo "Building battlefield-sdl for wasm32-unknown-emscripten..."
+echo "Building battlefield-emscripten for wasm32-unknown-emscripten..."
 cargo build --target wasm32-unknown-emscripten --release \
-    -p battlefield-sdl --no-default-features
+    -p battlefield-emscripten --no-default-features
 
 OUT="web-sdl/dist"
 mkdir -p "$OUT"

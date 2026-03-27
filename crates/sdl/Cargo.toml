@@ -3,9 +3,9 @@ name = "battlefield-sdl"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "battlefield"
-path = "src/main.rs"
+[lib]
+name = "battlefield_sdl"
+path = "src/lib.rs"
 
 [dependencies]
 battlefield-core = { path = "../core" }
@@ -13,7 +13,6 @@ sdl2 = "0.37"
 rusttype = "0.9"
 png = "0.17"
 log = "0.4"
-env_logger = "0.11"
 
 [features]
 default = ["sdl2-bundled"]

@@ -1,4 +1,3 @@
-#[cfg(target_os = "emscripten")]
 extern "C" {
     pub fn emscripten_set_main_loop_arg(
         func: extern "C" fn(*mut std::ffi::c_void),
@@ -12,7 +11,6 @@ extern "C" {
     pub fn emscripten_run_script_int(script: *const std::ffi::c_char) -> std::ffi::c_int;
 }
 
-#[cfg(target_os = "emscripten")]
 /// Get the browser device pixel ratio.
 pub fn device_pixel_ratio() -> f64 {
     unsafe {
@@ -24,7 +22,6 @@ pub fn device_pixel_ratio() -> f64 {
     }
 }
 
-#[cfg(target_os = "emscripten")]
 /// Get the browser viewport size in actual device pixels (CSS pixels * DPR).
 pub fn viewport_size_device_pixels() -> (u32, u32, f64) {
     let dpr = device_pixel_ratio();

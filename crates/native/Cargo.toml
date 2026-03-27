@@ -1,0 +1,17 @@
+[package]
+name = "battlefield-native"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "battlefield"
+path = "src/main.rs"
+
+[dependencies]
+battlefield-sdl = { path = "../sdl" }
+sdl2 = "0.37"
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+default = ["battlefield-sdl/sdl2-bundled"]

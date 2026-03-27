@@ -1,5 +1,6 @@
 [workspace]
-members = ["crates/core", "crates/client", "crates/sdl"]
+members = ["crates/core", "crates/sdl", "crates/native", "crates/emscripten"]
+default-members = ["crates/core", "crates/sdl", "crates/native"]
 resolver = "2"
 
 [profile.release]

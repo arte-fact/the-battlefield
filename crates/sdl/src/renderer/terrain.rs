@@ -124,7 +124,7 @@ pub(super) fn draw_terrain(
     if let Some(ref tilemap_tex) = assets.tilemap_texture {
         let (rc, rr) = autotile::FLAT_CENTER;
         let (rtsx, rtsy, rtsw, rtsh) = grid::tilemap_src_rect(rc, rr);
-        let rsrc = src_rect(rtsx, rtsy, rtsw, rtsh);
+        let _rsrc = src_rect(rtsx, rtsy, rtsw, rtsh);
 
         for gy in min_gy..max_gy {
             for gx in min_gx..max_gx {
@@ -211,7 +211,6 @@ pub(super) fn draw_terrain(
             }
             shadow_tex.set_alpha_mod(255);
         }
-
     }
 }
 

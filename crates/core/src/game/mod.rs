@@ -157,6 +157,18 @@ impl Game {
         }
     }
 
+    /// Drain turn events and spawn visual particles (e.g. dust on movement).
+    ///
+    /// Call this between `tick()` and `update()` each frame.
+    pub fn process_turn_events(&mut self) {
+        for event in self.turn_events.drain(..) {
+            if let TurnEvent::Move { from, .. } = event {
+                self.particles
+                    .push(Particle::new(ParticleKind::Dust, from.0, from.1));
+            }
+        }
+    }
+
     /// Update animations, particles, projectiles, death fades, and camera following.
     pub fn update(&mut self, dt: f64) {
         for unit in &mut self.units {
