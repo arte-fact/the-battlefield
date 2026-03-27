@@ -84,8 +84,13 @@ impl Grid {
 
     pub fn is_passable(&self, x: u32, y: u32) -> bool {
         self.get(x, y).movement_cost().is_some()
-            && self.elevation(x, y) <= 1
             && !self.building_occupied[(y * self.width + x) as usize]
+    }
+
+    /// Check if movement between two adjacent tiles is blocked by a cliff
+    /// (elevation difference > 0). Both tiles must be passable independently.
+    pub fn is_cliff_between(&self, ax: u32, ay: u32, bx: u32, by: u32) -> bool {
+        self.elevation(ax, ay) != self.elevation(bx, by)
     }
 
     /// Mark a tile as occupied by a building (impassable).
@@ -152,10 +157,15 @@ impl Grid {
 
     /// Is a circle at (wx,wy) with given radius entirely on passable terrain?
     /// Checks center + 4 cardinal + 4 diagonal edge points.
+    /// Also blocks if any edge point crosses an elevation cliff from the center.
     pub fn is_circle_passable(&self, wx: f32, wy: f32, radius: f32) -> bool {
         let d = radius * 0.707; // radius * cos(45°) for diagonal points
-        let points = [
-            (wx, wy),
+        let (cgx, cgy) = world_to_grid(wx, wy);
+        if !self.in_bounds(cgx, cgy) || !self.is_passable(cgx as u32, cgy as u32) {
+            return false;
+        }
+        let center_elev = self.elevation(cgx as u32, cgy as u32);
+        let edge_points = [
             (wx + radius, wy),
             (wx - radius, wy),
             (wx, wy + radius),
@@ -165,12 +175,17 @@ impl Grid {
             (wx - d, wy + d),
             (wx - d, wy - d),
         ];
-        for &(px, py) in &points {
+        for &(px, py) in &edge_points {
             let (gx, gy) = world_to_grid(px, py);
             if !self.in_bounds(gx, gy) {
                 return false;
             }
-            if !self.is_passable(gx as u32, gy as u32) {
+            let ux = gx as u32;
+            let uy = gy as u32;
+            if !self.is_passable(ux, uy) {
+                return false;
+            }
+            if self.elevation(ux, uy) != center_elev {
                 return false;
             }
         }
@@ -298,6 +313,10 @@ impl Grid {
                 let nx = nx as u32;
                 let ny = ny as u32;
                 if !is_node_passable(nx, ny) {
+                    continue;
+                }
+                // Block movement across elevation cliffs
+                if self.is_cliff_between(node.x, node.y, nx, ny) {
                     continue;
                 }
                 // Prevent corner-cutting for diagonal moves

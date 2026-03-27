@@ -82,6 +82,9 @@ pub trait DrawBackend {
 
     /// Query sprite metadata. Returns `None` if the texture isn't loaded.
     fn sprite_info(&self, key: SpriteKey) -> Option<SpriteInfo>;
+
+    /// Draw an elevated terrain tile (surface + cliff face). Platform-specific.
+    fn draw_elevated_tile(&mut self, _game: &crate::game::Game, _gx: u32, _gy: u32) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -98,4 +101,5 @@ pub enum Drawable {
     Particle(usize),
     Sheep(usize),
     Pawn(usize),
+    ElevatedTile(u32, u32),
 }

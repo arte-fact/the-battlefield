@@ -83,6 +83,9 @@ impl FlowField {
                 if !grid.is_passable(nx, ny) {
                     continue;
                 }
+                if grid.is_cliff_between(x, y, nx, ny) {
+                    continue;
+                }
                 if !grid.can_move_diagonal(x, y, dx, dy) {
                     continue;
                 }

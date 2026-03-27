@@ -44,7 +44,7 @@ pub fn draw_foreground(
         drawables.push((u.y as f64 + ts * 0.5, Drawable::Unit(i)));
     }
 
-    // Trees and water rocks (extend scan by 4 rows for tall tree canopies)
+    // Trees, water rocks, and elevated tiles (extend scan by 4 rows for tall tree canopies)
     let tree_max_gy = (max_gy + 4).min(game.grid.height);
     for gy in min_gy..tree_max_gy {
         for gx in min_gx..max_gx {
@@ -57,6 +57,9 @@ pub fn draw_foreground(
                 && backend.sprite_info(SpriteKey::WaterRock(0)).is_some()
             {
                 drawables.push((foot_y, Drawable::WaterRock(gx, gy)));
+            }
+            if game.grid.elevation(gx, gy) >= 2 {
+                drawables.push((foot_y, Drawable::ElevatedTile(gx, gy)));
             }
         }
     }
@@ -96,6 +99,7 @@ pub fn draw_foreground(
             Drawable::Particle(idx) => draw_particle(backend, game, idx),
             Drawable::Sheep(idx) => draw_sheep(backend, game, idx),
             Drawable::Pawn(idx) => draw_pawn(backend, game, idx),
+            Drawable::ElevatedTile(gx, gy) => backend.draw_elevated_tile(game, gx, gy),
         }
     }
 

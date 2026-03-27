@@ -212,49 +212,59 @@ pub(super) fn draw_terrain(
             shadow_tex.set_alpha_mod(255);
         }
 
-        // Elevated surface
-        let elev_tex = if level == 2 {
-            assets.tilemap_texture2.as_ref()
-        } else {
-            assets.tilemap_texture.as_ref()
-        };
-        if let Some(tilemap_tex) = elev_tex {
-            for gy in elev_min_gy..max_gy {
-                for gx in min_gx..max_gx {
-                    if game.grid.elevation(gx, gy) < level {
-                        continue;
-                    }
-                    let (col, row) = autotile::elevated_top_src(&game.grid, gx, gy, level);
-                    let (tsx, tsy, tsw, tsh) = grid::tilemap_src_rect(col, row);
-                    let wx = gx as f32 * TILE_SIZE;
-                    let wy = gy as f32 * TILE_SIZE;
-                    let (sx, sy) = world_to_screen(wx, wy, cam);
-                    let src = src_rect(tsx, tsy, tsw, tsh);
-                    let dst = Rect::new(sx, sy, tsi, tsi);
+    }
+}
 
-                    let flip_h = col == 6 && row == 1 && render_util::tile_flip(gx, gy);
-                    let _ = canvas.copy_ex(tilemap_tex, src, dst, 0.0, None, flip_h, false);
+/// Draw an elevated tile (surface + cliff face) in the Y-sorted foreground pass.
+pub(super) fn draw_elevated_tile(
+    canvas: &mut Canvas<Window>,
+    game: &Game,
+    assets: &Assets,
+    cam: &Camera,
+    ts: f32,
+    gx: u32,
+    gy: u32,
+) {
+    let tsi = ts.ceil() as u32;
+    let level = game.grid.elevation(gx, gy);
+    if level < 2 {
+        return;
+    }
 
-                    // Cliff face
-                    if let Some((ccol, crow)) = autotile::cliff_src(&game.grid, gx, gy, level) {
-                        let (csx, csy, csw, csh) = grid::tilemap_src_rect(ccol, crow);
-                        let cliff_wy = (gy + 1) as f32 * TILE_SIZE;
-                        let (_, cliff_sy) = world_to_screen(wx, cliff_wy, cam);
-                        let cliff_src = src_rect(csx, csy, csw, csh);
-                        let cliff_dst = Rect::new(sx, cliff_sy, tsi, tsi);
-                        let cliff_flip = render_util::tile_flip(gx, gy.wrapping_add(1000));
-                        let _ = canvas.copy_ex(
-                            tilemap_tex,
-                            cliff_src,
-                            cliff_dst,
-                            0.0,
-                            None,
-                            cliff_flip,
-                            false,
-                        );
-                    }
-                }
-            }
+    let elev_tex = if level == 2 {
+        assets.tilemap_texture2.as_ref()
+    } else {
+        assets.tilemap_texture.as_ref()
+    };
+    if let Some(tilemap_tex) = elev_tex {
+        let (col, row) = autotile::elevated_top_src(&game.grid, gx, gy, level);
+        let (tsx, tsy, tsw, tsh) = grid::tilemap_src_rect(col, row);
+        let wx = gx as f32 * TILE_SIZE;
+        let wy = gy as f32 * TILE_SIZE;
+        let (sx, sy) = world_to_screen(wx, wy, cam);
+        let src = src_rect(tsx, tsy, tsw, tsh);
+        let dst = Rect::new(sx, sy, tsi, tsi);
+
+        let flip_h = col == 6 && row == 1 && render_util::tile_flip(gx, gy);
+        let _ = canvas.copy_ex(tilemap_tex, src, dst, 0.0, None, flip_h, false);
+
+        // Cliff face (drawn on the tile below)
+        if let Some((ccol, crow)) = autotile::cliff_src(&game.grid, gx, gy, level) {
+            let (csx, csy, csw, csh) = grid::tilemap_src_rect(ccol, crow);
+            let cliff_wy = (gy + 1) as f32 * TILE_SIZE;
+            let (_, cliff_sy) = world_to_screen(wx, cliff_wy, cam);
+            let cliff_src = src_rect(csx, csy, csw, csh);
+            let cliff_dst = Rect::new(sx, cliff_sy, tsi, tsi);
+            let cliff_flip = render_util::tile_flip(gx, gy.wrapping_add(1000));
+            let _ = canvas.copy_ex(
+                tilemap_tex,
+                cliff_src,
+                cliff_dst,
+                0.0,
+                None,
+                cliff_flip,
+                false,
+            );
         }
     }
 }

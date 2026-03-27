@@ -234,46 +234,8 @@ pub(super) fn render_terrain_chunk(
             }
         }
 
-        let elev_tex_id = if level == 2 {
-            loaded.tilemap_texture2
-        } else {
-            loaded.tilemap_texture
-        };
-        if let Some(tilemap_tex_id) = elev_tex_id {
-            if let Some((img, _, _, _)) = tm.get_image(tilemap_tex_id) {
-                for gy in gy0..gy1 {
-                    for gx in gx0..gx1 {
-                        if game.grid.elevation(gx, gy) < level {
-                            continue;
-                        }
-                        let (col, row) = autotile::elevated_top_src(&game.grid, gx, gy, level);
-                        let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
-                        let dx = (gx as f64) * ts - ox;
-                        let dy = (gy as f64) * ts - oy;
-                        if col == 6 && row == 1 && render_util::tile_flip(gx, gy) {
-                            draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
-                        } else {
-                            ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                                img, sx, sy, sw, sh, dx, dy, ts, ts,
-                            )?;
-                        }
-
-                        if let Some((ccol, crow)) = autotile::cliff_src(&game.grid, gx, gy, level) {
-                            let (csx, csy, csw, csh) = grid::tilemap_src_rect(ccol, crow);
-                            let cdy = ((gy + 1) as f64) * ts - oy;
-                            if render_util::tile_flip(gx, gy.wrapping_add(1000)) {
-                                draw_tile_flipped(ctx, img, csx, csy, csw, csh, dx, cdy, ts, ts)?;
-                            } else {
-                                ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                                    img, csx, csy, csw, csh, dx, cdy, ts, ts,
-                                )?;
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     Ok(())
 }
+

@@ -156,6 +156,44 @@ impl DrawBackend for WasmDrawBackend<'_> {
             frame_count: info.frame_count,
         })
     }
+
+    fn draw_elevated_tile(
+        &mut self,
+        game: &battlefield_core::game::Game,
+        gx: u32,
+        gy: u32,
+    ) {
+        use battlefield_core::autotile;
+        use battlefield_core::grid;
+        use battlefield_core::grid::TILE_SIZE;
+        use battlefield_core::render_util;
+
+        let ts = TILE_SIZE as f64;
+        let level = game.grid.elevation(gx, gy);
+        if level < 2 {
+            return;
+        }
+        let tex_id = if level == 2 {
+            self.loaded.tilemap_texture2
+        } else {
+            self.loaded.tilemap_texture
+        };
+        let Some(tex_id) = tex_id else { return };
+
+        let (col, row) = autotile::elevated_top_src(&game.grid, gx, gy, level);
+        let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
+        let dx = gx as f64 * ts;
+        let dy = gy as f64 * ts;
+        let flip = col == 6 && row == 1 && render_util::tile_flip(gx, gy);
+        let _ = self.r.draw_sprite(tex_id, sx, sy, sw, sh, dx, dy, ts, ts, flip, 1.0);
+
+        if let Some((ccol, crow)) = autotile::cliff_src(&game.grid, gx, gy, level) {
+            let (csx, csy, csw, csh) = grid::tilemap_src_rect(ccol, crow);
+            let cdy = (gy + 1) as f64 * ts;
+            let cflip = render_util::tile_flip(gx, gy.wrapping_add(1000));
+            let _ = self.r.draw_sprite(tex_id, csx, csy, csw, csh, dx, cdy, ts, ts, cflip, 1.0);
+        }
+    }
 }
 
 /// Draw all Y-sorted foreground entities via the shared rendering pipeline.

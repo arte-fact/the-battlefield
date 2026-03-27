@@ -179,6 +179,45 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
         }
     }
 
+    // Smooth water with cellular automata to remove small isolated chunks.
+    // birth=5: land becomes water only if 5+ of 8 neighbors are water (conservative)
+    // death=3: water becomes land if fewer than 3 neighbors are water (removes small pools)
+    for _pass in 0..3 {
+        let mut changes: Vec<(u32, u32, bool)> = Vec::new();
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let mut water_neighbors = 0u32;
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        if grid.get((x as i32 + dx) as u32, (y as i32 + dy) as u32)
+                            == TileKind::Water
+                        {
+                            water_neighbors += 1;
+                        }
+                    }
+                }
+                let is_water = grid.get(x, y) == TileKind::Water;
+                if is_water && water_neighbors < 3 {
+                    changes.push((x, y, false)); // kill small water
+                } else if !is_water && water_neighbors >= 5 {
+                    changes.push((x, y, true)); // fill gaps
+                }
+            }
+        }
+        for (x, y, make_water) in changes {
+            if make_water {
+                grid.set(x, y, TileKind::Water);
+                grid.set_elevation(x, y, 0);
+                grid.set_decoration(x, y, None);
+            } else {
+                grid.set(x, y, TileKind::Grass);
+            }
+        }
+    }
+
     // --- Phase B: Cellular automata for vegetation & decorations ---
 
     // Trees: seeded from simplex noise at offset, placed on grass
@@ -190,12 +229,26 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
         4,
         2,
     );
+    // Helper: true if tile is on or adjacent to an elevation cliff
+    let near_cliff = |grid: &Grid, x: u32, y: u32| -> bool {
+        let e = grid.elevation(x, y);
+        for &(dx, dy) in &[(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
+            let nx = x as i32 + dx;
+            let ny = y as i32 + dy;
+            if grid.in_bounds(nx, ny) && grid.elevation(nx as u32, ny as u32) != e {
+                return true;
+            }
+        }
+        false
+    };
+
     for y in 0..h {
         for x in 0..w {
             let i = (y * w + x) as usize;
             if tree_seed[i]
                 && grid.get(x, y) == TileKind::Grass
                 && (grid.elevation(x, y) == 0 || in_border(x, y))
+                && !near_cliff(&grid, x, y)
             {
                 grid.set(x, y, TileKind::Forest);
             }
@@ -208,6 +261,7 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
             if rng.chance(ROCK_DENSITY as f32)
                 && grid.get(x, y) == TileKind::Grass
                 && (grid.elevation(x, y) == 0 || in_border(x, y))
+                && !near_cliff(&grid, x, y)
             {
                 grid.set(x, y, TileKind::Rock);
             }
@@ -220,6 +274,7 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
             if rng.chance(BUSH_DENSITY as f32)
                 && grid.get(x, y) == TileKind::Grass
                 && (grid.elevation(x, y) == 0 || in_border(x, y))
+                && !near_cliff(&grid, x, y)
             {
                 grid.set_decoration(x, y, Some(Decoration::Bush));
             }

@@ -58,6 +58,7 @@ enum Drawable {
     Particle(usize),
     Sheep(usize),
     Pawn(usize),
+    ElevatedTile(u32, u32),
 }
 
 // ───────────────────────────────────────────────────────────────────────────

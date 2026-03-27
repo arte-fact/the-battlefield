@@ -201,7 +201,7 @@ pub(super) fn draw_foreground(
         drawables.push((u.y as f64 + ts_f64 * 0.5, Drawable::Unit(i)));
     }
 
-    // Trees and water rocks
+    // Trees, water rocks, and elevated tiles
     let tree_max_gy = (max_gy + 4).min(game.grid.height);
     for gy in min_gy..tree_max_gy {
         for gx in min_gx..max_gx {
@@ -214,6 +214,10 @@ pub(super) fn draw_foreground(
                 && !assets.water_rock_textures.is_empty()
             {
                 drawables.push((foot_y, Drawable::WaterRock(gx, gy)));
+            }
+            // Elevated tiles: Y-sorted so cliff face appears in front of ground-level units
+            if game.grid.elevation(gx, gy) >= 2 {
+                drawables.push((foot_y, Drawable::ElevatedTile(gx, gy)));
             }
         }
     }
@@ -265,6 +269,9 @@ pub(super) fn draw_foreground(
             }
             Drawable::Pawn(idx) => {
                 draw_pawn(canvas, game, assets, cam, ts, *idx);
+            }
+            Drawable::ElevatedTile(gx, gy) => {
+                super::terrain::draw_elevated_tile(canvas, game, assets, cam, ts, *gx, *gy);
             }
         }
     }
