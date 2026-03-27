@@ -41,7 +41,6 @@ jobs:
           cp web-sdl/dist/index.html _site/
           cp web-sdl/dist/battlefield.js _site/
           cp web-sdl/dist/battlefield.wasm _site/
-          cp web-sdl/dist/battlefield.data _site/ 2>/dev/null || true
           cp web-sdl/dist/manifest.json _site/
           cp web-sdl/dist/sw.js _site/
           cp -r web-sdl/dist/icons _site/icons 2>/dev/null || true

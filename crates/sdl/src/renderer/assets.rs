@@ -7,6 +7,7 @@ use sdl2::render::{BlendMode, Texture, TextureCreator};
 use sdl2::surface::Surface;
 use sdl2::video::WindowContext;
 use std::collections::HashMap;
+use std::io::Cursor;
 
 use super::text::TextRenderer;
 use super::UnitTexKey;
@@ -59,13 +60,9 @@ pub struct Assets<'a> {
     pub text: TextRenderer,
 }
 
-/// Load a PNG file into an SDL2 texture using the `png` crate.
-pub(super) fn load_png_texture<'a>(
-    tc: &'a TextureCreator<WindowContext>,
-    path: &str,
-) -> Option<Texture<'a>> {
-    let file = std::fs::File::open(path).ok()?;
-    let decoder = png::Decoder::new(file);
+/// Decode a PNG from a byte slice into an SDL2 texture.
+fn load_png_data<'a>(tc: &'a TextureCreator<WindowContext>, data: &[u8]) -> Option<Texture<'a>> {
+    let decoder = png::Decoder::new(Cursor::new(data));
     let mut reader = decoder.read_info().ok()?;
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf).ok()?;
@@ -102,14 +99,23 @@ pub(super) fn load_png_texture<'a>(
     Some(tex)
 }
 
+/// Load a PNG texture by path, using embedded asset data.
+pub(super) fn load_png_texture<'a>(
+    tc: &'a TextureCreator<WindowContext>,
+    path: &str,
+) -> Option<Texture<'a>> {
+    let data = battlefield_assets::get(path)?;
+    load_png_data(tc, data)
+}
+
 /// Load a PNG and rearrange its 9 source cells into a gapless atlas texture.
 fn load_9slice_atlas<'a>(
     tc: &'a TextureCreator<WindowContext>,
     path: &str,
     cells: &[[f64; 4]; 9],
 ) -> Option<(Texture<'a>, u32, u32)> {
-    let file = std::fs::File::open(path).ok()?;
-    let decoder = png::Decoder::new(file);
+    let data = battlefield_assets::get(path)?;
+    let decoder = png::Decoder::new(Cursor::new(data));
     let mut reader = decoder.read_info().ok()?;
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf).ok()?;
@@ -158,8 +164,8 @@ fn load_3slice_atlas<'a>(
     path: &str,
     cells: &[[f64; 4]; 3],
 ) -> Option<(Texture<'a>, u32, u32)> {
-    let file = std::fs::File::open(path).ok()?;
-    let decoder = png::Decoder::new(file);
+    let data = battlefield_assets::get(path)?;
+    let decoder = png::Decoder::new(Cursor::new(data));
     let mut reader = decoder.read_info().ok()?;
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf).ok()?;
@@ -205,11 +211,10 @@ fn load_3slice_atlas<'a>(
 
 /// Count frames in a horizontal sprite sheet given total width and frame width.
 fn count_frames(path: &str, frame_w: u32) -> u32 {
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return 1,
+    let Some(data) = battlefield_assets::get(path) else {
+        return 1;
     };
-    let decoder = png::Decoder::new(file);
+    let decoder = png::Decoder::new(Cursor::new(data));
     let reader = match decoder.read_info() {
         Ok(r) => r,
         Err(_) => return 1,
@@ -417,9 +422,8 @@ impl<'a> Assets<'a> {
         // Bar fill — convert to greyscale so set_color_mod can tint to any color
         let ui_bar_fill = {
             let path = format!("{ui_base}/Bars/BigBar_Fill.png");
-            let file = std::fs::File::open(&path).ok();
-            file.and_then(|f| {
-                let decoder = png::Decoder::new(f);
+            battlefield_assets::get(&path).and_then(|data| {
+                let decoder = png::Decoder::new(Cursor::new(data));
                 let mut reader = decoder.read_info().ok()?;
                 let mut buf = vec![0u8; reader.output_buffer_size()];
                 let info = reader.next_frame(&mut buf).ok()?;

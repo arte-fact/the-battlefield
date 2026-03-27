@@ -54,7 +54,7 @@ fn main() {
             em_frame_callback,
             raw as *mut std::ffi::c_void,
             0, // let the browser use requestAnimationFrame
-            1, // simulate_infinite_loop (never returns)
+            0, // do NOT simulate infinite loop (throw "unwind" breaks Rust)
         );
     }
 }

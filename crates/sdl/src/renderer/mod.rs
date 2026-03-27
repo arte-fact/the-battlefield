@@ -16,10 +16,35 @@ use battlefield_core::game::Game;
 use battlefield_core::grid::TILE_SIZE;
 use battlefield_core::render_util;
 use battlefield_core::unit::{Faction, UnitAnim, UnitKind};
-use sdl2::pixels::Color;
 use sdl2::rect::Rect;
-use sdl2::render::{Canvas, TextureCreator};
+use sdl2::render::{Canvas, Texture, TextureCreator};
 use sdl2::video::{Window, WindowContext};
+
+/// Safe wrapper around `Texture::set_alpha_mod` that does not panic.
+///
+/// The sdl2-rs 0.37 implementation panics when the underlying
+/// `SDL_SetTextureAlphaMod` returns an error (e.g. invalid texture on
+/// Emscripten/WebGL). This wrapper silently ignores such errors.
+fn safe_set_alpha(tex: &mut Texture, alpha: u8) {
+    unsafe {
+        sdl2::sys::SDL_SetTextureAlphaMod(tex.raw(), alpha);
+    }
+}
+
+/// Safe wrapper around `Texture::set_color_mod` that does not panic.
+fn safe_set_color_mod(tex: &mut Texture, r: u8, g: u8, b: u8) {
+    unsafe {
+        sdl2::sys::SDL_SetTextureColorMod(tex.raw(), r, g, b);
+    }
+}
+
+/// Safe `canvas.set_draw_color` + `canvas.clear` that won't panic on WebGL context loss.
+fn safe_clear(canvas: &mut Canvas<Window>, r: u8, g: u8, b: u8) {
+    unsafe {
+        sdl2::sys::SDL_SetRenderDrawColor(canvas.raw(), r, g, b, 255);
+        sdl2::sys::SDL_RenderClear(canvas.raw());
+    }
+}
 
 /// A clickable button region returned by the renderer for hit-testing.
 pub struct ClickableButton {
@@ -102,8 +127,7 @@ pub fn render_frame(
         render_util::visible_tile_range(cam, game.grid.width, game.grid.height);
 
     // 1. Clear
-    canvas.set_draw_color(Color::RGB(26, 26, 38));
-    canvas.clear();
+    safe_clear(canvas, 26, 26, 38);
 
     // 2. Water background
     terrain::draw_water(

@@ -185,7 +185,7 @@ pub(super) fn draw_terrain(
     for level in 2..=2u8 {
         // Shadow below elevated edges
         if let Some(ref mut shadow_tex) = assets.shadow_texture {
-            shadow_tex.set_alpha_mod(128);
+            super::safe_set_alpha(shadow_tex, 128);
             for gy in elev_min_gy..max_gy {
                 for gx in min_gx..max_gx {
                     if game.grid.elevation(gx, gy) < level {
@@ -209,7 +209,7 @@ pub(super) fn draw_terrain(
                     }
                 }
             }
-            shadow_tex.set_alpha_mod(255);
+            super::safe_set_alpha(shadow_tex, 255);
         }
     }
 }

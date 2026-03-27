@@ -11,8 +11,9 @@ pub struct TextRenderer {
 
 impl TextRenderer {
     pub fn new() -> Self {
-        let font_data = std::fs::read("assets/Uncial.ttf").expect("Failed to load font");
-        let font = Font::try_from_vec(font_data).expect("Failed to parse font");
+        let font_data = battlefield_assets::get("assets/Uncial.ttf")
+            .expect("Font not found in embedded assets");
+        let font = Font::try_from_vec(font_data.to_vec()).expect("Failed to parse font");
         Self { font }
     }
 

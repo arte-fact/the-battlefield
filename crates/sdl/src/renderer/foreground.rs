@@ -126,7 +126,7 @@ pub(super) fn draw_zones(
                     bar_x + fill_inset_x + inner_w * 0.5 - fill_w
                 };
                 if let Some(ref mut fill_tex) = assets.ui_bar_fill {
-                    fill_tex.set_color_mod(fr, fg, fb);
+                    super::safe_set_color_mod(fill_tex, fr, fg, fb);
                     let _ = canvas.copy(
                         fill_tex,
                         Rect::new(0, 20, 64, 24),
@@ -137,7 +137,7 @@ pub(super) fn draw_zones(
                             fill_h as u32,
                         ),
                     );
-                    fill_tex.set_color_mod(255, 255, 255);
+                    super::safe_set_color_mod(fill_tex, 255, 255, 255);
                 } else {
                     canvas.set_draw_color(Color::RGBA(fr, fg, fb, 200));
                     let _ = canvas.fill_rect(Rect::new(
@@ -324,12 +324,12 @@ fn draw_unit(
 
         let opacity = render_util::unit_opacity(unit.alive, unit.death_fade, unit.hit_flash);
         let alpha = (opacity * 255.0) as u8;
-        tex.set_alpha_mod(alpha);
+        super::safe_set_alpha(tex, alpha);
 
         let flip = unit.facing == Facing::Left;
         let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
 
-        tex.set_alpha_mod(255);
+        super::safe_set_alpha(tex, 255);
     } else {
         let (screen_x, screen_y) = world_to_screen(unit.x, unit.y, cam);
         let color = match unit.faction {
@@ -374,12 +374,12 @@ fn draw_tree(
     let tree_cy = gy as f64 * ts_f64 - ts_f64 * 1.0;
     let alpha_f = render_util::tree_alpha(tree_cx, tree_cy, player_pos, ts_f64);
     let alpha = (alpha_f * 255.0) as u8;
-    tex.set_alpha_mod(alpha);
+    super::safe_set_alpha(tex, alpha);
 
     let flip_h = render_util::tile_flip(gx, gy);
     let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip_h, false);
 
-    tex.set_alpha_mod(255);
+    super::safe_set_alpha(tex, 255);
 }
 
 fn draw_water_rock(
@@ -457,9 +457,9 @@ fn draw_base_building(
         };
         let alpha = (proximity_alpha * zone_alpha * 255.0) as u8;
         let tex = &mut assets.tower_textures[color_idx];
-        tex.set_alpha_mod(alpha);
+        super::safe_set_alpha(tex, alpha);
         let _ = canvas.copy(tex, Rect::new(0, 0, sw, sh), dst);
-        tex.set_alpha_mod(255);
+        super::safe_set_alpha(tex, 255);
         return;
     }
 
@@ -467,9 +467,9 @@ fn draw_base_building(
         asset_manifest::building_tex_index(building.kind, building.house_variant, building.faction);
     if let Some(Some((ref mut tex, _sw, _sh))) = assets.building_textures.get_mut(tex_idx) {
         let alpha = (proximity_alpha * 255.0) as u8;
-        tex.set_alpha_mod(alpha);
+        super::safe_set_alpha(tex, alpha);
         let _ = canvas.copy(tex, None, dst);
-        tex.set_alpha_mod(255);
+        super::safe_set_alpha(tex, 255);
     }
 }
 
@@ -488,7 +488,7 @@ fn draw_particle(
     if let Some(tex) = assets.particle_textures.get_mut(&p.kind) {
         let is_heal = p.kind == battlefield_core::particle::ParticleKind::HealEffect;
         if is_heal {
-            tex.set_alpha_mod(153); // ~60% opacity
+            super::safe_set_alpha(tex, 153); // ~60% opacity
         }
         let fs = p.kind.frame_size();
         let sheet = SpriteSheet {
@@ -510,7 +510,7 @@ fn draw_particle(
         let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
         let _ = canvas.copy(tex, src, dst);
         if is_heal {
-            tex.set_alpha_mod(255);
+            super::safe_set_alpha(tex, 255);
         }
     }
 }
@@ -811,7 +811,7 @@ pub(super) fn draw_victory_progress(
             Faction::Red => (220, 60, 60),
         };
         if let Some(ref mut fill_tex) = assets.ui_bar_fill {
-            fill_tex.set_color_mod(fr, fg, fb);
+            super::safe_set_color_mod(fill_tex, fr, fg, fb);
             let _ = canvas.copy(
                 fill_tex,
                 Rect::new(0, 20, 64, 24),
@@ -822,7 +822,7 @@ pub(super) fn draw_victory_progress(
                     fill_h as u32,
                 ),
             );
-            fill_tex.set_color_mod(255, 255, 255);
+            super::safe_set_color_mod(fill_tex, 255, 255, 255);
         } else {
             canvas.set_draw_color(Color::RGB(fr, fg, fb));
             let _ = canvas.fill_rect(Rect::new(

@@ -50,7 +50,7 @@ pub(super) fn draw_hud(
         if fill_w > 0.0 {
             let (hr, hg, hb) = render_util::hp_bar_color(ratio);
             if let Some(ref mut fill_tex) = assets.ui_bar_fill {
-                fill_tex.set_color_mod(hr, hg, hb);
+                super::safe_set_color_mod(fill_tex, hr, hg, hb);
                 let _ = canvas.copy(
                     fill_tex,
                     Rect::new(0, 20, 64, 24),
@@ -61,7 +61,7 @@ pub(super) fn draw_hud(
                         fill_h as u32,
                     ),
                 );
-                fill_tex.set_color_mod(255, 255, 255);
+                super::safe_set_color_mod(fill_tex, 255, 255, 255);
             } else {
                 canvas.set_draw_color(Color::RGB(hr, hg, hb));
                 let _ = canvas.fill_rect(Rect::new(
@@ -112,7 +112,7 @@ pub(super) fn draw_hud(
                 (150, 150, 160)
             };
             if let Some(ref mut fill_tex) = assets.ui_bar_fill {
-                fill_tex.set_color_mod(ar, ag, ab);
+                super::safe_set_color_mod(fill_tex, ar, ag, ab);
                 let _ = canvas.copy(
                     fill_tex,
                     Rect::new(0, 20, 64, 24),
@@ -123,7 +123,7 @@ pub(super) fn draw_hud(
                         auth_fill_h as u32,
                     ),
                 );
-                fill_tex.set_color_mod(255, 255, 255);
+                super::safe_set_color_mod(fill_tex, 255, 255, 255);
             } else {
                 canvas.set_draw_color(Color::RGB(ar, ag, ab));
                 let _ = canvas.fill_rect(Rect::new(
@@ -287,12 +287,12 @@ fn draw_follower_panel(
         let avatar_idx = asset_manifest::avatar_index(kind);
         if let Some(tex) = assets.avatar_textures.get_mut(avatar_idx) {
             if count == 0 {
-                tex.set_alpha_mod(90);
+                super::safe_set_alpha(tex, 90);
             }
             let dst = Rect::new(ix, row_y, icon_size, icon_size);
             let _ = canvas.copy(tex, None, dst);
             if count == 0 {
-                tex.set_alpha_mod(255);
+                super::safe_set_alpha(tex, 255);
             }
         }
 

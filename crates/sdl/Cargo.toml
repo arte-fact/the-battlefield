@@ -8,6 +8,7 @@ name = "battlefield_sdl"
 path = "src/lib.rs"
 
 [dependencies]
+battlefield-assets = { path = "../assets" }
 battlefield-core = { path = "../core" }
 sdl2 = "0.37"
 rusttype = "0.9"
