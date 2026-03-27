@@ -14,10 +14,11 @@ pub enum TileKind {
 impl TileKind {
     pub fn movement_cost(self) -> Option<u32> {
         match self {
-            TileKind::Grass | TileKind::Road => Some(1),
-            TileKind::Forest => Some(2),
+            TileKind::Grass => Some(5),
+            TileKind::Road => Some(4), // slightly cheaper than grass
+            TileKind::Forest => Some(10),
             TileKind::Water => None, // impassable
-            TileKind::Rock => Some(1),
+            TileKind::Rock => Some(5),
         }
     }
 
@@ -90,6 +91,11 @@ impl Grid {
     /// Mark a tile as occupied by a building (impassable).
     pub fn mark_building(&mut self, x: u32, y: u32) {
         self.building_occupied[(y * self.width + x) as usize] = true;
+    }
+
+    /// Check if a tile is occupied by a building.
+    pub fn is_building(&self, x: u32, y: u32) -> bool {
+        self.building_occupied[(y * self.width + x) as usize]
     }
 
     /// Check if a tile is passable for a wide unit (radius > half tile).
@@ -397,11 +403,11 @@ mod tests {
 
     #[test]
     fn movement_costs() {
-        assert_eq!(TileKind::Grass.movement_cost(), Some(1));
-        assert_eq!(TileKind::Forest.movement_cost(), Some(2));
+        assert_eq!(TileKind::Grass.movement_cost(), Some(5));
+        assert_eq!(TileKind::Forest.movement_cost(), Some(10));
         assert_eq!(TileKind::Water.movement_cost(), None);
-        assert_eq!(TileKind::Rock.movement_cost(), Some(1));
-        assert_eq!(TileKind::Road.movement_cost(), Some(1));
+        assert_eq!(TileKind::Rock.movement_cost(), Some(5));
+        assert_eq!(TileKind::Road.movement_cost(), Some(4));
     }
 
     #[test]

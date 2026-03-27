@@ -107,6 +107,19 @@ const CLIFF_WATER: [(u32, u32); 4] = [
     (6, 5), // 3: both → center
 ];
 
+/// Center fill tile (col, row) — used by renderers to draw road surface under junction tiles.
+pub const FLAT_CENTER: (u32, u32) = (1, 1);
+
+/// Cardinal bitmask where "same" = any land tile (for road surface water borders).
+pub fn cardinal_land_mask(grid: &Grid, x: u32, y: u32) -> u8 {
+    cardinal_mask(grid, x, y, |nx, ny| grid.get(nx, ny).is_land())
+}
+
+/// Look up the flat ground tile for a given bitmask.
+pub fn flat_ground_entry(mask: u8) -> (u32, u32) {
+    FLAT_GROUND[mask as usize]
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -118,8 +131,8 @@ const CLIFF_WATER: [(u32, u32); 4] = [
 pub fn flat_ground_src(grid: &Grid, x: u32, y: u32) -> (u32, u32) {
     let tile = grid.get(x, y);
     if tile == TileKind::Road {
-        // Road tiles: "same" = other road tiles (edges where road meets non-road)
-        let mask = cardinal_mask(grid, x, y, |nx, ny| grid.get(nx, ny) == TileKind::Road);
+        // Roads use center fill among land tiles, but get border edges next to water
+        let mask = cardinal_mask(grid, x, y, |nx, ny| grid.get(nx, ny).is_land());
         FLAT_GROUND[mask as usize]
     } else {
         // Non-road land tiles: treat road as "not same" so edges appear next to roads
@@ -324,7 +337,7 @@ mod tests {
 
     #[test]
     fn road_tile_autotile() {
-        // Vertical road strip: road tiles see other road tiles as "same"
+        // Road tiles always use center fill — grass provides the border
         let grid = make_grid(
             3,
             3,
@@ -334,9 +347,8 @@ mod tests {
                 (1, 2, TileKind::Road),
             ],
         );
-        // (1,1): N=road, E=grass(not same), S=road, W=grass(not same) → mask = N+S = 5 → V-mid
         let (col, row) = flat_ground_src(&grid, 1, 1);
-        assert_eq!((col, row), (3, 1)); // V-mid
+        assert_eq!((col, row), (1, 1)); // Center fill
     }
 
     #[test]

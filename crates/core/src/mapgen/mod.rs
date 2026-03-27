@@ -306,11 +306,6 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
         clear_circle(&mut grid, cx, cy, 6);
     }
 
-    // Post-processing: widen narrow passages so units (radius ~1 tile) can fit.
-    // Any passable tile that has an impassable neighbor within 1 tile gets its
-    // impassable neighbors cleared — ensuring all corridors are at least 3 tiles wide.
-    widen_narrow_passages(&mut grid);
-
     // Gather points: base center (open rally zone where units congregate).
     let blue_gather = blue_base;
     let red_gather = red_base;
@@ -323,65 +318,10 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
         red_gather,
     };
 
+    // Generate 2-tile-wide roads connecting bases through capture zones
+    generate_roads(&mut grid, &layout);
+
     (grid, layout)
-}
-
-/// Widen narrow passages so units with large collision radius can navigate.
-/// Scans every passable tile: if it doesn't have wide passability (all 4 cardinal
-/// neighbors passable), clear the impassable neighbors. Run multiple passes to
-/// propagate the widening. Only affects the playable area.
-fn widen_narrow_passages(grid: &mut Grid) {
-    let b = BORDER_SIZE;
-    let p = PLAYABLE_SIZE;
-
-    // Run 2 passes to propagate widening through tight corridors
-    for _pass in 0..2 {
-        // Collect tiles that need widening (can't mutate during scan)
-        let mut to_clear: Vec<(u32, u32)> = Vec::new();
-
-        for gy in b..(b + p) {
-            for gx in b..(b + p) {
-                if !grid.is_passable(gx, gy) {
-                    continue;
-                }
-                // Check if this passable tile has an impassable cardinal neighbor
-                for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
-                    let nx = gx as i32 + dx;
-                    let ny = gy as i32 + dy;
-                    if !grid.in_bounds(nx, ny) {
-                        continue;
-                    }
-                    let nx = nx as u32;
-                    let ny = ny as u32;
-                    if nx < b || nx >= b + p || ny < b || ny >= b + p {
-                        continue; // don't widen into the border
-                    }
-                    if !grid.is_passable(nx, ny) {
-                        // This passable tile is adjacent to impassable — mark the
-                        // impassable neighbor for clearing
-                        to_clear.push((nx, ny));
-                    }
-                }
-            }
-        }
-
-        // Clear marked tiles
-        for (x, y) in to_clear {
-            let tile = grid.get(x, y);
-            if tile == TileKind::Water {
-                grid.set(x, y, TileKind::Grass);
-            }
-            // Clear elevation that blocks movement (level 2+)
-            if grid.elevation(x, y) > 1 {
-                grid.set_elevation(x, y, 0);
-            }
-            // Remove decorations and trees at widened tiles
-            grid.set_decoration(x, y, None);
-            if tile == TileKind::Forest {
-                grid.set(x, y, TileKind::Grass);
-            }
-        }
-    }
 }
 
 /// Clear a circular area to grass.
@@ -496,6 +436,264 @@ fn clear_rect(grid: &mut Grid, x: u32, y: u32, w: u32, h: u32) {
     }
 }
 
+/// Generate 2-tile-wide roads connecting objectives via a Minimum Spanning Tree.
+/// Uses Kruskal's algorithm (sorted edges + union-find) to produce a plausible
+/// tree-shaped road network, then routes each MST edge through A*.
+fn generate_roads(grid: &mut Grid, layout: &MapLayout) {
+    // Collect all objectives (bases + zone centers)
+    let mut nodes: Vec<(u32, u32)> = Vec::with_capacity(layout.zone_centers.len() + 2);
+    nodes.push(layout.blue_base);
+    nodes.extend(layout.zone_centers.iter().copied());
+    nodes.push(layout.red_base);
+
+    let n = nodes.len();
+    if n < 2 {
+        return;
+    }
+
+    // All candidate edges sorted by Euclidean distance
+    let mut edges: Vec<(usize, usize, u32)> = Vec::new();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let dx = nodes[i].0 as i32 - nodes[j].0 as i32;
+            let dy = nodes[i].1 as i32 - nodes[j].1 as i32;
+            edges.push((i, j, (dx * dx + dy * dy) as u32));
+        }
+    }
+    edges.sort_by_key(|e| e.2);
+
+    // Kruskal's MST via union-find
+    let mut parent: Vec<usize> = (0..n).collect();
+    let find = |parent: &mut Vec<usize>, mut x: usize| -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]]; // path compression
+            x = parent[x];
+        }
+        x
+    };
+
+    let mut mst_edges = Vec::with_capacity(n - 1);
+    for (i, j, _) in &edges {
+        let ri = find(&mut parent, *i);
+        let rj = find(&mut parent, *j);
+        if ri != rj {
+            parent[ri] = rj;
+            mst_edges.push((*i, *j));
+            if mst_edges.len() == n - 1 {
+                break;
+            }
+        }
+    }
+
+    // Add extra edges so every node has at least 2 connections (creates loops
+    // for flanks that would otherwise be dead-ends in the MST).
+    let mut degree = vec![0u32; n];
+    for &(i, j) in &mst_edges {
+        degree[i] += 1;
+        degree[j] += 1;
+    }
+    let mst_set: std::collections::HashSet<(usize, usize)> = mst_edges.iter().copied().collect();
+    for &(i, j, _) in &edges {
+        if mst_set.contains(&(i, j)) || mst_set.contains(&(j, i)) {
+            continue;
+        }
+        if degree[i] < 2 || degree[j] < 2 {
+            mst_edges.push((i, j));
+            degree[i] += 1;
+            degree[j] += 1;
+        }
+    }
+
+    // Route each edge via A* and paint the road
+    for (i, j) in mst_edges {
+        if let Some(path) = road_astar(grid, nodes[i], nodes[j]) {
+            paint_road_path(grid, &path);
+        }
+    }
+
+    // Enforce 1-tile grass border: clear forest/rock adjacent to road tiles
+    let w = grid.width;
+    let h = grid.height;
+    let mut to_clear: Vec<(u32, u32)> = Vec::new();
+    for gy in 0..h {
+        for gx in 0..w {
+            if grid.get(gx, gy) != TileKind::Road {
+                continue;
+            }
+            for &(dx, dy) in &[
+                (-1i32, -1i32),
+                (0, -1),
+                (1, -1),
+                (-1, 0),
+                (1, 0),
+                (-1, 1),
+                (0, 1),
+                (1, 1),
+            ] {
+                let nx = gx as i32 + dx;
+                let ny = gy as i32 + dy;
+                if !grid.in_bounds(nx, ny) {
+                    continue;
+                }
+                let ux = nx as u32;
+                let uy = ny as u32;
+                let tile = grid.get(ux, uy);
+                if tile == TileKind::Forest || tile == TileKind::Rock || grid.elevation(ux, uy) > 0
+                {
+                    to_clear.push((ux, uy));
+                }
+            }
+        }
+    }
+    for (x, y) in to_clear {
+        if grid.get(x, y) != TileKind::Road {
+            grid.set(x, y, TileKind::Grass);
+        }
+        grid.set_decoration(x, y, None);
+        grid.set_elevation(x, y, 0);
+    }
+}
+
+/// A* pathfinding for road generation. Prefers existing roads (zero extra cost)
+/// and avoids water/elevation. Forest tiles are traversable but expensive.
+fn road_astar(grid: &Grid, from: (u32, u32), to: (u32, u32)) -> Option<Vec<(u32, u32)>> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    let w = grid.width;
+    let h = grid.height;
+    let size = (w * h) as usize;
+    let idx = |x: u32, y: u32| (y * w + x) as usize;
+
+    let (sx, sy) = from;
+    let (gx, gy) = to;
+
+    let mut g_score = vec![u32::MAX; size];
+    let mut came_from = vec![u32::MAX; size];
+    g_score[idx(sx, sy)] = 0;
+
+    // Octile heuristic (admissible with cardinal=2, diagonal=3, min tile cost=1)
+    let heuristic = |x: u32, y: u32| -> u32 {
+        let dx = (x as i32 - gx as i32).unsigned_abs();
+        let dy = (y as i32 - gy as i32).unsigned_abs();
+        let (min, max) = if dx < dy { (dx, dy) } else { (dy, dx) };
+        min * 3 + (max - min) * 2
+    };
+
+    // Cardinal=2, Diagonal=3
+    const DIRS: [(i32, i32, u32); 8] = [
+        (0, -1, 2),
+        (1, 0, 2),
+        (0, 1, 2),
+        (-1, 0, 2),
+        (1, -1, 3),
+        (1, 1, 3),
+        (-1, 1, 3),
+        (-1, -1, 3),
+    ];
+
+    let mut open: BinaryHeap<Reverse<(u32, u32, u32)>> = BinaryHeap::new();
+    open.push(Reverse((heuristic(sx, sy), sx, sy)));
+
+    while let Some(Reverse((_, x, y))) = open.pop() {
+        if x == gx && y == gy {
+            // Reconstruct path
+            let mut path = vec![(gx, gy)];
+            let mut ci = idx(gx, gy);
+            while ci != idx(sx, sy) {
+                let cx = (ci as u32) % w;
+                let cy = (ci as u32) / w;
+                if path.last() != Some(&(cx, cy)) {
+                    path.push((cx, cy));
+                }
+                ci = came_from[ci] as usize;
+            }
+            path.push((sx, sy));
+            path.reverse();
+            return Some(path);
+        }
+
+        let g = g_score[idx(x, y)];
+        if g == u32::MAX {
+            continue;
+        }
+
+        for &(dx, dy, dir_cost) in &DIRS {
+            let nx = x as i32 + dx;
+            let ny = y as i32 + dy;
+            if !grid.in_bounds(nx, ny) {
+                continue;
+            }
+            let nx = nx as u32;
+            let ny = ny as u32;
+            // Skip impassable (water) only; elevated terrain is traversable but costly
+            if grid.get(nx, ny) == TileKind::Water {
+                continue;
+            }
+            // Diagonal corner-cutting check
+            if !grid.can_move_diagonal(x, y, dx, dy) {
+                continue;
+            }
+            // Tile cost: existing road=1 (free merge), grass=3, forest=8, elevation=12
+            // Tiles adjacent to water get a penalty so the 2×2 road stamp has room
+            let base_cost = match grid.get(nx, ny) {
+                TileKind::Road => 1,
+                TileKind::Forest => 8,
+                _ => 3,
+            };
+            let near_water = [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)]
+                .iter()
+                .any(|&(ddx, ddy)| {
+                    let wx = nx as i32 + ddx;
+                    let wy = ny as i32 + ddy;
+                    grid.in_bounds(wx, wy) && grid.get(wx as u32, wy as u32) == TileKind::Water
+                });
+            let tile_cost = if grid.elevation(nx, ny) > 1 {
+                12
+            } else if near_water {
+                15
+            } else {
+                base_cost
+            };
+            let new_g = g + tile_cost * dir_cost;
+            let ni = idx(nx, ny);
+            if new_g < g_score[ni] {
+                g_score[ni] = new_g;
+                came_from[ni] = idx(x, y) as u32;
+                open.push(Reverse((new_g + heuristic(nx, ny), nx, ny)));
+            }
+        }
+    }
+
+    None // unreachable
+}
+
+/// Paint a 2-tile-wide road along an A*-generated path.
+fn paint_road_path(grid: &mut Grid, path: &[(u32, u32)]) {
+    for &(x, y) in path {
+        // Stamp a 2×2 block
+        for oy in 0..=1i32 {
+            for ox in 0..=1i32 {
+                let rx = x as i32 + ox;
+                let ry = y as i32 + oy;
+                if grid.in_bounds(rx, ry) {
+                    let ux = rx as u32;
+                    let uy = ry as u32;
+                    let tile = grid.get(ux, uy);
+                    if tile == TileKind::Grass || tile == TileKind::Forest || tile == TileKind::Rock
+                    {
+                        grid.set(ux, uy, TileKind::Road);
+                        grid.set_decoration(ux, uy, None);
+                        if grid.elevation(ux, uy) > 0 {
+                            grid.set_elevation(ux, uy, 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,10 +740,10 @@ mod tests {
                     let x = cx.saturating_sub(7) + dx as u32;
                     let y = cy.saturating_sub(7) + dy as u32;
                     if grid.in_bounds(x as i32, y as i32) {
-                        assert_eq!(
-                            grid.get(x, y),
-                            TileKind::Grass,
-                            "Non-grass at ({x},{y}) in deploy zone around ({cx},{cy})"
+                        let tile = grid.get(x, y);
+                        assert!(
+                            tile == TileKind::Grass || tile == TileKind::Road,
+                            "Unexpected tile {tile:?} at ({x},{y}) in deploy zone around ({cx},{cy})"
                         );
                     }
                 }

@@ -241,6 +241,8 @@ impl Game {
                 }
             }
         }
+        // Paint road/dirt 1 tile around all building footprints
+        Self::paint_road_around_buildings(&mut self.grid, &buildings);
         self.buildings = buildings;
 
         // Spawn ambient sheep in rear pasture of each base
@@ -288,6 +290,47 @@ impl Game {
 
     /// Spawn 10 sheep at random positions in the rear pasture (behind the houses).
     /// `fs` = front sign: 1 for Blue (front=+Y), -1 for Red (front=-Y).
+    /// Paint a 1-tile road border around the bounding box of each building footprint.
+    fn paint_road_around_buildings(grid: &mut Grid, buildings: &[building::BaseBuilding]) {
+        for b in buildings {
+            // Compute bounding box of all footprint cells (absolute coords)
+            let offsets = b.kind.footprint_offsets();
+            if offsets.is_empty() {
+                continue;
+            }
+            let mut min_x = i32::MAX;
+            let mut max_x = i32::MIN;
+            let mut min_y = i32::MAX;
+            let mut max_y = i32::MIN;
+            for &(dx, dy) in offsets {
+                let ax = b.grid_x as i32 + dx;
+                let ay = b.grid_y as i32 + dy;
+                min_x = min_x.min(ax);
+                max_x = max_x.max(ax);
+                min_y = min_y.min(ay);
+                max_y = max_y.max(ay);
+            }
+            // Expand by 2 tiles in all directions
+            let border = 2;
+            for ry in (min_y - border)..=(max_y + border) {
+                for rx in (min_x - border)..=(max_x + border) {
+                    if !grid.in_bounds(rx, ry) {
+                        continue;
+                    }
+                    let ux = rx as u32;
+                    let uy = ry as u32;
+                    let tile = grid.get(ux, uy);
+                    if (tile == TileKind::Grass || tile == TileKind::Forest)
+                        && grid.elevation(ux, uy) == 0
+                    {
+                        grid.set(ux, uy, TileKind::Road);
+                        grid.set_decoration(ux, uy, None);
+                    }
+                }
+            }
+        }
+    }
+
     fn spawn_base_sheep(&mut self, cx: u32, cy: u32, fs: i32, base_seed: u32) {
         let mut seed = if base_seed == 0 { 1 } else { base_seed };
         let mut next = || -> u32 {

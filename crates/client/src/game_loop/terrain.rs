@@ -128,30 +128,60 @@ pub(super) fn render_terrain_chunk(
     let chunk_h = (gy1 - gy0) as f64 * ts;
     ctx.clear_rect(0.0, 0.0, chunk_w, chunk_h);
 
-    // Layer 2.5: Road sand fill (extends 1 tile into neighbors)
-    {
-        ctx.set_fill_style_str("#C4A265");
-        for gy in gy0..gy1 {
-            for gx in gx0..gx1 {
-                if game.grid.get(gx, gy) != TileKind::Road {
-                    continue;
-                }
-                let dx = (gx as f64) * ts - ox;
-                let dy = (gy as f64) * ts - oy;
-                ctx.fill_rect(dx, dy, ts, ts);
-                if gx > 0 && game.grid.get(gx - 1, gy) != TileKind::Road {
-                    ctx.fill_rect(dx - ts, dy, ts, ts);
-                }
-                if gx + 1 < w && game.grid.get(gx + 1, gy) != TileKind::Road {
-                    ctx.fill_rect(dx + ts, dy, ts, ts);
-                }
-                if gy > 0 && game.grid.get(gx, gy - 1) != TileKind::Road {
-                    ctx.fill_rect(dx, dy - ts, ts, ts);
-                }
-                if gy + 1 < h && game.grid.get(gx, gy + 1) != TileKind::Road {
-                    ctx.fill_rect(dx, dy + ts, ts, ts);
+    // Layer 2.5: Road surface under neighbor grass tiles (so transparent fringe
+    // in grass edge tiles reveals a proper road texture, not flat color).
+    if let Some(tilemap_tex_id) = loaded.tilemap_texture {
+        if let Some((img, _, _, _)) = tm.get_image(tilemap_tex_id) {
+            // Road center fill tile
+            let (rc, rr) = autotile::FLAT_CENTER;
+            let (rsx, rsy, rsw, rsh) = grid::tilemap_src_rect(rc, rr);
+
+            for gy in gy0..gy1 {
+                for gx in gx0..gx1 {
+                    let tile = game.grid.get(gx, gy);
+                    // Draw road texture under: road tiles themselves + grass neighbors of roads
+                    let is_road_neighbor = tile != TileKind::Road
+                        && tile.is_land()
+                        && ((gx > 0 && game.grid.get(gx - 1, gy) == TileKind::Road)
+                            || (gx + 1 < w && game.grid.get(gx + 1, gy) == TileKind::Road)
+                            || (gy > 0 && game.grid.get(gx, gy - 1) == TileKind::Road)
+                            || (gy + 1 < h && game.grid.get(gx, gy + 1) == TileKind::Road));
+                    if tile != TileKind::Road && !is_road_neighbor {
+                        continue;
+                    }
+                    let dx = (gx as f64) * ts - ox;
+                    let dy = (gy as f64) * ts - oy;
+                    // Use autotile for water borders on both road tiles and road neighbors
+                    let mask = autotile::cardinal_land_mask(&game.grid, gx, gy);
+                    let (col, row) = autotile::flat_ground_entry(mask);
+                    let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
+                    if col == 1 && row == 1 && render_util::tile_flip(gx, gy) {
+                        draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
+                    } else {
+                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                            img, sx, sy, sw, sh, dx, dy, ts, ts,
+                        )?;
+                    }
                 }
             }
+            // Tint with sand color
+            ctx.set_global_composite_operation("multiply")?;
+            ctx.set_fill_style_str("#D4B070");
+            for gy in gy0..gy1 {
+                for gx in gx0..gx1 {
+                    let tile = game.grid.get(gx, gy);
+                    let is_road_neighbor = tile != TileKind::Road
+                        && tile.is_land()
+                        && ((gx > 0 && game.grid.get(gx - 1, gy) == TileKind::Road)
+                            || (gx + 1 < w && game.grid.get(gx + 1, gy) == TileKind::Road)
+                            || (gy > 0 && game.grid.get(gx, gy - 1) == TileKind::Road)
+                            || (gy + 1 < h && game.grid.get(gx, gy + 1) == TileKind::Road));
+                    if tile == TileKind::Road || is_road_neighbor {
+                        ctx.fill_rect((gx as f64) * ts - ox, (gy as f64) * ts - oy, ts, ts);
+                    }
+                }
+            }
+            ctx.set_global_composite_operation("source-over")?;
         }
     }
 
@@ -177,40 +207,6 @@ pub(super) fn render_terrain_chunk(
                     }
                 }
             }
-        }
-    }
-
-    // Layer 3.5: Road surface (grass autotile tinted to sand)
-    if let Some(tilemap_tex_id) = loaded.tilemap_texture {
-        if let Some((img, _, _, _)) = tm.get_image(tilemap_tex_id) {
-            for gy in gy0..gy1 {
-                for gx in gx0..gx1 {
-                    if game.grid.get(gx, gy) != TileKind::Road {
-                        continue;
-                    }
-                    let (col, row) = autotile::flat_ground_src(&game.grid, gx, gy);
-                    let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
-                    let dx = (gx as f64) * ts - ox;
-                    let dy = (gy as f64) * ts - oy;
-                    if col == 1 && row == 1 && render_util::tile_flip(gx, gy) {
-                        draw_tile_flipped(ctx, img, sx, sy, sw, sh, dx, dy, ts, ts)?;
-                    } else {
-                        ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                            img, sx, sy, sw, sh, dx, dy, ts, ts,
-                        )?;
-                    }
-                }
-            }
-            ctx.set_global_composite_operation("multiply")?;
-            ctx.set_fill_style_str("#D4B070");
-            for gy in gy0..gy1 {
-                for gx in gx0..gx1 {
-                    if game.grid.get(gx, gy) == TileKind::Road {
-                        ctx.fill_rect((gx as f64) * ts - ox, (gy as f64) * ts - oy, ts, ts);
-                    }
-                }
-            }
-            ctx.set_global_composite_operation("source-over")?;
         }
     }
 

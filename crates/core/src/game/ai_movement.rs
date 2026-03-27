@@ -189,7 +189,7 @@ impl Game {
                 } else {
                     self.find_nearest_passable(gx, gy).unwrap_or((gx, gy))
                 };
-                let initial_cost = 150u32.saturating_sub(score.round() as u32);
+                let initial_cost = 750u32.saturating_sub((score * 5.0).round() as u32);
                 v.push((gx, gy, initial_cost));
             }
             v
@@ -364,7 +364,7 @@ impl Game {
                     .unwrap_or(0.0);
 
                 // Terrain-aware distance penalty (normalized)
-                let cost_norm = cost as f32 / 500.0;
+                let cost_norm = cost as f32 / 2500.0;
 
                 // Congestion: fewer allies heading there = better
                 let cong = prev_cong.get(zi).copied().unwrap_or(0) as f32;

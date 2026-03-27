@@ -119,33 +119,41 @@ pub(super) fn draw_terrain(
     let w = game.grid.width;
     let h = game.grid.height;
 
-    // Road sand fill
-    canvas.set_draw_color(Color::RGB(196, 162, 101));
-    for gy in min_gy..max_gy {
-        for gx in min_gx..max_gx {
-            if game.grid.get(gx, gy) != TileKind::Road {
-                continue;
-            }
-            let wx = gx as f32 * TILE_SIZE;
-            let wy = gy as f32 * TILE_SIZE;
-            let (sx, sy) = world_to_screen(wx, wy, cam);
-            let _ = canvas.fill_rect(Rect::new(sx, sy, tsi, tsi));
+    // Road surface under road tiles and their grass neighbors (so transparent
+    // fringe in grass edge tiles reveals a proper road texture, not flat color).
+    if let Some(ref tilemap_tex) = assets.tilemap_texture {
+        let (rc, rr) = autotile::FLAT_CENTER;
+        let (rtsx, rtsy, rtsw, rtsh) = grid::tilemap_src_rect(rc, rr);
+        let rsrc = src_rect(rtsx, rtsy, rtsw, rtsh);
 
-            if gx > 0 && game.grid.get(gx - 1, gy) != TileKind::Road {
-                let (nx, ny) = world_to_screen((gx - 1) as f32 * TILE_SIZE, wy, cam);
-                let _ = canvas.fill_rect(Rect::new(nx, ny, tsi, tsi));
-            }
-            if gx + 1 < w && game.grid.get(gx + 1, gy) != TileKind::Road {
-                let (nx, ny) = world_to_screen((gx + 1) as f32 * TILE_SIZE, wy, cam);
-                let _ = canvas.fill_rect(Rect::new(nx, ny, tsi, tsi));
-            }
-            if gy > 0 && game.grid.get(gx, gy - 1) != TileKind::Road {
-                let (nx, ny) = world_to_screen(wx, (gy - 1) as f32 * TILE_SIZE, cam);
-                let _ = canvas.fill_rect(Rect::new(nx, ny, tsi, tsi));
-            }
-            if gy + 1 < h && game.grid.get(gx, gy + 1) != TileKind::Road {
-                let (nx, ny) = world_to_screen(wx, (gy + 1) as f32 * TILE_SIZE, cam);
-                let _ = canvas.fill_rect(Rect::new(nx, ny, tsi, tsi));
+        for gy in min_gy..max_gy {
+            for gx in min_gx..max_gx {
+                let tile = game.grid.get(gx, gy);
+                let is_road_neighbor = tile != TileKind::Road
+                    && tile.is_land()
+                    && ((gx > 0 && game.grid.get(gx - 1, gy) == TileKind::Road)
+                        || (gx + 1 < w && game.grid.get(gx + 1, gy) == TileKind::Road)
+                        || (gy > 0 && game.grid.get(gx, gy - 1) == TileKind::Road)
+                        || (gy + 1 < h && game.grid.get(gx, gy + 1) == TileKind::Road));
+                if tile != TileKind::Road && !is_road_neighbor {
+                    continue;
+                }
+                let wx = gx as f32 * TILE_SIZE;
+                let wy = gy as f32 * TILE_SIZE;
+                let (sx, sy) = world_to_screen(wx, wy, cam);
+                let dst = Rect::new(sx, sy, tsi, tsi);
+                // Use autotile for water borders on both road tiles and road neighbors
+                let (col, row) = {
+                    let mask = autotile::cardinal_land_mask(&game.grid, gx, gy);
+                    autotile::flat_ground_entry(mask)
+                };
+                let (tsx, tsy, tsw, tsh) = grid::tilemap_src_rect(col, row);
+                let src = src_rect(tsx, tsy, tsw, tsh);
+                let flip_h = col == 1 && row == 1 && render_util::tile_flip(gx, gy);
+                let _ = canvas.copy_ex(tilemap_tex, src, dst, 0.0, None, flip_h, false);
+                // Sand tint overlay
+                canvas.set_draw_color(Color::RGBA(212, 176, 112, 140));
+                let _ = canvas.fill_rect(dst);
             }
         }
     }
@@ -168,30 +176,6 @@ pub(super) fn draw_terrain(
 
                 let flip_h = col == 1 && row == 1 && render_util::tile_flip(gx, gy);
                 let _ = canvas.copy_ex(tilemap_tex, src, dst, 0.0, None, flip_h, false);
-            }
-        }
-    }
-
-    // Road surface
-    if let Some(ref tilemap_tex) = assets.tilemap_texture {
-        for gy in min_gy..max_gy {
-            for gx in min_gx..max_gx {
-                if game.grid.get(gx, gy) != TileKind::Road {
-                    continue;
-                }
-                let (col, row) = autotile::flat_ground_src(&game.grid, gx, gy);
-                let (tsx, tsy, tsw, tsh) = grid::tilemap_src_rect(col, row);
-                let wx = gx as f32 * TILE_SIZE;
-                let wy = gy as f32 * TILE_SIZE;
-                let (sx, sy) = world_to_screen(wx, wy, cam);
-                let src = src_rect(tsx, tsy, tsw, tsh);
-                let dst = Rect::new(sx, sy, tsi, tsi);
-
-                let flip_h = col == 1 && row == 1 && render_util::tile_flip(gx, gy);
-                let _ = canvas.copy_ex(tilemap_tex, src, dst, 0.0, None, flip_h, false);
-
-                canvas.set_draw_color(Color::RGBA(212, 176, 112, 140));
-                let _ = canvas.fill_rect(dst);
             }
         }
     }
