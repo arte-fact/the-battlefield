@@ -216,7 +216,7 @@ impl Default for GameConfig {
             spawn_interval: 1.5,
 
             // Zone & Game Rules
-            base_capture_time: 8.0,
+            base_capture_time: 16.0,
             max_capture_multiplier: 3.0,
             max_units_per_faction: 50,
             zone_radius: 4,
