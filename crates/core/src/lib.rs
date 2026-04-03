@@ -1,3 +1,4 @@
+pub mod config;
 pub mod animation;
 pub mod asset_manifest;
 pub mod autotile;

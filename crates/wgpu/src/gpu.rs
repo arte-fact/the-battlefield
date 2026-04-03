@@ -55,6 +55,33 @@ impl PrimitiveVertex {
     }
 }
 
+/// Vertex for procedural effect circles (zone overlays, player aim).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct EffectVertex {
+    pub position: [f32; 2], // World-space quad corner
+    pub uv: [f32; 2],       // -1..1 from circle center
+    pub color: [f32; 4],    // RGBA
+    pub params: [f32; 4],   // [time, effect_kind, _, _]
+}
+
+impl EffectVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x2,
+        2 => Float32x4,
+        3 => Float32x4,
+    ];
+
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Camera uniform
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,6 +149,7 @@ pub struct GpuContext {
     // Pipelines
     pub sprite_pipeline: wgpu::RenderPipeline,
     pub primitive_pipeline: wgpu::RenderPipeline,
+    pub effects_pipeline: wgpu::RenderPipeline,
 
     // Camera uniforms (bind group 0)
     pub camera_buffer: wgpu::Buffer,
@@ -189,8 +217,9 @@ impl GpuContext {
                         let mut limits = wgpu::Limits::default();
                         // Clamp to what the adapter actually supports
                         let adapter_limits = adapter.limits();
-                        limits.max_color_attachments =
-                            limits.max_color_attachments.min(adapter_limits.max_color_attachments);
+                        limits.max_color_attachments = limits
+                            .max_color_attachments
+                            .min(adapter_limits.max_color_attachments);
                         limits
                     },
                     memory_hints: wgpu::MemoryHints::default(),
@@ -417,6 +446,53 @@ impl GpuContext {
             cache: None,
         });
 
+        // ── Effects pipeline (procedural circles) ──────────────────────
+        let effects_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("effects_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/effects.wgsl").into()),
+        });
+
+        let effects_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("effects_pl"),
+                bind_group_layouts: &[&camera_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let effects_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("effects_rp"),
+            layout: Some(&effects_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &effects_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[EffectVertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &effects_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend_alpha),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             device,
             queue,
@@ -425,6 +501,7 @@ impl GpuContext {
             surface_format,
             sprite_pipeline,
             primitive_pipeline,
+            effects_pipeline,
             camera_buffer,
             camera_bind_group,
             camera_bind_group_layout,
@@ -453,8 +530,11 @@ impl GpuContext {
 
     /// Upload the HUD (screen-space) camera matrix.
     pub fn set_hud_camera(&self, uniform: &CameraUniform) {
-        self.queue
-            .write_buffer(&self.hud_camera_buffer, 0, bytemuck::cast_slice(&[*uniform]));
+        self.queue.write_buffer(
+            &self.hud_camera_buffer,
+            0,
+            bytemuck::cast_slice(&[*uniform]),
+        );
     }
 
     /// Create a bind group for a texture + sampler pair.

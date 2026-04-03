@@ -115,11 +115,25 @@ impl Projectile {
         damage: i32,
         faction: Faction,
     ) -> Self {
+        Self::new_with_speed(start_x, start_y, target_x, target_y, damage, faction, ARROW_SPEED, ARC_BASE)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_speed(
+        start_x: f32,
+        start_y: f32,
+        target_x: f32,
+        target_y: f32,
+        damage: i32,
+        faction: Faction,
+        arrow_speed: f32,
+        arc_base: f32,
+    ) -> Self {
         let dx = target_x - start_x;
         let dy = target_y - start_y;
         let distance = (dx * dx + dy * dy).sqrt();
-        let duration = (distance / ARROW_SPEED).max(0.1);
-        let arc_height = ARC_BASE + distance * ARC_DISTANCE_FACTOR;
+        let duration = (distance / arrow_speed).max(0.1);
+        let arc_height = arc_base + distance * ARC_DISTANCE_FACTOR;
 
         // Initial angle: tangent of the arc at t=0
         // dz/dt at t=0 = arc_height * 4 (upward), screen-space up is -y

@@ -9,7 +9,20 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 /// Keyboard key type for this backend.
 type Key = KeyCode;
 
-/// Tracks keyboard, mouse, and touch state; produces PlayerInput each frame.
+/// Platform-agnostic gamepad button identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GpButton {
+    South, // A (Xbox) / Cross (PS)
+    East,  // B / Circle
+    West,  // X / Square
+    North, // Y / Triangle
+    DPadUp,
+    DPadDown,
+    DPadLeft,
+    DPadRight,
+}
+
+/// Tracks keyboard, mouse, touch, and gamepad state; produces PlayerInput each frame.
 pub struct InputState {
     // Keyboard
     keys_down: HashSet<Key>,
@@ -22,9 +35,15 @@ pub struct InputState {
     pub mouse_y: i32,
     pub mouse_clicked: bool,
 
-    // Gamepad (stubbed for Phase 4)
+    // Gamepad
     pub gamepad_connected: bool,
     pub focused_button: usize,
+    left_stick_x: f32,
+    left_stick_y: f32,
+    trigger_left: f32,
+    trigger_right: f32,
+    gp_buttons_down: HashSet<GpButton>,
+    gp_pressed_this_frame: HashSet<GpButton>,
 
     // Touch controls
     pub joystick: VirtualJoystick,
@@ -76,6 +95,12 @@ impl InputState {
             mouse_clicked: false,
             gamepad_connected: false,
             focused_button: 0,
+            left_stick_x: 0.0,
+            left_stick_y: 0.0,
+            trigger_left: 0.0,
+            trigger_right: 0.0,
+            gp_buttons_down: HashSet::new(),
+            gp_pressed_this_frame: HashSet::new(),
             joystick: VirtualJoystick::new(),
             attack_button: ActionButton::new(0.0, 0.0, 56.0),
             recruit_btn: ActionButton::new(0.0, 0.0, 28.0),
@@ -105,6 +130,7 @@ impl InputState {
 
     pub fn begin_frame(&mut self) {
         self.pressed_this_frame.clear();
+        self.gp_pressed_this_frame.clear();
         self.scroll_delta = 0.0;
         self.mouse_clicked = false;
     }
@@ -120,6 +146,40 @@ impl InputState {
 
     pub fn is_key_down(&self, key: Key) -> bool {
         self.keys_down.contains(&key)
+    }
+
+    // ── Gamepad ─────────────────────────────────────────────────────────
+
+    pub fn gp_pressed(&self, btn: GpButton) -> bool {
+        self.gp_pressed_this_frame.contains(&btn)
+    }
+
+    pub fn gp_held(&self, btn: GpButton) -> bool {
+        self.gp_buttons_down.contains(&btn)
+    }
+
+    pub fn gp_button_down(&mut self, btn: GpButton) {
+        self.gp_buttons_down.insert(btn);
+        self.gp_pressed_this_frame.insert(btn);
+    }
+
+    pub fn gp_button_up(&mut self, btn: GpButton) {
+        self.gp_buttons_down.remove(&btn);
+    }
+
+    pub fn gp_set_axis(&mut self, stick_x: f32, stick_y: f32) {
+        // gilrs already applies circular dead zone (0.1 threshold)
+        self.left_stick_x = stick_x;
+        self.left_stick_y = stick_y;
+    }
+
+    pub fn gp_set_triggers(&mut self, left: f32, right: f32) {
+        self.trigger_left = left.max(0.0);
+        self.trigger_right = right.max(0.0);
+    }
+
+    pub fn gp_zoom_delta(&self) -> f32 {
+        self.trigger_right
     }
 
     /// Process a winit WindowEvent.
@@ -172,6 +232,10 @@ impl InputState {
                         self.is_touch_device = true;
                         self.active_fingers.insert(*id, (px, py));
                         let total = self.active_fingers.len() as u32;
+                        // Also register as a mouse click for menu button hit testing
+                        self.mouse_x = px as i32;
+                        self.mouse_y = py as i32;
+                        self.mouse_clicked = true;
                         self.on_touch_start(*id, px, py, total);
                     }
                     TouchPhase::Moved => {
@@ -387,17 +451,25 @@ impl InputState {
         let kb_raw_x = (kb_right as i32 - kb_left as i32) as f32;
         let kb_raw_y = (kb_down as i32 - kb_up as i32) as f32;
 
+        // Gamepad movement: left stick + D-pad
+        let dpad_x =
+            self.gp_held(GpButton::DPadRight) as i32 - self.gp_held(GpButton::DPadLeft) as i32;
+        let dpad_y =
+            self.gp_held(GpButton::DPadDown) as i32 - self.gp_held(GpButton::DPadUp) as i32;
+        let gp_raw_x = self.left_stick_x + dpad_x as f32;
+        let gp_raw_y = self.left_stick_y + dpad_y as f32;
+
         // Touch joystick
         let joy_active = self.joystick.active
             && (self.joystick.dx.abs() > 0.01 || self.joystick.dy.abs() > 0.01);
 
-        // Priority: keyboard > touch joystick (gamepad in Phase 4)
+        // Priority: keyboard > touch joystick > gamepad
         let (raw_x, raw_y) = if kb_any {
             (kb_raw_x, kb_raw_y)
         } else if joy_active {
             (self.joystick.dx, self.joystick.dy)
         } else {
-            (0.0, 0.0)
+            (gp_raw_x, gp_raw_y)
         };
 
         let len = (raw_x * raw_x + raw_y * raw_y).sqrt();
@@ -411,10 +483,12 @@ impl InputState {
             self.aim_dir = move_y.atan2(move_x);
         }
 
-        let aim_lock =
+        let kb_aim_lock =
             self.is_key_down(KeyCode::ControlLeft) || self.is_key_down(KeyCode::ControlRight);
+        let aim_lock = kb_aim_lock || self.trigger_left > 0.5;
 
         let kb_attack = self.is_key_down(KeyCode::Space);
+        let gp_attack = self.gp_held(GpButton::South);
         let touch_attack = self.attack_button.pressed;
 
         // Consume touch order flags
@@ -428,13 +502,19 @@ impl InputState {
         PlayerInput {
             move_x,
             move_y,
-            attack: kb_attack || touch_attack,
+            attack: kb_attack || gp_attack || touch_attack,
             aim_dir: self.aim_dir,
             aim_lock,
             recruit: false,
-            order_follow: self.pressed_this_frame(KeyCode::KeyJ) || touch_follow,
-            order_charge: self.pressed_this_frame(KeyCode::KeyL) || touch_charge,
-            order_defend: self.pressed_this_frame(KeyCode::KeyK) || touch_defend,
+            order_follow: self.pressed_this_frame(KeyCode::KeyJ)
+                || self.gp_pressed(GpButton::West)
+                || touch_follow,
+            order_charge: self.pressed_this_frame(KeyCode::KeyL)
+                || self.gp_pressed(GpButton::East)
+                || touch_charge,
+            order_defend: self.pressed_this_frame(KeyCode::KeyK)
+                || self.gp_pressed(GpButton::North)
+                || touch_defend,
         }
     }
 }

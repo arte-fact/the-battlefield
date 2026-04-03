@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="description" content="Real-time tactical battlefield game — command warriors, archers, lancers and monks in strategic combat.">
+    <title>The Battlefield</title>
+
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Battlefield">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
+
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            background: #000;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            overscroll-behavior: none;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+        }
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            transition: right 0.25s ease;
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+            touch-action: none;
+        }
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #aaa;
+            font-family: monospace;
+            font-size: 14px;
+            z-index: 20;
+        }
+
+        /* Gear toggle button */
+        #ai-config-toggle {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 6px;
+            background: rgba(26, 26, 46, 0.85);
+            color: #ccc;
+            font-size: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(4px);
+            transition: background 0.15s, color 0.15s;
+        }
+        #ai-config-toggle:hover {
+            background: rgba(40, 40, 70, 0.95);
+            color: #fff;
+        }
+        #ai-config-toggle.active {
+            background: #16213e;
+            color: #4fc3f7;
+        }
+
+        /* Side panel */
+        #ai-config-panel {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 340px;
+            height: 100%;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+            font-size: 12px;
+            z-index: 999;
+            overflow-y: auto;
+            overflow-x: hidden;
+            transform: translateX(100%);
+            transition: transform 0.25s ease;
+            border-left: 1px solid #2a2a4a;
+            scrollbar-width: thin;
+            scrollbar-color: #3a3a5a #1a1a2e;
+        }
+        #ai-config-panel.open {
+            transform: translateX(0);
+        }
+        #ai-config-panel::-webkit-scrollbar { width: 6px; }
+        #ai-config-panel::-webkit-scrollbar-track { background: #1a1a2e; }
+        #ai-config-panel::-webkit-scrollbar-thumb { background: #3a3a5a; border-radius: 3px; }
+
+        #ai-config-panel .panel-header {
+            position: sticky;
+            top: 0;
+            background: #16213e;
+            padding: 12px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #2a2a4a;
+            z-index: 1;
+        }
+        #ai-config-panel .panel-header h2 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+            margin: 0;
+        }
+        #ai-config-panel .panel-header button {
+            background: #e74c3c;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        #ai-config-panel .panel-header button:hover {
+            background: #c0392b;
+        }
+
+        #ai-config-panel details {
+            border-bottom: 1px solid #2a2a4a;
+        }
+        #ai-config-panel summary {
+            padding: 10px 14px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+            color: #4fc3f7;
+            background: #16213e;
+            user-select: none;
+            list-style: none;
+        }
+        #ai-config-panel summary::-webkit-details-marker { display: none; }
+        #ai-config-panel summary::before {
+            content: '\25B6';
+            display: inline-block;
+            margin-right: 8px;
+            font-size: 9px;
+            transition: transform 0.15s;
+        }
+        #ai-config-panel details[open] > summary::before {
+            transform: rotate(90deg);
+        }
+
+        #ai-config-panel .field {
+            padding: 6px 14px 8px;
+        }
+        #ai-config-panel .field-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 3px;
+        }
+        #ai-config-panel .field-label span:first-child {
+            color: #aaa;
+            font-size: 11px;
+        }
+        #ai-config-panel .field-label .field-value {
+            color: #fff;
+            font-weight: 600;
+            font-size: 11px;
+            min-width: 45px;
+            text-align: right;
+        }
+        #ai-config-panel .field-desc {
+            color: #777;
+            font-size: 9px;
+            margin-bottom: 2px;
+            line-height: 1.2;
+        }
+        #ai-config-panel input[type="range"] {
+            width: 100%;
+            height: 4px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: #2a2a4a;
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+        }
+        #ai-config-panel input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #4fc3f7;
+            border: 2px solid #1a1a2e;
+            cursor: pointer;
+        }
+        #ai-config-panel input[type="range"]::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #4fc3f7;
+            border: 2px solid #1a1a2e;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container">
+        <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    </div>
+    <div id="loading">Loading...</div>
+
+    <button id="ai-config-toggle" title="AI Config">&#9881;</button>
+
+    <div id="ai-config-panel">
+        <div class="panel-header">
+            <h2>AI Config</h2>
+            <button id="ai-config-reset">Reset All</button>
+        </div>
+        <div id="ai-config-sections"></div>
+    </div>
+
+    <script>
+        var aiPanelOpen = false;
+        var aiConfigCache = {};
+        var aiConfigDefaults = {};
+        var wasmModule = null;
+
+        var AI_CONFIG_SCHEMA = [
+            {
+                section: "AI Behavior",
+                fields: [
+                    { key: "monk_safe_dist_tiles", label: "Monk Safe Dist", def: 3.0, min: 0.5, max: 10, step: 0.5, desc: "Distance monks keep from enemies (tiles)" },
+                    { key: "monk_follow_dist_tiles", label: "Monk Follow Dist", def: 2.0, min: 0.5, max: 10, step: 0.5, desc: "How far behind monks trail advancing allies" },
+                    { key: "monk_max_follow_tiles", label: "Monk Max Follow", def: 15.0, min: 1, max: 30, step: 1, desc: "Max range monks will follow a retreating ally" },
+                    { key: "objective_interval", label: "Objective Interval", def: 2.0, min: 0.5, max: 10, step: 0.5, desc: "Seconds between macro strategy recalculations" },
+                    { key: "astar_budget_per_tick", label: "A* Budget/Tick", def: 3, min: 1, max: 20, step: 1, desc: "Max A* pathfinding calls allowed per frame" },
+                    { key: "ai_vision_radius", label: "Vision Radius", def: 10, min: 1, max: 30, step: 1, desc: "How far units can detect enemies (tiles)" },
+                    { key: "knockback_dist_tiles", label: "Knockback Dist", def: 0.5, min: 0, max: 3, step: 0.1, desc: "Push distance on melee hit (tiles)" },
+                    { key: "astar_search_limit", label: "A* Search Limit", def: 40, min: 10, max: 200, step: 5, desc: "Max cells explored per A* search" },
+                    { key: "repath_cooldown_base", label: "Repath Cooldown", def: 0.4, min: 0.05, max: 2, step: 0.05, desc: "Base seconds between A* repath attempts" },
+                    { key: "repath_cooldown_jitter", label: "Repath Jitter", def: 0.17, min: 0, max: 1, step: 0.01, desc: "Unused (jitter now uses golden ratio)" },
+                    { key: "repath_cooldown_mod", label: "Repath Mod", def: 0.2, min: 0.01, max: 1, step: 0.01, desc: "Max jitter added to repath cooldown" },
+                    { key: "failed_path_cooldown", label: "Failed Path CD", def: 0.1, min: 0.01, max: 1, step: 0.01, desc: "Cooldown after a failed pathfinding attempt" },
+                    { key: "deferred_repath_delay", label: "Deferred Repath", def: 0.05, min: 0.01, max: 0.5, step: 0.01, desc: "Delay when A* budget is exhausted" },
+                    { key: "waypoint_arrival_frac", label: "Waypoint Arrival", def: 0.333, min: 0.1, max: 1, step: 0.01, desc: "Fraction of tile size to count as waypoint reached" },
+                    { key: "separation_radius_mult", label: "Separation Radius", def: 3.0, min: 0.5, max: 10, step: 0.5, desc: "Multiplier on unit radius for separation steering" },
+                    { key: "flow_weight", label: "Flow Weight", def: 0.8, min: 0, max: 1, step: 0.05, desc: "Weight of flow field direction in movement blend" },
+                    { key: "separation_weight", label: "Separation Weight", def: 0.2, min: 0, max: 1, step: 0.05, desc: "Weight of separation steering in movement blend" },
+                    { key: "fov_radius", label: "FOV Radius", def: 15, min: 3, max: 30, step: 1, desc: "Player fog-of-war visibility radius (tiles)" },
+                    { key: "move_speed_divisor", label: "Move Speed Divisor", def: 0.90, min: 0.3, max: 2.0, step: 0.05, desc: "Speed normalizer: lower = faster units" },
+                    { key: "flow_initial_cost_base", label: "Flow Initial Cost", def: 750, min: 100, max: 2000, step: 50, desc: "Base cost for flow field seed points" },
+                    { key: "flow_score_multiplier", label: "Flow Score Mult", def: 5.0, min: 1, max: 20, step: 0.5, desc: "How much zone score reduces flow seed cost" }
+                ]
+            },
+            {
+                section: "Zone Assignment Scoring",
+                fields: [
+                    { key: "zone_cost_norm_divisor", label: "Cost Norm Divisor", def: 2500, min: 100, max: 10000, step: 100, desc: "Normalizes flow field cost to 0-1 range" },
+                    { key: "zone_distance_weight", label: "Distance Weight", def: -30, min: -100, max: 0, step: 1, desc: "Penalty per normalized distance to zone" },
+                    { key: "zone_congestion_weight", label: "Congestion Weight", def: -8, min: -50, max: 0, step: 0.5, desc: "Penalty per allied unit already heading to zone" },
+                    { key: "zone_hysteresis", label: "Hysteresis Bonus", def: 15, min: 0, max: 50, step: 1, desc: "Bonus for staying on current zone assignment" },
+                    { key: "zone_authority_influence", label: "Authority Influence", def: 10, min: 0, max: 50, step: 1, desc: "Player authority pull on Blue unit zone choice" },
+                    { key: "zone_authority_radius_tiles", label: "Authority Radius", def: 15, min: 1, max: 30, step: 1, desc: "Range of player authority influence (tiles)" },
+                    { key: "zone_health_penalty", label: "Health Penalty", def: 20, min: 0, max: 100, step: 1, desc: "Wounded units prefer closer zones (scaled by damage)" },
+                    { key: "zone_contested_bonus", label: "Contested Bonus", def: 10, min: 0, max: 50, step: 1, desc: "Bonus for zones being actively fought over" },
+                    { key: "zone_archer_ally_bonus", label: "Archer Ally Bonus", def: 2, min: 0, max: 20, step: 0.5, desc: "Archers prefer zones with existing allies" },
+                    { key: "zone_capture_commit_base", label: "Capture Commit Base", def: 20, min: 0, max: 100, step: 1, desc: "Bonus for units inside an uncaptured zone" },
+                    { key: "zone_capture_commit_extra_base", label: "Capture Commit Extra", def: 25, min: 0, max: 100, step: 1, desc: "Extra bonus when capture is in progress" },
+                    { key: "zone_capture_commit_progress_mult", label: "Capture Progress Mult", def: 20, min: 0, max: 100, step: 1, desc: "Bonus multiplied by capture progress (0-1)" },
+                    { key: "zone_lock_duration", label: "Zone Lock Duration", def: 8, min: 0, max: 30, step: 1, desc: "Seconds before a unit can switch zones" }
+                ]
+            },
+            {
+                section: "Strategic Zone Scoring",
+                fields: [
+                    { key: "strat_uncontrolled", label: "Uncontrolled Bonus", def: 40, min: 0, max: 100, step: 1, desc: "Score bonus for zones not yet controlled" },
+                    { key: "strat_erosion_urgency", label: "Erosion Urgency", def: 50, min: 0, max: 100, step: 1, desc: "Urgency to defend owned zones being captured" },
+                    { key: "strat_momentum", label: "Momentum Bonus", def: 30, min: 0, max: 100, step: 1, desc: "Bonus for zones we are actively capturing" },
+                    { key: "strat_contested", label: "Contested Bonus", def: 20, min: 0, max: 100, step: 1, desc: "Bonus for zones with both factions present" },
+                    { key: "strat_enemy_pressure", label: "Enemy Pressure", def: 5, min: 0, max: 50, step: 0.5, desc: "Score per enemy unit inside a zone" },
+                    { key: "strat_distance_penalty", label: "Distance Penalty", def: -15, min: -100, max: 0, step: 1, desc: "Penalty for far-away zones" },
+                    { key: "strat_all_controlled_defense", label: "All Controlled Defense", def: 10, min: 0, max: 100, step: 1, desc: "When all zones held, defend the most advanced" }
+                ]
+            },
+            {
+                section: "Authority System",
+                fields: [
+                    { key: "authority_follow_base", label: "Follow Base Chance", def: 0.30, min: 0, max: 1, step: 0.01, desc: "Base probability a unit follows the player" },
+                    { key: "authority_follow_slope", label: "Follow Slope", def: 0.0065, min: 0, max: 0.02, step: 0.0005, desc: "Follow chance increase per authority point" },
+                    { key: "authority_radius_base_tiles", label: "Radius Base", def: 3.0, min: 1, max: 10, step: 0.5, desc: "Base command radius around the player (tiles)" },
+                    { key: "authority_radius_slope", label: "Radius Slope", def: 0.09, min: 0, max: 0.3, step: 0.01, desc: "Command radius growth per authority point" },
+                    { key: "authority_max_followers_base", label: "Max Followers Base", def: 3, min: 1, max: 20, step: 1, desc: "Starting max recruited followers" },
+                    { key: "authority_max_followers_slope", label: "Max Followers Slope", def: 0.27, min: 0, max: 1, step: 0.01, desc: "Extra followers per authority point" },
+                    { key: "rep_kill", label: "Rep: Kill", def: 3.0, min: 0, max: 20, step: 0.5, desc: "Authority gained when player kills an enemy" },
+                    { key: "rep_ally_kill", label: "Rep: Ally Kill", def: 1.5, min: 0, max: 20, step: 0.5, desc: "Authority gained when nearby ally kills" },
+                    { key: "rep_hit", label: "Rep: Hit", def: 0.5, min: 0, max: 10, step: 0.1, desc: "Authority gained per hit landed by player" },
+                    { key: "rep_ally_death", label: "Rep: Ally Death", def: -1.5, min: -20, max: 0, step: 0.5, desc: "Authority lost when a nearby ally dies" },
+                    { key: "rep_zone_cap", label: "Rep: Zone Capture", def: 5.0, min: 0, max: 30, step: 0.5, desc: "Authority gained when a zone is captured" },
+                    { key: "rep_zone_decap", label: "Rep: Zone Decapture", def: 3.0, min: 0, max: 30, step: 0.5, desc: "Authority gained when an enemy zone is neutralized" },
+                    { key: "rep_zone_lost", label: "Rep: Zone Lost", def: -1.5, min: -30, max: 0, step: 0.5, desc: "Authority lost when an owned zone is taken" },
+                    { key: "rep_fov_tiles", label: "Rep FOV", def: 15, min: 1, max: 30, step: 1, desc: "Range for authority events near the player (tiles)" }
+                ]
+            },
+            {
+                section: "Orders & Formations",
+                fields: [
+                    { key: "order_flash_duration", label: "Order Flash", def: 1.0, min: 0.1, max: 5, step: 0.1, desc: "Duration of the ! indicator when order is given" },
+                    { key: "charge_distance_tiles", label: "Charge Dist", def: 8.0, min: 1, max: 20, step: 0.5, desc: "How far ahead the charge target is placed" },
+                    { key: "charge_arrival_tiles", label: "Charge Arrival", def: 1.5, min: 0.5, max: 5, step: 0.5, desc: "Distance to target to switch from charge to follow" },
+                    { key: "follow_distance_tiles", label: "Follow Dist", def: 1.5, min: 0.5, max: 10, step: 0.5, desc: "How close followers stay to the player" },
+                    { key: "order_leash_tiles", label: "Order Leash", def: 4.0, min: 1, max: 15, step: 0.5, desc: "Max combat chase range from order anchor" },
+                    { key: "defend_line_warrior_tiles", label: "Defend: Warrior", def: 2.0, min: 0.5, max: 10, step: 0.5, desc: "Warriors stand this far behind anchor" },
+                    { key: "defend_line_lancer_tiles", label: "Defend: Lancer", def: 3.5, min: 0.5, max: 10, step: 0.5, desc: "Lancers stand this far behind anchor" },
+                    { key: "defend_line_archer_tiles", label: "Defend: Archer", def: 5.0, min: 0.5, max: 15, step: 0.5, desc: "Archers stand this far behind anchor" },
+                    { key: "defend_line_monk_tiles", label: "Defend: Monk", def: 6.5, min: 0.5, max: 15, step: 0.5, desc: "Monks stand this far behind anchor" },
+                    { key: "defend_spacing_tiles", label: "Defend Spacing", def: 1.0, min: 0.25, max: 5, step: 0.25, desc: "Lateral spacing between units in formation" },
+                    { key: "defend_leash_melee_tiles", label: "Defend Leash Melee", def: 2.0, min: 0.5, max: 10, step: 0.5, desc: "Melee units chase range from formation post" },
+                    { key: "defend_leash_ranged_tiles", label: "Defend Leash Ranged", def: 8.0, min: 1, max: 20, step: 0.5, desc: "Ranged units chase range from formation post" }
+                ]
+            },
+            {
+                section: "Combat Balancing",
+                fields: [
+                    { key: "warrior_hp", label: "Warrior HP", def: 10, min: 1, max: 30, step: 1, desc: "Warrior max hit points" },
+                    { key: "warrior_atk", label: "Warrior ATK", def: 3, min: 1, max: 10, step: 1, desc: "Warrior attack damage stat" },
+                    { key: "warrior_def", label: "Warrior DEF", def: 3, min: 0, max: 10, step: 1, desc: "Warrior defense stat (reduces incoming damage)" },
+                    { key: "warrior_cooldown", label: "Warrior Cooldown", def: 0.40, min: 0.1, max: 2, step: 0.05, desc: "Seconds between warrior attacks" },
+                    { key: "archer_hp", label: "Archer HP", def: 6, min: 1, max: 30, step: 1, desc: "Archer max hit points" },
+                    { key: "archer_atk", label: "Archer ATK", def: 2, min: 1, max: 10, step: 1, desc: "Archer attack damage stat" },
+                    { key: "archer_def", label: "Archer DEF", def: 1, min: 0, max: 10, step: 1, desc: "Archer defense stat" },
+                    { key: "archer_cooldown", label: "Archer Cooldown", def: 0.55, min: 0.1, max: 2, step: 0.05, desc: "Seconds between archer shots" },
+                    { key: "lancer_hp", label: "Lancer HP", def: 10, min: 1, max: 30, step: 1, desc: "Lancer max hit points" },
+                    { key: "lancer_atk", label: "Lancer ATK", def: 4, min: 1, max: 10, step: 1, desc: "Lancer attack damage stat" },
+                    { key: "lancer_def", label: "Lancer DEF", def: 1, min: 0, max: 10, step: 1, desc: "Lancer defense stat" },
+                    { key: "lancer_cooldown", label: "Lancer Cooldown", def: 0.35, min: 0.1, max: 2, step: 0.05, desc: "Seconds between lancer attacks" },
+                    { key: "monk_hp", label: "Monk HP", def: 5, min: 1, max: 30, step: 1, desc: "Monk max hit points" },
+                    { key: "monk_heal_amount", label: "Monk Heal", def: 3, min: 1, max: 10, step: 1, desc: "HP restored per monk heal action" },
+                    { key: "monk_cooldown", label: "Monk Cooldown", def: 0.50, min: 0.1, max: 2, step: 0.05, desc: "Seconds between monk heals" },
+                    { key: "melee_range_tiles", label: "Melee Range", def: 1.5, min: 0.5, max: 4, step: 0.25, desc: "Melee attack reach (tiles, requires restart)" },
+                    { key: "arrow_speed", label: "Arrow Speed", def: 600, min: 100, max: 1500, step: 50, desc: "Projectile speed in pixels/sec" },
+                    { key: "arrow_arc_base", label: "Arrow Arc", def: 30, min: 0, max: 100, step: 5, desc: "Minimum arc height for projectiles" },
+                    { key: "tower_damage", label: "Tower Damage", def: 2, min: 1, max: 10, step: 1, desc: "Damage per tower/castle projectile" },
+                    { key: "tower_range_tiles", label: "Tower Range", def: 7, min: 1, max: 15, step: 0.5, desc: "Tower attack range (tiles)" },
+                    { key: "spawn_interval", label: "Spawn Interval", def: 1.5, min: 0.5, max: 5, step: 0.25, desc: "Seconds between unit spawns in a wave" }
+                ]
+            },
+            {
+                section: "Zone & Game Rules",
+                fields: [
+                    { key: "base_capture_time", label: "Base Capture Time", def: 8.0, min: 1, max: 30, step: 0.5, desc: "Seconds for one unit to capture a zone" },
+                    { key: "max_capture_multiplier", label: "Max Capture Mult", def: 3.0, min: 1, max: 10, step: 0.5, desc: "Max speedup from multiple units capturing" },
+                    { key: "max_units_per_faction", label: "Max Units/Faction", def: 35, min: 5, max: 100, step: 1, desc: "Total unit cap per faction" },
+                    { key: "zone_radius", label: "Zone Radius", def: 4, min: 1, max: 10, step: 1, desc: "Capture zone radius in tiles" },
+                    { key: "victory_hold_time", label: "Victory Hold Time", def: 120, min: 10, max: 600, step: 10, desc: "Seconds holding all zones to win" }
+                ]
+            }
+        ];
+
+        function buildPanel() {
+            var container = document.getElementById('ai-config-sections');
+            var html = '';
+            for (var s = 0; s < AI_CONFIG_SCHEMA.length; s++) {
+                var sec = AI_CONFIG_SCHEMA[s];
+                html += '<details><summary>' + sec.section + '</summary>';
+                for (var f = 0; f < sec.fields.length; f++) {
+                    var fd = sec.fields[f];
+                    var val = aiConfigCache[fd.key] !== undefined ? aiConfigCache[fd.key] : fd.def;
+                    html += '<div class="field">';
+                    html += '<div class="field-label"><span>' + fd.label + '</span>';
+                    html += '<span class="field-value" id="val-' + fd.key + '">' + formatVal(val, fd.step) + '</span></div>';
+                    if (fd.desc) html += '<div class="field-desc">' + fd.desc + '</div>';
+                    html += '<input type="range" id="slider-' + fd.key + '" ';
+                    html += 'min="' + fd.min + '" max="' + fd.max + '" step="' + fd.step + '" ';
+                    html += 'value="' + val + '" ';
+                    html += 'data-key="' + fd.key + '">';
+                    html += '</div>';
+                }
+                html += '</details>';
+            }
+            container.innerHTML = html;
+
+            var sliders = container.querySelectorAll('input[type="range"]');
+            for (var i = 0; i < sliders.length; i++) {
+                sliders[i].addEventListener('input', onSliderChange);
+            }
+        }
+
+        function formatVal(v, step) {
+            if (step >= 1) return String(Math.round(v));
+            var decimals = String(step).split('.')[1];
+            var places = decimals ? decimals.length : 1;
+            return Number(v).toFixed(places);
+        }
+
+        function onSliderChange(e) {
+            var key = e.target.getAttribute('data-key');
+            var val = parseFloat(e.target.value);
+            aiConfigCache[key] = val;
+
+            var field = findField(key);
+            var valEl = document.getElementById('val-' + key);
+            if (valEl && field) {
+                valEl.textContent = formatVal(val, field.step);
+            }
+
+            if (wasmModule && wasmModule.set_ai_config) {
+                try {
+                    wasmModule.set_ai_config(JSON.stringify(aiConfigCache));
+                } catch (err) {
+                    console.warn('set_ai_config failed:', err);
+                }
+            }
+        }
+
+        function findField(key) {
+            for (var s = 0; s < AI_CONFIG_SCHEMA.length; s++) {
+                for (var f = 0; f < AI_CONFIG_SCHEMA[s].fields.length; f++) {
+                    if (AI_CONFIG_SCHEMA[s].fields[f].key === key) return AI_CONFIG_SCHEMA[s].fields[f];
+                }
+            }
+            return null;
+        }
+
+        function populateFromWasm() {
+            if (!wasmModule || !wasmModule.get_ai_config) return;
+            try {
+                var json = wasmModule.get_ai_config();
+                var cfg = JSON.parse(json);
+                for (var k in cfg) {
+                    aiConfigCache[k] = cfg[k];
+                }
+            } catch (err) {
+                console.warn('get_ai_config failed:', err);
+            }
+            refreshSliders();
+        }
+
+        function refreshSliders() {
+            for (var s = 0; s < AI_CONFIG_SCHEMA.length; s++) {
+                for (var f = 0; f < AI_CONFIG_SCHEMA[s].fields.length; f++) {
+                    var fd = AI_CONFIG_SCHEMA[s].fields[f];
+                    var val = aiConfigCache[fd.key] !== undefined ? aiConfigCache[fd.key] : fd.def;
+                    var slider = document.getElementById('slider-' + fd.key);
+                    var valEl = document.getElementById('val-' + fd.key);
+                    if (slider) slider.value = val;
+                    if (valEl) valEl.textContent = formatVal(val, fd.step);
+                }
+            }
+        }
+
+        function resetAll() {
+            for (var k in aiConfigDefaults) {
+                aiConfigCache[k] = aiConfigDefaults[k];
+            }
+            refreshSliders();
+            if (wasmModule && wasmModule.set_ai_config) {
+                try {
+                    wasmModule.set_ai_config(JSON.stringify(aiConfigCache));
+                } catch (err) {
+                    console.warn('set_ai_config reset failed:', err);
+                }
+            }
+        }
+
+        function togglePanel() {
+            aiPanelOpen = !aiPanelOpen;
+            var panel = document.getElementById('ai-config-panel');
+            var btn = document.getElementById('ai-config-toggle');
+            var container = document.getElementById('canvas-container');
+
+            if (aiPanelOpen) {
+                populateFromWasm();
+                panel.classList.add('open');
+                btn.classList.add('active');
+                container.style.right = '340px';
+                btn.style.right = '350px';
+            } else {
+                panel.classList.remove('open');
+                btn.classList.remove('active');
+                container.style.right = '0';
+                btn.style.right = '10px';
+            }
+            resizeCanvas();
+            // Re-resize after CSS transition completes
+            setTimeout(resizeCanvas, 300);
+        }
+
+        // Initialize defaults from schema
+        for (var s = 0; s < AI_CONFIG_SCHEMA.length; s++) {
+            for (var f = 0; f < AI_CONFIG_SCHEMA[s].fields.length; f++) {
+                var fd = AI_CONFIG_SCHEMA[s].fields[f];
+                aiConfigDefaults[fd.key] = fd.def;
+                aiConfigCache[fd.key] = fd.def;
+            }
+        }
+
+        buildPanel();
+
+        document.getElementById('ai-config-toggle').addEventListener('click', togglePanel);
+        document.getElementById('ai-config-reset').addEventListener('click', resetAll);
+
+        function resizeCanvas() {
+            var container = document.getElementById('canvas-container');
+            var c = document.getElementById('canvas');
+            var dpr = window.devicePixelRatio || 1;
+            var w = container.clientWidth;
+            var h = container.clientHeight;
+            c.style.width = w + 'px';
+            c.style.height = h + 'px';
+            c.width = Math.round(w * dpr);
+            c.height = Math.round(h * dpr);
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // Register Service Worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(function() {});
+        }
+
+        // Fullscreen + wake lock
+        window.__requestFullscreen = function() {
+            var el = document.documentElement;
+            var rfs = el.requestFullscreen
+                || el.webkitRequestFullscreen
+                || el.mozRequestFullScreen
+                || el.msRequestFullscreen;
+            if (rfs) {
+                rfs.call(el).catch(function() {});
+            }
+            if ('wakeLock' in navigator) {
+                navigator.wakeLock.request('screen').catch(function() {});
+            }
+        };
+    </script>
+    <script type="module">
+        import init, { get_ai_config, set_ai_config } from './battlefield_wgpu_native.js';
+        await init();
+        document.getElementById('loading').style.display = 'none';
+
+        // Expose wasm functions for the config panel
+        window.wasmModule = { get_ai_config: get_ai_config, set_ai_config: set_ai_config };
+        wasmModule = window.wasmModule;
+
+        // Cache defaults from the actual wasm module at startup
+        try {
+            var json = get_ai_config();
+            var cfg = JSON.parse(json);
+            for (var k in cfg) {
+                aiConfigDefaults[k] = cfg[k];
+                aiConfigCache[k] = cfg[k];
+            }
+        } catch (err) {
+            console.warn('Initial get_ai_config failed, using schema defaults:', err);
+        }
+    </script>
+</body>
+</html>

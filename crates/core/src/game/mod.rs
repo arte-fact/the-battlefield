@@ -8,6 +8,7 @@ mod orders;
 mod player;
 mod setup;
 
+use crate::config::GameConfig;
 use crate::animation::TurnEvent;
 use crate::building::{self, BaseBuilding};
 use crate::camera::Camera;
@@ -22,11 +23,21 @@ use crate::sheep::Sheep;
 use crate::unit::{
     Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS,
 };
-use crate::zone::{ZoneManager, ZoneState, MAX_UNITS_PER_FACTION};
+use crate::zone::{ZoneManager, ZoneState};
 use std::collections::HashSet;
 
-pub use orders::ORDER_FLASH_DURATION;
 pub use player::ATTACK_CONE_HALF_ANGLE;
+
+/// Duration for floating authority text.
+pub const FLOATING_TEXT_DURATION: f32 = 1.2;
+
+/// A floating "+X" / "-X" authority indicator at a world position.
+pub struct FloatingText {
+    pub x: f32,
+    pub y: f32,
+    pub value: f32,
+    pub remaining: f32,
+}
 
 pub struct Game {
     pub grid: Grid,
@@ -87,8 +98,12 @@ pub struct Game {
     pub(crate) astar_budget: u8,
     /// Player authority level (0..100), governing order radius, follow chance, and rank.
     pub authority: f32,
+    /// Runtime-tweakable AI configuration.
+    pub config: GameConfig,
     /// Persistently recruited unit IDs. Orders apply only to these units.
     pub recruited: HashSet<UnitId>,
+    /// Floating authority change indicators.
+    pub floating_texts: Vec<FloatingText>,
 }
 
 impl Game {
@@ -133,7 +148,9 @@ impl Game {
             flow_field_turn: false,
             astar_budget: 0,
             authority: 0.0,
+            config: GameConfig::default(),
             recruited: HashSet::new(),
+            floating_texts: Vec::new(),
         }
     }
 
@@ -199,6 +216,14 @@ impl Game {
             particle.update(dt);
         }
         self.particles.retain(|p| !p.finished);
+
+        // Float authority text upward and expire
+        let dt_f = dt as f32;
+        for ft in &mut self.floating_texts {
+            ft.remaining -= dt_f;
+            ft.y -= 30.0 * dt_f; // drift upward
+        }
+        self.floating_texts.retain(|ft| ft.remaining > 0.0);
 
         for sheep in &mut self.sheep {
             sheep.animation.update(dt);

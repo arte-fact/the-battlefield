@@ -13,6 +13,8 @@ pub struct GpuTexture {
     pub bind_group: wgpu::BindGroup,
     pub width: u32,
     pub height: u32,
+    /// Downscale factor applied on upload (1.0 = original, 0.5 = halved once).
+    pub scale: f32,
 }
 
 /// Accumulates textured quads and draws them in batches grouped by texture.
@@ -246,9 +248,9 @@ impl SpriteBatch {
         pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
 
         for dc in &self.draw_calls {
-            let tex = textures.get(dc.texture_id).or_else(|| {
-                extra_textures.get(dc.texture_id.wrapping_sub(textures.len()))
-            });
+            let tex = textures
+                .get(dc.texture_id)
+                .or_else(|| extra_textures.get(dc.texture_id.wrapping_sub(textures.len())));
             if let Some(tex) = tex {
                 pass.set_bind_group(1, &tex.bind_group, &[]);
                 pass.draw_indexed(dc.index_start..dc.index_start + dc.index_count, 0, 0..1);
@@ -273,9 +275,9 @@ impl SpriteBatch {
         pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
 
         for dc in &self.draw_calls {
-            let tex = textures.get(dc.texture_id).or_else(|| {
-                extra_textures.get(dc.texture_id.wrapping_sub(textures.len()))
-            });
+            let tex = textures
+                .get(dc.texture_id)
+                .or_else(|| extra_textures.get(dc.texture_id.wrapping_sub(textures.len())));
             if let Some(tex) = tex {
                 pass.set_bind_group(1, &tex.bind_group, &[]);
                 pass.draw_indexed(dc.index_start..dc.index_start + dc.index_count, 0, 0..1);

@@ -36,7 +36,7 @@ pub struct TextRenderer {
 
 impl TextRenderer {
     pub fn new(cache_base_id: usize) -> Self {
-        let font_data = battlefield_assets::get("assets/Uncial.ttf")
+        let font_data = battlefield_assets::get("assets/MedievalSharp.ttf")
             .expect("Font not found in embedded assets");
         let font = Font::try_from_vec(font_data.to_vec()).expect("Failed to parse font");
         Self {
@@ -291,6 +291,7 @@ fn upload_text_texture(gpu: &GpuContext, pixels: &[u8], w: u32, h: u32) -> GpuTe
         bind_group,
         width: w,
         height: h,
+        scale: 1.0,
     }
 }
 

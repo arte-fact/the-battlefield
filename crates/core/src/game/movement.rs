@@ -5,7 +5,7 @@ impl Game {
     /// Tries full diagonal → X-only → Y-only, matching `try_push()` pattern.
     /// If completely stuck, nudges toward tile center to escape corners.
     pub(super) fn move_unit(&mut self, idx: usize, dir_x: f32, dir_y: f32, dt: f32) {
-        let speed = self.units[idx].move_speed()
+        let speed = self.units[idx].move_speed_with_config(self.config.move_speed_divisor)
             * self
                 .grid
                 .speed_factor_at(self.units[idx].x, self.units[idx].y)

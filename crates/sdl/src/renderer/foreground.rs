@@ -2,13 +2,13 @@
 
 use battlefield_core::asset_manifest;
 use battlefield_core::camera::Camera;
-use battlefield_core::game::{Game, ORDER_FLASH_DURATION};
+use battlefield_core::game::Game;
 use battlefield_core::grid::{Decoration, TileKind, TILE_SIZE};
 use battlefield_core::render_util;
 use battlefield_core::sheep::SHEEP_FRAME_SIZE;
 use battlefield_core::sprite::SpriteSheet;
 use battlefield_core::unit::{Facing, Faction, UnitAnim, UnitKind};
-use battlefield_core::zone::{ZoneState, VICTORY_HOLD_TIME};
+use battlefield_core::zone::ZoneState;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 use sdl2::render::{BlendMode, Canvas, TextureCreator};
@@ -701,7 +701,7 @@ pub(super) fn draw_unit_overlays(
         // Order label (flashing text above unit)
         if unit.order_flash > 0.0 {
             if let Some(label) = render_util::order_label(unit.order.as_ref()) {
-                let alpha = ((unit.order_flash / ORDER_FLASH_DURATION) * 255.0) as u8;
+                let alpha = ((unit.order_flash / game.config.order_flash_duration) * 255.0) as u8;
                 let label_y = sy - (TILE_SIZE * zoom) as i32;
                 let font_size = (24.0 * dpi_scale as f32) * zoom;
                 let ribbon_h = 54.0 * zoom as f64;
@@ -774,7 +774,8 @@ pub(super) fn draw_victory_progress(
     game: &Game,
     dpi_scale: f64,
 ) {
-    let progress = game.zone_manager.victory_progress();
+    let victory_hold_time = game.config.victory_hold_time;
+    let progress = game.zone_manager.victory_progress(victory_hold_time);
     if progress < f32::EPSILON || game.winner.is_some() {
         return;
     }
@@ -844,7 +845,7 @@ pub(super) fn draw_victory_progress(
         ));
     }
 
-    let remaining = ((1.0 - progress) * VICTORY_HOLD_TIME) as u32;
+    let remaining = ((1.0 - progress) * victory_hold_time) as u32;
     let faction_name = if faction == Faction::Blue {
         "Blue"
     } else {

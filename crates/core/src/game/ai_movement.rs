@@ -21,7 +21,7 @@ impl Game {
             // Cap A* calls per frame to prevent spike frames
             if self.astar_budget == 0 {
                 // Defer to next frame — keep following current waypoints
-                self.units[ai_idx].ai_path_cooldown = 0.05;
+                self.units[ai_idx].ai_path_cooldown = self.config.deferred_repath_delay;
             } else {
                 self.astar_budget -= 1;
 
@@ -30,7 +30,10 @@ impl Game {
                 let gx = gx.max(0) as u32;
                 let gy = gy.max(0) as u32;
 
-                let path = self.grid.find_path(ax, ay, gx, gy, 40, |_, _| false);
+                let occupied = &self.ai_occupied_cache;
+                let path = self.grid.find_path(ax, ay, gx, gy, self.config.astar_search_limit, |cx, cy| {
+                    occupied.contains(&(cx, cy)) && (cx, cy) != (ax, ay) && (cx, cy) != (gx, gy)
+                });
 
                 if let Some(steps) = path {
                     self.units[ai_idx].ai_waypoints = steps
@@ -38,13 +41,14 @@ impl Game {
                         .map(|&(x, y)| grid::grid_to_world(x, y))
                         .collect();
                     self.units[ai_idx].ai_waypoint_idx = 0;
-                    // Jitter cooldown by unit ID to prevent synchronized repath bursts
-                    self.units[ai_idx].ai_path_cooldown =
-                        0.4 + (self.units[ai_idx].id as f32 * 0.17) % 0.2;
+                    // Jitter cooldown using golden ratio to spread units evenly
+                    let golden = 0.618034;
+                    let jitter = ((self.units[ai_idx].id as f32 * golden) % 1.0) * self.config.repath_cooldown_mod;
+                    self.units[ai_idx].ai_path_cooldown = self.config.repath_cooldown_base + jitter;
                 } else {
                     self.units[ai_idx].ai_waypoints.clear();
                     self.units[ai_idx].ai_waypoint_idx = 0;
-                    self.units[ai_idx].ai_path_cooldown = 0.1;
+                    self.units[ai_idx].ai_path_cooldown = self.config.failed_path_cooldown;
                 }
             }
         }
@@ -59,7 +63,7 @@ impl Game {
             let ddy = wy - uy;
             let dist = (ddx * ddx + ddy * ddy).sqrt();
 
-            if dist < TILE_SIZE / 3.0 {
+            if dist < TILE_SIZE * self.config.waypoint_arrival_frac {
                 self.units[ai_idx].ai_waypoint_idx += 1;
             } else if dist > 0.01 {
                 let dir_x = ddx / dist;
@@ -197,7 +201,7 @@ impl Game {
                 } else {
                     self.find_nearest_passable(gx, gy).unwrap_or((gx, gy))
                 };
-                let initial_cost = 750u32.saturating_sub((score * 5.0).round() as u32);
+                let initial_cost = self.config.flow_initial_cost_base.saturating_sub((score * self.config.flow_score_multiplier).round() as u32);
                 v.push((gx, gy, initial_cost));
             }
             v
@@ -258,7 +262,7 @@ impl Game {
                 )
             })
             .collect();
-        let zone_radius_sq = (crate::zone::ZONE_RADIUS as f32 * TILE_SIZE).powi(2);
+        let zone_radius_sq = (self.config.zone_radius as f32 * TILE_SIZE).powi(2);
 
         let macro_obj = [
             self.macro_objectives[0].clone(),
@@ -371,15 +375,17 @@ impl Game {
                     .map(|(_, _, s)| *s)
                     .unwrap_or(0.0);
 
+                let cfg = &self.config;
+
                 // Terrain-aware distance penalty (normalized)
-                let cost_norm = cost as f32 / 2500.0;
+                let cost_norm = cost as f32 / cfg.zone_cost_norm_divisor;
 
                 // Congestion: fewer allies heading there = better
                 let cong = prev_cong.get(zi).copied().unwrap_or(0) as f32;
 
                 // Hysteresis: bonus for staying on current assignment
                 let hysteresis = if *current_zone == Some(zi as u8) {
-                    15.0
+                    cfg.zone_hysteresis
                 } else {
                     0.0
                 };
@@ -388,9 +394,9 @@ impl Game {
                 let influence = if *faction == Faction::Blue {
                     if let Some((px, py)) = player_pos {
                         let d = ((px - zwx).powi(2) + (py - zwy).powi(2)).sqrt();
-                        let r = TILE_SIZE * 15.0;
+                        let r = TILE_SIZE * cfg.zone_authority_radius_tiles;
                         if d < r {
-                            10.0 * (authority / 100.0) * (1.0 - d / r)
+                            cfg.zone_authority_influence * (authority / 100.0) * (1.0 - d / r)
                         } else {
                             0.0
                         }
@@ -403,14 +409,14 @@ impl Game {
 
                 // Wounded units prefer closer objectives
                 let health_pen = if *hp_ratio < 0.5 {
-                    cost_norm * (1.0 - hp_ratio) * 20.0
+                    cost_norm * (1.0 - hp_ratio) * cfg.zone_health_penalty
                 } else {
                     0.0
                 };
 
                 // Contested bonus: units can make a difference
                 let contested = if state == ZoneState::Contested {
-                    10.0
+                    cfg.zone_contested_bonus
                 } else {
                     0.0
                 };
@@ -422,13 +428,12 @@ impl Game {
                             Faction::Blue => blue_count,
                             Faction::Red => red_count,
                         };
-                        allies as f32 * 2.0
+                        allies as f32 * cfg.zone_archer_ally_bonus
                     }
                     _ => 0.0,
                 };
 
                 // Capture commitment: strong bonus when inside a zone still being captured.
-                // Prevents units from abandoning a zone before it's fully secured.
                 let capture_commit = {
                     let dx = ux - zwx;
                     let dy = uy - zwy;
@@ -439,18 +444,21 @@ impl Game {
                             Faction::Red => -progress,
                         };
                         if progress_for_us > 0.0 {
-                            // Already making progress — strong incentive to finish the job
-                            25.0 + 20.0 * progress_for_us
+                            cfg.zone_capture_commit_extra_base
+                                + cfg.zone_capture_commit_progress_mult * progress_for_us
                         } else {
-                            // Just arrived or enemy progress — stay and contest
-                            20.0
+                            cfg.zone_capture_commit_base
                         }
                     } else {
                         0.0
                     }
                 };
 
-                let score = base_score - 30.0 * cost_norm - 8.0 * cong + hysteresis + influence
+                let score = base_score
+                    + cfg.zone_distance_weight * cost_norm
+                    + cfg.zone_congestion_weight * cong
+                    + hysteresis
+                    + influence
                     - health_pen
                     + contested
                     + role_bonus
@@ -474,7 +482,7 @@ impl Game {
         // === Phase 3: Apply assignments and congestion ===
         for (ui, zone) in assignments {
             if zone != self.units[ui].assigned_zone {
-                self.units[ui].zone_lock_timer = 8.0;
+                self.units[ui].zone_lock_timer = self.config.zone_lock_duration;
             }
             self.units[ui].assigned_zone = zone;
         }
@@ -534,8 +542,8 @@ impl Game {
         if let Some(dir) = dir {
             if dir != (0, 0) {
                 let (sep_x, sep_y) = self.compute_separation(ai_idx);
-                let bx = dir.0 as f32 * 0.8 + sep_x * 0.2;
-                let by = dir.1 as f32 * 0.8 + sep_y * 0.2;
+                let bx = dir.0 as f32 * self.config.flow_weight + sep_x * self.config.separation_weight;
+                let by = dir.1 as f32 * self.config.flow_weight + sep_y * self.config.separation_weight;
                 let len = (bx * bx + by * by).sqrt();
                 if len > 0.01 {
                     self.move_unit(ai_idx, bx / len, by / len, dt);
@@ -553,7 +561,7 @@ impl Game {
         let ax = self.units[ai_idx].x;
         let ay = self.units[ai_idx].y;
         let faction = self.units[ai_idx].faction;
-        let sep_radius = UNIT_RADIUS * 3.0;
+        let sep_radius = UNIT_RADIUS * self.config.separation_radius_mult;
         let sep_radius_sq = sep_radius * sep_radius;
 
         let mut rx = 0.0f32;
@@ -615,7 +623,7 @@ mod tests {
             blue_gather: (21, 21),
             red_gather: (138, 138),
         };
-        game.zone_manager = ZoneManager::create_from_layout(&layout);
+        game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
         game.blue_objective = grid::grid_to_world(138, 138);
         let obj = game.faction_objective(Faction::Blue);
         let (base_wx, _) = grid::grid_to_world(138, 138);

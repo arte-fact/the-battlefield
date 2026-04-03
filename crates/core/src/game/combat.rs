@@ -1,11 +1,6 @@
 use super::*;
 
-/// Knockback distance in pixels (roughly half a tile).
-const KNOCKBACK_DIST: f32 = TILE_SIZE * 0.5;
-
 impl Game {
-    /// AI vision radius in tiles (converted to world distance when used).
-    pub(super) const AI_VISION_RADIUS: u32 = 10;
 
     /// Execute an attack. For ranged attacks, `target_snapshot_pos` is the world position
     /// the target was at when the archer decided to shoot (for projectile lag/miss).
@@ -52,13 +47,14 @@ impl Game {
             let ay = self.units[attacker_idx].y;
 
             // Start cooldown + attack anim on attacker
-            self.units[attacker_idx].start_attack_cooldown();
+            let cd = self.units[attacker_idx].kind.cooldown_from_config(&self.config);
+            self.units[attacker_idx].start_attack_cooldown_cfg(cd);
             let anim = self.units[attacker_idx].next_attack_anim();
             self.units[attacker_idx].set_anim(anim);
 
             // Spawn ballistic projectile — damage applied on landing
             self.projectiles
-                .push(Projectile::new(ax, ay, snap_x, snap_y, damage, faction));
+                .push(Projectile::new_with_speed(ax, ay, snap_x, snap_y, damage, faction, self.config.arrow_speed, self.config.arrow_arc_base));
 
             self.turn_events.push(TurnEvent::RangedAttack {
                 attacker_id,
@@ -108,8 +104,9 @@ impl Game {
         }
         let nx = dx / dist;
         let ny = dy / dist;
-        let new_x = tx + nx * KNOCKBACK_DIST;
-        let new_y = ty + ny * KNOCKBACK_DIST;
+        let knockback_dist = self.config.knockback_dist_tiles * TILE_SIZE;
+        let new_x = tx + nx * knockback_dist;
+        let new_y = ty + ny * knockback_dist;
         if self.grid.is_circle_passable(new_x, new_y, UNIT_RADIUS) {
             self.units[target_idx].x = new_x;
             self.units[target_idx].y = new_y;
@@ -132,7 +129,7 @@ impl Game {
             (&mut right[0], &mut left[target_idx])
         };
 
-        let amount = crate_combat::execute_heal(healer, target);
+        let amount = crate_combat::execute_heal(healer, target, self.config.monk_heal_amount);
         // Spawn heal effect particle that follows the healed unit
         let tid = target.id;
         let tx = target.x;
@@ -151,7 +148,7 @@ impl Game {
         let faction = self.units[ai_idx].faction;
         let ax = self.units[ai_idx].x;
         let ay = self.units[ai_idx].y;
-        let vision_range = Self::AI_VISION_RADIUS as f32 * TILE_SIZE;
+        let vision_range = self.config.ai_vision_radius as f32 * TILE_SIZE;
 
         self.units
             .iter()
@@ -187,7 +184,11 @@ impl Game {
 
             // Zone-linked buildings: derive faction from zone progress
             let faction = if let Some(zid) = self.buildings[i].zone_id {
-                let progress = self.zone_manager.zones[zid as usize].progress;
+                let zi = zid as usize;
+                if zi >= self.zone_manager.zones.len() {
+                    continue;
+                }
+                let progress = self.zone_manager.zones[zi].progress;
                 if progress > 0.01 {
                     Faction::Blue
                 } else if progress < -0.01 {
@@ -205,13 +206,13 @@ impl Game {
             }
 
             let bx = grid::grid_to_world(self.buildings[i].grid_x, self.buildings[i].grid_y);
-            let range = self.buildings[i].kind.attack_range();
-            let damage = self.buildings[i].kind.attack_damage();
+            let range = self.config.tower_range_tiles * TILE_SIZE;
+            let damage = self.config.tower_damage;
 
             if let Some((tx, ty)) = self.find_nearest_enemy_from(bx.0, bx.1, faction, range) {
                 self.buildings[i].attack_cooldown = self.buildings[i].kind.base_cooldown();
                 self.projectiles
-                    .push(Projectile::new(bx.0, bx.1, tx, ty, damage, faction));
+                    .push(Projectile::new_with_speed(bx.0, bx.1, tx, ty, damage, faction, self.config.arrow_speed, self.config.arrow_arc_base));
             }
         }
     }

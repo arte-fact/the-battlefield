@@ -7,7 +7,8 @@ macro_rules! embed {
 pub fn get(path: &str) -> Option<&'static [u8]> {
     match path {
         // Font
-        "assets/Uncial.ttf" => Some(embed!("assets/Uncial.ttf")),
+        "assets/MedievalSharp.ttf" => Some(embed!("assets/MedievalSharp.ttf")),
+        "assets/Tilemap_road.png" => Some(embed!("assets/Tilemap_road.png")),
 
         // ── Blue Units ──────────────────────────────────────────────
         // Warrior

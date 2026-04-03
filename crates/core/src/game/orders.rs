@@ -1,33 +1,5 @@
 use super::*;
 
-/// Duration of the order flash indicator in seconds.
-pub const ORDER_FLASH_DURATION: f32 = 1.0;
-
-/// How far ahead of the player charge targets are placed (in world units).
-const CHARGE_DISTANCE: f32 = TILE_SIZE * 8.0;
-/// How close a unit must be to the charge target to consider it arrived.
-const CHARGE_ARRIVAL: f32 = TILE_SIZE * 1.5;
-/// Follow distance — how close followers stay to the player.
-const FOLLOW_DISTANCE: f32 = TILE_SIZE * 1.5;
-/// Follow/charge leash — max distance from anchor to engage enemies.
-const ORDER_LEASH: f32 = TILE_SIZE * 4.0;
-
-// Defend formation: line distances behind the anchor point.
-const DEFEND_LINE_WARRIOR: f32 = TILE_SIZE * 2.0;
-const DEFEND_LINE_LANCER: f32 = TILE_SIZE * 3.5;
-const DEFEND_LINE_ARCHER: f32 = TILE_SIZE * 5.0;
-const DEFEND_LINE_MONK: f32 = TILE_SIZE * 6.5;
-/// Perpendicular spacing between units in the same line.
-const DEFEND_SPACING: f32 = TILE_SIZE;
-/// Defend units engage enemies within this distance of their post.
-/// Melee defend leash — warriors/lancers stay close to their post (2 tiles).
-const DEFEND_LEASH_MELEE: f32 = TILE_SIZE * 2.0;
-/// Ranged defend leash — archers can fire at enemies approaching the formation.
-const DEFEND_LEASH_RANGED: f32 = TILE_SIZE * 8.0;
-
-/// Monks flee when enemies are closer than this (mirrors MONK_SAFE_DIST in ai.rs).
-const MONK_SAFE_DIST: f32 = TILE_SIZE * 3.0;
-
 impl Game {
     // ── Shared combat helper ─────────────────────────────────────────────
 
@@ -51,7 +23,7 @@ impl Game {
         // (Healing is already handled by try_monk_heal in ai_unit_tick.)
         if kind == UnitKind::Monk {
             if let Some((ex, ey, _, dist)) = self.find_nearest_enemy(ai_idx) {
-                if dist < MONK_SAFE_DIST {
+                if dist < self.config.monk_safe_dist_tiles * TILE_SIZE {
                     let ax = self.units[ai_idx].x;
                     let ay = self.units[ai_idx].y;
                     let flee_x = ax + (ax - ex);
@@ -157,13 +129,14 @@ impl Game {
             };
 
             if !accepts {
+                self.units[idx].reject_flash = self.config.order_flash_duration;
                 continue;
             }
 
             self.recruited.insert(self.units[idx].id);
             // Newly recruited units default to Follow
             self.units[idx].order = Some(OrderKind::Follow);
-            self.units[idx].order_flash = ORDER_FLASH_DURATION;
+            self.units[idx].order_flash = self.config.order_flash_duration;
             self.units[idx].zone_lock_timer = 0.0;
             self.units[idx].ai_waypoints.clear();
             self.units[idx].ai_waypoint_idx = 0;
@@ -200,8 +173,8 @@ impl Game {
                 "charge" => {
                     let aim = self.player_aim_dir;
                     OrderKind::Charge {
-                        target_x: player_x + aim.cos() * CHARGE_DISTANCE,
-                        target_y: player_y + aim.sin() * CHARGE_DISTANCE,
+                        target_x: player_x + aim.cos() * self.config.charge_distance_tiles * TILE_SIZE,
+                        target_y: player_y + aim.sin() * self.config.charge_distance_tiles * TILE_SIZE,
                     }
                 }
                 "defend" => OrderKind::Defend {
@@ -213,7 +186,7 @@ impl Game {
             };
 
             self.units[idx].order = Some(order);
-            self.units[idx].order_flash = ORDER_FLASH_DURATION;
+            self.units[idx].order_flash = self.config.order_flash_duration;
             self.units[idx].zone_lock_timer = 0.0;
             self.units[idx].ai_waypoints.clear();
             self.units[idx].ai_waypoint_idx = 0;
@@ -236,19 +209,21 @@ impl Game {
         };
 
         // Combat (leashed to player position)
-        if self.ai_order_combat(ai_idx, player_x, player_y, ORDER_LEASH, dt) {
+        if self.ai_order_combat(ai_idx, player_x, player_y, self.config.order_leash_tiles * TILE_SIZE, dt) {
             return;
         }
 
         // Follow the player — spread out in a ring
         let dist = self.units[ai_idx].distance_to_pos(player_x, player_y);
-        if dist < FOLLOW_DISTANCE {
+        if dist < self.config.follow_distance_tiles * TILE_SIZE {
             self.units[ai_idx].set_anim(UnitAnim::Idle);
         } else {
-            let slot = self.units[ai_idx].id as f32;
+            // Use stable slot index from recruited list (not unit ID) to prevent reshuffle
+            let uid = self.units[ai_idx].id;
+            let slot = self.recruited.iter().position(|&id| id == uid).unwrap_or(0) as f32;
             let angle = slot * 2.39996; // golden angle for even spacing
-            let offset_x = angle.cos() * FOLLOW_DISTANCE * 0.7;
-            let offset_y = angle.sin() * FOLLOW_DISTANCE * 0.7;
+            let offset_x = angle.cos() * self.config.follow_distance_tiles * TILE_SIZE * 0.7;
+            let offset_y = angle.sin() * self.config.follow_distance_tiles * TILE_SIZE * 0.7;
             self.ai_move_toward_continuous(ai_idx, player_x + offset_x, player_y + offset_y, dt);
         }
     }
@@ -275,9 +250,9 @@ impl Game {
                 if self.ai_order_combat(ai_idx, ax, ay, range, dt) {
                     return;
                 }
-                ORDER_LEASH // fallback for melee self-defense via normal leash
+                self.config.order_leash_tiles * TILE_SIZE // fallback for melee self-defense via normal leash
             }
-            _ => ORDER_LEASH,
+            _ => self.config.order_leash_tiles * TILE_SIZE,
         };
 
         // Standard combat (leashed to charge target) — mostly for warriors
@@ -287,7 +262,7 @@ impl Game {
 
         // Move toward charge target
         let dist = self.units[ai_idx].distance_to_pos(target_x, target_y);
-        if dist < CHARGE_ARRIVAL {
+        if dist < self.config.charge_arrival_tiles * TILE_SIZE {
             self.units[ai_idx].order = Some(OrderKind::Follow);
             self.units[ai_idx].ai_waypoints.clear();
             self.units[ai_idx].ai_waypoint_idx = 0;
@@ -309,10 +284,10 @@ impl Game {
 
         // Determine which line this unit belongs to
         let row_dist = match kind {
-            UnitKind::Warrior => DEFEND_LINE_WARRIOR,
-            UnitKind::Lancer => DEFEND_LINE_LANCER,
-            UnitKind::Archer => DEFEND_LINE_ARCHER,
-            UnitKind::Monk => DEFEND_LINE_MONK,
+            UnitKind::Warrior => self.config.defend_line_warrior_tiles * TILE_SIZE,
+            UnitKind::Lancer => self.config.defend_line_lancer_tiles * TILE_SIZE,
+            UnitKind::Archer => self.config.defend_line_archer_tiles * TILE_SIZE,
+            UnitKind::Monk => self.config.defend_line_monk_tiles * TILE_SIZE,
         };
 
         // Assign a slot within the line based on unit ID among same-kind defenders
@@ -341,15 +316,15 @@ impl Game {
         // Position: anchor + behind offset + perpendicular spread
         let behind_x = behind_dir.cos() * row_dist;
         let behind_y = behind_dir.sin() * row_dist;
-        let lateral_offset = (slot - (count - 1.0) / 2.0) * DEFEND_SPACING;
+        let lateral_offset = (slot - (count - 1.0) / 2.0) * self.config.defend_spacing_tiles * TILE_SIZE;
         let post_x = anchor_x + behind_x + perp_x * lateral_offset;
         let post_y = anchor_y + behind_y + perp_y * lateral_offset;
 
         // Combat (leashed to formation post — melee stays close, ranged has longer reach)
         let leash = match kind {
-            UnitKind::Warrior | UnitKind::Lancer => DEFEND_LEASH_MELEE,
-            UnitKind::Archer => DEFEND_LEASH_RANGED,
-            UnitKind::Monk => DEFEND_LEASH_MELEE, // monks stay near post, only heal
+            UnitKind::Warrior | UnitKind::Lancer => self.config.defend_leash_melee_tiles * TILE_SIZE,
+            UnitKind::Archer => self.config.defend_leash_ranged_tiles * TILE_SIZE,
+            UnitKind::Monk => self.config.defend_leash_melee_tiles * TILE_SIZE,
         };
         if self.ai_order_combat(ai_idx, post_x, post_y, leash, dt) {
             return;

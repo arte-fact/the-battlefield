@@ -27,9 +27,6 @@ impl Game {
         UnitKind::Archer,
     ];
 
-    /// Seconds between individual unit spawns within a wave.
-    const SPAWN_INTERVAL: f32 = 1.5;
-
     pub fn spawn_unit(
         &mut self,
         kind: UnitKind,
@@ -48,6 +45,9 @@ impl Game {
         let id = self.next_unit_id;
         self.next_unit_id += 1;
         let mut unit = Unit::new(id, kind, faction, sx, sy, is_player);
+        // Apply runtime combat stats from config
+        unit.stats = kind.stats_from_config(&self.config);
+        unit.hp = unit.stats.max_hp;
         // Stagger AI initial attack cooldowns to prevent all acting on the same frame
         if !is_player {
             unit.attack_cooldown = (id as f32 * 0.05) % 0.3;
@@ -82,54 +82,45 @@ impl Game {
             self.zone_manager.zones.iter().map(|z| z.state).collect();
 
         self.zone_manager.count_units(&self.units);
-        self.zone_manager.tick_capture(dt);
+        self.zone_manager.tick_capture(dt, self.config.base_capture_time, self.config.max_capture_multiplier);
 
         // Collect zone state changes, then apply reputation
-        let mut captured = false;
-        let mut captured_fov = false;
-        let mut lost = false;
-        let mut lost_fov = false;
-        let mut decap = false;
-        let mut decap_fov = false;
-        for (i, zone) in self.zone_manager.zones.iter().enumerate() {
-            let before = states_before[i];
-            let after = zone.state;
-            if before == after {
-                continue;
-            }
-            let in_fov = self.is_tile_in_fov(zone.center_gx, zone.center_gy);
+        let zone_changes: Vec<_> = self
+            .zone_manager
+            .zones
+            .iter()
+            .enumerate()
+            .filter_map(|(i, zone)| {
+                let before = states_before[i];
+                let after = zone.state;
+                if before == after {
+                    return None;
+                }
+                let in_fov = self.is_tile_in_fov(zone.center_gx, zone.center_gy);
+                Some((before, after, in_fov, zone.center_wx, zone.center_wy))
+            })
+            .collect();
 
+        for (before, after, in_fov, zx, zy) in zone_changes {
             if before != ZoneState::Controlled(Faction::Blue)
                 && after == ZoneState::Controlled(Faction::Blue)
             {
-                captured = true;
-                captured_fov |= in_fov;
+                self.on_zone_captured(in_fov, zx, zy);
             }
             if before == ZoneState::Controlled(Faction::Blue)
                 && after != ZoneState::Controlled(Faction::Blue)
             {
-                lost = true;
-                lost_fov |= in_fov;
+                self.on_zone_lost(in_fov, zx, zy);
             }
             if before == ZoneState::Controlled(Faction::Red)
                 && after != ZoneState::Controlled(Faction::Red)
             {
-                decap = true;
-                decap_fov |= in_fov;
+                self.on_zone_decaptured(in_fov, zx, zy);
             }
-        }
-        if captured {
-            self.on_zone_captured(captured_fov);
-        }
-        if lost {
-            self.on_zone_lost(lost_fov);
-        }
-        if decap {
-            self.on_zone_decaptured(decap_fov);
         }
 
         if self.winner.is_none() {
-            if let Some(faction) = self.zone_manager.tick_victory(dt) {
+            if let Some(faction) = self.zone_manager.tick_victory(dt, self.config.victory_hold_time) {
                 self.winner = Some(faction);
             }
         }
@@ -147,8 +138,8 @@ impl Game {
                     .iter()
                     .filter(|u| u.alive && u.faction == faction)
                     .count();
-                if alive_count < MAX_UNITS_PER_FACTION {
-                    let slots = MAX_UNITS_PER_FACTION.saturating_sub(alive_count);
+                if alive_count < self.config.max_units_per_faction {
+                    let slots = self.config.max_units_per_faction.saturating_sub(alive_count);
                     let wave_size = slots.min(Self::WAVE.len());
                     self.spawn_queue[fi] = Self::WAVE[..wave_size].to_vec();
                     self.spawn_timer[fi] = 0.0;
@@ -160,8 +151,9 @@ impl Game {
             }
 
             self.spawn_timer[fi] += dt;
-            if self.spawn_timer[fi] >= Self::SPAWN_INTERVAL {
-                self.spawn_timer[fi] -= Self::SPAWN_INTERVAL;
+            let interval = self.config.spawn_interval;
+            if self.spawn_timer[fi] >= interval {
+                self.spawn_timer[fi] -= interval;
 
                 let kind = self.spawn_queue[fi].remove(0);
                 // Spawn at the production building that trains this unit kind
@@ -204,7 +196,7 @@ impl Game {
         self.red_objective = grid::grid_to_world(blue_cx, blue_cy);
 
         // Create capture zones from BSP layout
-        self.zone_manager = ZoneManager::create_from_layout(&layout);
+        self.zone_manager = ZoneManager::create_from_layout(&layout, self.config.zone_radius);
 
         // Store gather points for unit rallying
         self.blue_gather = layout.blue_gather;
@@ -369,7 +361,7 @@ mod tests {
             blue_gather: (21, 21),
             red_gather: (138, 138),
         };
-        game.zone_manager = ZoneManager::create_from_layout(&layout);
+        game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
         let z0gx = game.zone_manager.zones[0].center_gx;
         let z0gy = game.zone_manager.zones[0].center_gy;
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, z0gx, z0gy, false);

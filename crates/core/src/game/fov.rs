@@ -1,13 +1,11 @@
 use super::*;
 
-/// Player vision radius in tiles.
-const FOV_RADIUS: i32 = 15;
-
 impl Game {
     /// Recompute field of view from the player's position using recursive shadowcasting.
     pub fn compute_fov(&mut self) {
         let w = self.grid.width;
         let h = self.grid.height;
+        let fov_radius = self.config.fov_radius;
 
         // Clear current visibility
         for v in self.visible.iter_mut() {
@@ -31,7 +29,7 @@ impl Game {
             self.visible[idx] = true;
 
             for octant in 0..8 {
-                self.cast_light(*ox, *oy, FOV_RADIUS, 1, 1.0, 0.0, octant, w, h);
+                self.cast_light(*ox, *oy, fov_radius, 1, 1.0, 0.0, octant, w, h);
             }
         }
 

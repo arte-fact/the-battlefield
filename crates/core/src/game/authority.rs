@@ -1,19 +1,23 @@
 use super::*;
 
 impl Game {
-    /// Follow chance based on authority: 30% at 0, 95% at 100.
+    /// Follow chance based on authority.
     pub fn authority_follow_chance(&self) -> f32 {
-        (0.30 + self.authority * 0.0065).clamp(0.0, 1.0)
+        (self.config.authority_follow_base + self.authority * self.config.authority_follow_slope)
+            .clamp(0.0, 1.0)
     }
 
     /// Command radius in world pixels based on authority.
     pub fn authority_command_radius(&self) -> f32 {
-        TILE_SIZE * (3.0 + self.authority * 0.09)
+        TILE_SIZE
+            * (self.config.authority_radius_base_tiles
+                + self.authority * self.config.authority_radius_slope)
     }
 
     /// Maximum number of followers based on authority.
     pub fn authority_max_followers(&self) -> usize {
-        3 + (self.authority * 0.27) as usize
+        self.config.authority_max_followers_base as usize
+            + (self.authority * self.config.authority_max_followers_slope) as usize
     }
 
     /// Current reputation name based on authority level.
@@ -39,9 +43,6 @@ impl Game {
             .count()
     }
 
-    /// Radius (in tiles) around the player for reputation events.
-    const REP_FOV_RADIUS: f32 = 15.0;
-
     /// Check if a unit is within the player's personal FOV radius.
     fn is_unit_in_fov(&self, unit_id: UnitId) -> bool {
         let Some(player) = self.player_unit() else {
@@ -52,7 +53,7 @@ impl Game {
             let dx = u.x - px;
             let dy = u.y - py;
             let dist_sq = dx * dx + dy * dy;
-            let range = Self::REP_FOV_RADIUS * TILE_SIZE;
+            let range = self.config.rep_fov_tiles * TILE_SIZE;
             dist_sq <= range * range
         } else {
             false
@@ -69,27 +70,22 @@ impl Game {
         let dx = wx - px;
         let dy = wy - py;
         let dist_sq = dx * dx + dy * dy;
-        let range = Self::REP_FOV_RADIUS * TILE_SIZE;
+        let range = self.config.rep_fov_tiles * TILE_SIZE;
         dist_sq <= range * range
     }
 
     /// Update authority based on combat events this frame.
-    ///
-    /// Reputation is tied to player involvement:
-    /// - Player kills/damage: always rewarded
-    /// - Ally kills: only rewarded if the player can see it (FOV)
-    /// - Ally deaths: only penalized if visible to the player
     pub(super) fn tick_authority(&mut self) {
         let player_id = match self.player_unit() {
             Some(p) => p.id,
             None => return,
         };
 
-        let mut authority_delta = 0.0_f32;
+        // Collect (delta, unit_id) pairs first to avoid borrow conflicts.
+        let mut deltas: Vec<(f32, UnitId)> = Vec::new();
 
         for event in &self.turn_events {
             match event {
-                // Kills
                 TurnEvent::MeleeAttack {
                     attacker_id,
                     defender_id,
@@ -103,38 +99,37 @@ impl Game {
                     ..
                 } => {
                     if *attacker_id == player_id {
-                        // Player kill — always rewarded
-                        authority_delta += 3.0;
+                        deltas.push((self.config.rep_kill, *defender_id));
                     } else if self
                         .units
                         .iter()
                         .any(|u| u.id == *attacker_id && u.faction == Faction::Blue)
                         && self.is_unit_in_fov(*defender_id)
                     {
-                        // Blue ally kill witnessed by player
-                        authority_delta += 1.5;
+                        deltas.push((self.config.rep_ally_kill, *defender_id));
                     }
                 }
-                // Player non-lethal damage
                 TurnEvent::MeleeAttack {
                     attacker_id,
+                    defender_id,
                     killed: false,
                     ..
                 }
                 | TurnEvent::RangedAttack {
                     attacker_id,
+                    defender_id,
                     killed: false,
                     ..
                 } => {
                     if *attacker_id == player_id {
-                        authority_delta += 0.5;
+                        deltas.push((self.config.rep_hit, *defender_id));
                     }
                 }
                 _ => {}
             }
         }
 
-        // Blue ally deaths — only penalize if player can see it
+        // Blue ally deaths
         for event in &self.turn_events {
             let defender_id = match event {
                 TurnEvent::MeleeAttack {
@@ -155,31 +150,66 @@ impl Game {
                 .any(|u| u.id == defender_id && u.faction == Faction::Blue && !u.is_player)
                 && self.is_unit_in_fov(defender_id)
             {
-                authority_delta -= 1.5;
+                deltas.push((self.config.rep_ally_death, defender_id));
             }
         }
 
-        self.authority = (self.authority + authority_delta).clamp(0.0, 100.0);
-    }
-
-    /// Called when a zone is captured by Blue. Only grants reputation if in player FOV.
-    pub(super) fn on_zone_captured(&mut self, in_fov: bool) {
-        if in_fov {
-            self.authority = (self.authority + 5.0).min(100.0);
+        for (delta, uid) in deltas {
+            self.apply_authority(delta, uid);
         }
     }
 
-    /// Called when a Red zone is decaptured. Only grants reputation if in player FOV.
-    pub(super) fn on_zone_decaptured(&mut self, in_fov: bool) {
-        if in_fov {
-            self.authority = (self.authority + 3.0).min(100.0);
+    /// Apply an authority delta and spawn a floating text at the unit's position.
+    fn apply_authority(&mut self, delta: f32, unit_id: UnitId) {
+        let old = self.authority;
+        self.authority = (self.authority + delta).clamp(0.0, 100.0);
+        let actual = self.authority - old;
+        if actual.abs() < f32::EPSILON {
+            return;
+        }
+        if let Some(u) = self.units.iter().find(|u| u.id == unit_id) {
+            self.floating_texts.push(super::FloatingText {
+                x: u.x,
+                y: u.y,
+                value: actual,
+                remaining: super::FLOATING_TEXT_DURATION,
+            });
         }
     }
 
-    /// Called when Blue loses a zone. Only penalizes if in player FOV.
-    pub(super) fn on_zone_lost(&mut self, in_fov: bool) {
+    fn apply_authority_at(&mut self, delta: f32, x: f32, y: f32) {
+        let old = self.authority;
+        self.authority = (self.authority + delta).clamp(0.0, 100.0);
+        let actual = self.authority - old;
+        if actual.abs() < f32::EPSILON {
+            return;
+        }
+        self.floating_texts.push(super::FloatingText {
+            x,
+            y,
+            value: actual,
+            remaining: super::FLOATING_TEXT_DURATION,
+        });
+    }
+
+    /// Called when a zone is captured by Blue.
+    pub(super) fn on_zone_captured(&mut self, in_fov: bool, x: f32, y: f32) {
         if in_fov {
-            self.authority = (self.authority - 1.5).max(0.0);
+            self.apply_authority_at(self.config.rep_zone_cap, x, y);
+        }
+    }
+
+    /// Called when a Red zone is decaptured.
+    pub(super) fn on_zone_decaptured(&mut self, in_fov: bool, x: f32, y: f32) {
+        if in_fov {
+            self.apply_authority_at(self.config.rep_zone_decap, x, y);
+        }
+    }
+
+    /// Called when Blue loses a zone.
+    pub(super) fn on_zone_lost(&mut self, in_fov: bool, x: f32, y: f32) {
+        if in_fov {
+            self.apply_authority_at(self.config.rep_zone_lost, x, y);
         }
     }
 }

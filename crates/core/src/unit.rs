@@ -64,6 +64,50 @@ impl UnitKind {
         }
     }
 
+    /// Build stats from runtime config (allows live rebalancing).
+    pub fn stats_from_config(self, cfg: &crate::config::GameConfig) -> UnitStats {
+        match self {
+            UnitKind::Warrior => UnitStats {
+                max_hp: cfg.warrior_hp,
+                atk: cfg.warrior_atk,
+                def: cfg.warrior_def,
+                mov: 5,
+                range: 1,
+            },
+            UnitKind::Archer => UnitStats {
+                max_hp: cfg.archer_hp,
+                atk: cfg.archer_atk,
+                def: cfg.archer_def,
+                mov: 4,
+                range: 7,
+            },
+            UnitKind::Lancer => UnitStats {
+                max_hp: cfg.lancer_hp,
+                atk: cfg.lancer_atk,
+                def: cfg.lancer_def,
+                mov: 4,
+                range: 2,
+            },
+            UnitKind::Monk => UnitStats {
+                max_hp: cfg.monk_hp,
+                atk: 1,
+                def: 1,
+                mov: 3,
+                range: 2,
+            },
+        }
+    }
+
+    /// Attack cooldown from runtime config.
+    pub fn cooldown_from_config(self, cfg: &crate::config::GameConfig) -> f32 {
+        match self {
+            UnitKind::Warrior => cfg.warrior_cooldown,
+            UnitKind::Lancer => cfg.lancer_cooldown,
+            UnitKind::Archer => cfg.archer_cooldown,
+            UnitKind::Monk => cfg.monk_cooldown,
+        }
+    }
+
     pub fn frame_size(self) -> u32 {
         match self {
             UnitKind::Lancer => 320,
@@ -186,12 +230,10 @@ pub struct Unit {
     pub hit_flash: f32,
     /// Active player order (None = default AI behavior).
     pub order: Option<OrderKind>,
-    /// Seconds remaining for order flash indicator.
+    /// Seconds remaining for order flash indicator ("!").
     pub order_flash: f32,
-    /// Cached nearest enemy result (refreshed periodically, not every frame).
-    pub cached_enemy: Option<(f32, f32, UnitId, f32)>,
-    /// Cooldown before refreshing cached_enemy (avoids LOS raycasts every frame).
-    pub enemy_scan_cooldown: f32,
+    /// Seconds remaining for rejection flash indicator ("?").
+    pub reject_flash: f32,
     /// When true, unit idles at rally point instead of marching via flowfield.
     pub rally_hold: bool,
     /// Toggle for alternating between Attack and Attack2 animations (warrior only).
@@ -235,8 +277,7 @@ impl Unit {
             hit_flash: 0.0,
             order: None,
             order_flash: 0.0,
-            cached_enemy: None,
-            enemy_scan_cooldown: 0.0,
+            reject_flash: 0.0,
             rally_hold: false,
             attack_variant: false,
             assigned_zone: None,
@@ -287,6 +328,7 @@ impl Unit {
         }
         self.hit_flash = (self.hit_flash - dt).max(0.0);
         self.order_flash = (self.order_flash - dt).max(0.0);
+        self.reject_flash = (self.reject_flash - dt).max(0.0);
         self.zone_lock_timer = (self.zone_lock_timer - dt).max(0.0);
     }
 
@@ -309,6 +351,11 @@ impl Unit {
         self.attack_cooldown = self.kind.base_attack_cooldown();
     }
 
+    /// Start cooldown using a config-provided value.
+    pub fn start_attack_cooldown_cfg(&mut self, cooldown: f32) {
+        self.attack_cooldown = cooldown;
+    }
+
     /// Grid cell this unit is currently standing on.
     pub fn grid_cell(&self) -> (u32, u32) {
         let (gx, gy) = grid::world_to_grid(self.x, self.y);
@@ -316,8 +363,9 @@ impl Unit {
     }
 
     /// Movement speed in pixels/sec based on mov stat.
-    pub fn move_speed(&self) -> f32 {
-        TILE_SIZE * self.stats.mov as f32 / 0.90
+    /// The divisor normalizes so that mov=5 ≈ 355 px/sec.
+    pub fn move_speed_with_config(&self, divisor: f32) -> f32 {
+        TILE_SIZE * self.stats.mov as f32 / divisor
     }
 
     /// Euclidean distance to a world position.
@@ -398,10 +446,10 @@ mod tests {
     fn move_speed_values() {
         // Warrior (mov 5): 64 * 5 / 0.90 ≈ 355.6
         let warrior = Unit::new(1, UnitKind::Warrior, Faction::Blue, 0, 0, false);
-        assert!((warrior.move_speed() - 355.56).abs() < 1.0);
+        assert!((warrior.move_speed_with_config(0.90) - 355.56).abs() < 1.0);
         // Lancer (mov 4): 64 * 4 / 0.90 ≈ 284.4
         let lancer = Unit::new(2, UnitKind::Lancer, Faction::Blue, 0, 0, false);
-        assert!((lancer.move_speed() - 284.44).abs() < 1.0);
+        assert!((lancer.move_speed_with_config(0.90) - 284.44).abs() < 1.0);
     }
 
     #[test]

@@ -1,18 +1,7 @@
+use crate::config::GameConfig;
 use crate::grid::{self, BORDER_SIZE, PLAYABLE_SIZE, TILE_SIZE};
 use crate::mapgen::MapLayout;
 use crate::unit::{Faction, Unit};
-
-/// Seconds for a single unit to fully capture a neutral zone.
-pub const BASE_CAPTURE_TIME: f32 = 8.0;
-
-/// Maximum capture rate multiplier (diminishing returns).
-const MAX_CAPTURE_MULTIPLIER: f32 = 3.0;
-
-/// Hard cap on total units per faction to avoid performance issues.
-pub const MAX_UNITS_PER_FACTION: usize = 35;
-
-/// Capture zone radius in tiles (Euclidean distance).
-pub const ZONE_RADIUS: u32 = 4;
 
 /// Capture zone states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,9 +64,6 @@ impl CaptureZone {
     }
 }
 
-/// Duration (seconds) a faction must hold all zones to win.
-pub const VICTORY_HOLD_TIME: f32 = 120.0;
-
 /// Manages all capture zones on the battlefield.
 pub struct ZoneManager {
     pub zones: Vec<CaptureZone>,
@@ -108,7 +94,7 @@ impl ZoneManager {
     }
 
     /// Create zones from BSP-generated layout.
-    pub fn create_from_layout(layout: &MapLayout) -> Self {
+    pub fn create_from_layout(layout: &MapLayout, zone_radius: u32) -> Self {
         // Zone names cycle through letters
         const NAMES: &[&str] = &[
             "Zone A", "Zone B", "Zone C", "Zone D", "Zone E", "Zone F", "Zone G", "Zone H",
@@ -119,7 +105,7 @@ impl ZoneManager {
             .iter()
             .enumerate()
             .map(|(i, &(gx, gy))| {
-                CaptureZone::new(i as u8, NAMES[i % NAMES.len()], gx, gy, ZONE_RADIUS)
+                CaptureZone::new(i as u8, NAMES[i % NAMES.len()], gx, gy, zone_radius)
             })
             .collect();
         Self {
@@ -154,9 +140,9 @@ impl ZoneManager {
     }
 
     /// Tick capture progress for all zones.
-    pub fn tick_capture(&mut self, dt: f32) {
-        let rate_per_unit = 1.0 / BASE_CAPTURE_TIME;
-        let max_rate = MAX_CAPTURE_MULTIPLIER * rate_per_unit;
+    pub fn tick_capture(&mut self, dt: f32, base_capture_time: f32, max_capture_multiplier: f32) {
+        let rate_per_unit = 1.0 / base_capture_time;
+        let max_rate = max_capture_multiplier * rate_per_unit;
 
         for zone in &mut self.zones {
             let (blue, red) = (zone.blue_count, zone.red_count);
@@ -267,7 +253,7 @@ impl ZoneManager {
     }
 
     /// Score all zones for a faction, return all as (world_x, world_y, score) sorted desc.
-    pub fn score_all_zones(&self, faction: Faction) -> Vec<(f32, f32, f32)> {
+    pub fn score_all_zones(&self, faction: Faction, cfg: &GameConfig) -> Vec<(f32, f32, f32)> {
         if self.zones.is_empty() {
             return Vec::new();
         }
@@ -302,22 +288,22 @@ impl ZoneManager {
 
                 // Expansion target: zones we don't control
                 if !controlled_by_us {
-                    score += 40.0;
+                    score += cfg.strat_uncontrolled;
                 }
 
                 // Urgency: zone we own but progress is eroding
                 if controlled_by_us && progress_for_us < 0.99 {
-                    score += 50.0 * (1.0 - progress_for_us);
+                    score += cfg.strat_erosion_urgency * (1.0 - progress_for_us);
                 }
 
                 // Momentum: zone we're actively capturing — finish the job
                 if !controlled_by_us && progress_for_us > 0.0 {
-                    score += 30.0 * progress_for_us;
+                    score += cfg.strat_momentum * progress_for_us;
                 }
 
                 // Contested bonus
                 if z.state == ZoneState::Contested {
-                    score += 20.0;
+                    score += cfg.strat_contested;
                 }
 
                 // Enemy pressure
@@ -325,18 +311,17 @@ impl ZoneManager {
                     Faction::Blue => z.red_count,
                     Faction::Red => z.blue_count,
                 };
-                score += 5.0 * enemy_count as f32;
+                score += cfg.strat_enemy_pressure * enemy_count as f32;
 
                 // Distance penalty (normalized 0-1)
                 let dx = z.center_gx as f32 - own_x;
                 let dy = z.center_gy as f32 - own_y;
                 let norm_dist = (dx * dx + dy * dy) / max_dist_sq;
-                score -= 15.0 * norm_dist;
+                score += cfg.strat_distance_penalty * norm_dist;
 
                 // All zones controlled — defend the most advanced one
                 if controlled_by_us && progress_for_us >= 0.99 {
-                    // Only distance-based score (farthest from base = most advanced)
-                    score = norm_dist * 10.0;
+                    score = norm_dist * cfg.strat_all_controlled_defense;
                 }
 
                 (z.center_wx, z.center_wy, score)
@@ -349,24 +334,22 @@ impl ZoneManager {
     }
 
     /// Update victory timer. Returns Some(faction) if a faction has won.
-    pub fn tick_victory(&mut self, dt: f32) -> Option<Faction> {
+    pub fn tick_victory(&mut self, dt: f32, victory_hold_time: f32) -> Option<Faction> {
         match self.all_zones_controlled_by() {
             Some(faction) => {
                 if self.victory_candidate == Some(faction) {
                     self.victory_timer += dt;
                 } else {
-                    // New faction took total control — reset timer
                     self.victory_candidate = Some(faction);
                     self.victory_timer = dt;
                 }
-                if self.victory_timer >= VICTORY_HOLD_TIME {
+                if self.victory_timer >= victory_hold_time {
                     Some(faction)
                 } else {
                     None
                 }
             }
             None => {
-                // No total control — reset
                 self.victory_timer = 0.0;
                 self.victory_candidate = None;
                 None
@@ -375,9 +358,9 @@ impl ZoneManager {
     }
 
     /// Progress toward victory (0.0 to 1.0) for the faction currently holding all zones.
-    pub fn victory_progress(&self) -> f32 {
+    pub fn victory_progress(&self, victory_hold_time: f32) -> f32 {
         if self.victory_candidate.is_some() {
-            (self.victory_timer / VICTORY_HOLD_TIME).min(1.0)
+            (self.victory_timer / victory_hold_time).min(1.0)
         } else {
             0.0
         }
@@ -408,7 +391,7 @@ mod tests {
     }
 
     fn test_zones() -> ZoneManager {
-        ZoneManager::create_from_layout(&test_layout())
+        ZoneManager::create_from_layout(&test_layout(), 4)
     }
 
     #[test]
@@ -442,7 +425,7 @@ mod tests {
         let mut mgr = test_zones();
         mgr.zones[1].blue_count = 1;
         mgr.zones[1].red_count = 0;
-        mgr.tick_capture(4.0); // half of BASE_CAPTURE_TIME
+        mgr.tick_capture(4.0, 8.0, 3.0);
         assert!(mgr.zones[1].progress > 0.4 && mgr.zones[1].progress < 0.6);
         assert!(matches!(
             mgr.zones[1].state,
@@ -455,7 +438,7 @@ mod tests {
         let mut mgr = test_zones();
         mgr.zones[1].blue_count = 0;
         mgr.zones[1].red_count = 1;
-        mgr.tick_capture(4.0);
+        mgr.tick_capture(4.0, 8.0, 3.0);
         assert!(mgr.zones[1].progress < -0.4 && mgr.zones[1].progress > -0.6);
         assert!(matches!(
             mgr.zones[1].state,
@@ -469,7 +452,7 @@ mod tests {
         mgr.zones[1].progress = 0.5;
         mgr.zones[1].blue_count = 3;
         mgr.zones[1].red_count = 1;
-        mgr.tick_capture(1.0);
+        mgr.tick_capture(1.0, 8.0, 3.0);
         assert!((mgr.zones[1].progress - 0.5).abs() < f32::EPSILON);
         assert_eq!(mgr.zones[1].state, ZoneState::Contested);
     }
@@ -480,8 +463,8 @@ mod tests {
         let mut mgr2 = test_zones();
         mgr1.zones[0].blue_count = 1;
         mgr2.zones[0].blue_count = 4;
-        mgr1.tick_capture(1.0);
-        mgr2.tick_capture(1.0);
+        mgr1.tick_capture(1.0, 8.0, 3.0);
+        mgr2.tick_capture(1.0, 8.0, 3.0);
         assert!(mgr2.zones[0].progress > mgr1.zones[0].progress);
     }
 
@@ -490,7 +473,7 @@ mod tests {
         let mut mgr = test_zones();
         mgr.zones[0].blue_count = 4;
         for _ in 0..50 {
-            mgr.tick_capture(0.1);
+            mgr.tick_capture(0.1, 8.0, 3.0);
         }
         assert_eq!(mgr.zones[0].state, ZoneState::Controlled(Faction::Blue));
         assert!((mgr.zones[0].progress - 1.0).abs() < f32::EPSILON);
@@ -573,7 +556,7 @@ mod tests {
         let mut mgr = test_zones();
         mgr.zones[0].progress = 0.3;
         mgr.zones[0].state = ZoneState::Capturing(Faction::Blue);
-        mgr.tick_capture(5.0);
+        mgr.tick_capture(5.0, 8.0, 3.0);
         assert!((mgr.zones[0].progress - 0.3).abs() < f32::EPSILON);
     }
 
@@ -582,7 +565,7 @@ mod tests {
         let mut mgr = test_zones();
         mgr.zones[0].blue_count = 9;
         mgr.zones[0].progress = 0.95;
-        mgr.tick_capture(10.0);
+        mgr.tick_capture(10.0, 8.0, 3.0);
         assert!((mgr.zones[0].progress - 1.0).abs() < f32::EPSILON);
     }
 
@@ -592,7 +575,7 @@ mod tests {
         for zone in &mut mgr.zones {
             zone.state = ZoneState::Controlled(Faction::Blue);
         }
-        assert!(mgr.tick_victory(60.0).is_none());
+        assert!(mgr.tick_victory(60.0, 120.0).is_none());
         assert!((mgr.victory_timer - 60.0).abs() < f32::EPSILON);
         assert_eq!(mgr.victory_candidate, Some(Faction::Blue));
     }
@@ -603,7 +586,7 @@ mod tests {
         for zone in &mut mgr.zones {
             zone.state = ZoneState::Controlled(Faction::Blue);
         }
-        assert!(mgr.tick_victory(VICTORY_HOLD_TIME + 1.0).is_some());
+        assert!(mgr.tick_victory(121.0, 120.0).is_some());
     }
 
     #[test]
@@ -612,11 +595,11 @@ mod tests {
         for zone in &mut mgr.zones {
             zone.state = ZoneState::Controlled(Faction::Blue);
         }
-        mgr.tick_victory(60.0);
+        mgr.tick_victory(60.0, 120.0);
         assert!(mgr.victory_timer > 0.0);
 
         mgr.zones[0].state = ZoneState::Neutral;
-        mgr.tick_victory(1.0);
+        mgr.tick_victory(1.0, 120.0);
         assert!((mgr.victory_timer).abs() < f32::EPSILON);
         assert_eq!(mgr.victory_candidate, None);
     }
@@ -627,8 +610,8 @@ mod tests {
         for zone in &mut mgr.zones {
             zone.state = ZoneState::Controlled(Faction::Red);
         }
-        mgr.tick_victory(60.0);
-        let progress = mgr.victory_progress();
+        mgr.tick_victory(60.0, 120.0);
+        let progress = mgr.victory_progress(120.0);
         assert!(
             (progress - 0.5).abs() < 0.01,
             "Expected ~0.5, got {progress}"
@@ -638,7 +621,7 @@ mod tests {
     #[test]
     fn create_from_layout_creates_correct_count() {
         let layout = test_layout();
-        let mgr = ZoneManager::create_from_layout(&layout);
+        let mgr = ZoneManager::create_from_layout(&layout, 4);
         assert_eq!(mgr.zones.len(), layout.zone_centers.len());
     }
 }

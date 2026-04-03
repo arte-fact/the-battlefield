@@ -1,22 +1,9 @@
 use super::*;
 
-/// Monks try to stay at least this far from enemies (3 tiles).
-const MONK_SAFE_DIST: f32 = TILE_SIZE * 3.0;
-
-/// Monks stop approaching allies once within this distance (2 tiles).
-const MONK_FOLLOW_DIST: f32 = TILE_SIZE * 2.0;
-
 impl Game {
-    /// Interval for recomputing macro objectives (seconds).
-    const OBJECTIVE_INTERVAL: f32 = 2.0;
-
-    /// Real-time AI tick: all units get decisions every frame, pathfinding is rate-limited.
-    /// Max A* pathfind calls per tick to prevent frame spikes.
-    const ASTAR_BUDGET_PER_TICK: u8 = 3;
-
     pub fn tick_ai(&mut self, dt: f32) {
         // Reset per-tick A* budget
-        self.astar_budget = Self::ASTAR_BUDGET_PER_TICK;
+        self.astar_budget = self.config.astar_budget_per_tick;
 
         // Build occupied set once per frame (shared across all pathfinding calls)
         self.ai_occupied_cache = self
@@ -30,22 +17,22 @@ impl Game {
         // both score_all_zones() calls landing on the same frame.
         self.objective_timer += dt;
         let mut refresh_objectives = false;
-        let half_interval = Self::OBJECTIVE_INTERVAL / 2.0;
+        let half_interval = self.config.objective_interval / 2.0;
         if self.macro_objectives[0].is_empty() && self.macro_objectives[1].is_empty() {
             // First time: compute both
             self.objective_timer = 0.0;
-            self.macro_objectives[0] = self.zone_manager.score_all_zones(Faction::Blue);
-            self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red);
+            self.macro_objectives[0] = self.zone_manager.score_all_zones(Faction::Blue, &self.config);
+            self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red, &self.config);
             refresh_objectives = true;
-        } else if self.objective_timer >= Self::OBJECTIVE_INTERVAL {
+        } else if self.objective_timer >= self.config.objective_interval {
             // Blue scores at 0s, Red at 1s (half interval offset)
             self.objective_timer = 0.0;
-            self.macro_objectives[0] = self.zone_manager.score_all_zones(Faction::Blue);
+            self.macro_objectives[0] = self.zone_manager.score_all_zones(Faction::Blue, &self.config);
             refresh_objectives = true;
         } else if self.objective_timer >= half_interval && self.objective_timer - dt < half_interval
         {
             // Red scores at the midpoint
-            self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red);
+            self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red, &self.config);
             refresh_objectives = true;
         }
 
@@ -218,18 +205,22 @@ impl Game {
         }
     }
 
-    /// Compute a standoff point for a monk: a position MONK_FOLLOW_DIST away from
-    /// the ally, in the direction from ally back toward the monk. If the monk is
-    /// already within MONK_FOLLOW_DIST, returns the monk's own position (hold).
-    fn monk_standoff_point(monk_x: f32, monk_y: f32, ally_x: f32, ally_y: f32) -> (f32, f32) {
+    /// Compute a standoff point for a monk: a position monk_follow_dist away from
+    /// the ally, in the direction from ally back toward the monk.
+    fn monk_standoff_point(
+        monk_x: f32,
+        monk_y: f32,
+        ally_x: f32,
+        ally_y: f32,
+        follow_dist: f32,
+    ) -> (f32, f32) {
         let dx = monk_x - ally_x;
         let dy = monk_y - ally_y;
         let dist = (dx * dx + dy * dy).sqrt();
-        // Avoid division by zero when monk and ally overlap exactly
-        if dist < 0.01 || dist < MONK_FOLLOW_DIST {
+        if dist < 0.01 || dist < follow_dist {
             return (monk_x, monk_y);
         }
-        let ratio = MONK_FOLLOW_DIST / dist;
+        let ratio = follow_dist / dist;
         (ally_x + dx * ratio, ally_y + dy * ratio)
     }
 
@@ -244,8 +235,9 @@ impl Game {
         // Healing is handled by try_monk_heal in ai_unit_tick (before orders)
 
         // Flee if an enemy is too close
+        let monk_safe = self.config.monk_safe_dist_tiles * TILE_SIZE;
         let enemy_dist = self.nearest_enemy_dist(ax, ay, faction);
-        if enemy_dist < MONK_SAFE_DIST {
+        if enemy_dist < monk_safe {
             if let Some(enemy) = self.find_nearest_enemy(ai_idx) {
                 let (ex, ey, _, _) = enemy;
                 let flee_x = ax + (ax - ex);
@@ -256,7 +248,7 @@ impl Game {
         }
 
         // Move directly toward wounded ally to get in heal range
-        let vision_range = Self::AI_VISION_RADIUS as f32 * TILE_SIZE;
+        let vision_range = self.config.ai_vision_radius as f32 * TILE_SIZE;
         let wounded_target = self
             .units
             .iter()
@@ -273,7 +265,8 @@ impl Game {
 
         // Follow nearest ADVANCING combatant (not rally_hold, not player, not monk).
         // This prevents monks from orbiting the base when the player stays home.
-        let max_follow = TILE_SIZE * 15.0;
+        let max_follow = self.config.monk_max_follow_tiles * TILE_SIZE;
+        let monk_follow_dist = self.config.monk_follow_dist_tiles * TILE_SIZE;
         let follow_target = self
             .units
             .iter()
@@ -293,7 +286,7 @@ impl Game {
             })
             .map(|u| (u.x, u.y));
         if let Some((tx, ty)) = follow_target {
-            let (sx, sy) = Self::monk_standoff_point(ax, ay, tx, ty);
+            let (sx, sy) = Self::monk_standoff_point(ax, ay, tx, ty, monk_follow_dist);
             self.ai_move_toward_continuous(ai_idx, sx, sy, dt);
             return;
         }

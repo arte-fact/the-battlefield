@@ -11,29 +11,17 @@ echo "Running wasm-bindgen..."
 wasm-bindgen --out-dir "$OUT" --target web --no-typescript \
     target/wasm32-unknown-unknown/release/battlefield_wgpu_native.wasm
 
-# Create HTML shell if it doesn't exist
-if [ ! -f "$OUT/index.html" ]; then
-cat > "$OUT/index.html" << 'HTMLEOF'
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>The Battlefield (wgpu)</title>
-    <style>
-        body { margin: 0; background: #1a1a26; overflow: hidden; }
-        canvas { display: block; width: 100vw; height: 100vh; }
-    </style>
-</head>
-<body>
-    <canvas id="canvas"></canvas>
-    <script type="module">
-        import init from './battlefield_wgpu_native.js';
-        await init();
-    </script>
-</body>
-</html>
-HTMLEOF
-fi
+# Copy PWA assets
+cp manifest.json "$OUT/manifest.json"
+mkdir -p "$OUT/icons"
+cp icons/*.png "$OUT/icons/"
+
+# Create service worker with cache-busted name from wasm hash
+WASM_HASH=$(sha256sum "$OUT/battlefield_wgpu_native_bg.wasm" | cut -c1-8)
+sed "s/battlefield-f0c6fdfa/battlefield-wgpu-${WASM_HASH}/" sw.js > "$OUT/sw.js"
+# Update precache list for wgpu file names
+sed -i "s|./battlefield.js|./battlefield_wgpu_native.js|" "$OUT/sw.js"
+sed -i "s|./battlefield.wasm|./battlefield_wgpu_native_bg.wasm|" "$OUT/sw.js"
 
 echo ""
 echo "Build complete: $OUT/"

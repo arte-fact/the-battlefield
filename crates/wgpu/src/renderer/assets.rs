@@ -69,6 +69,8 @@ pub struct Assets {
     /// Terrain textures.
     pub tilemap_texture: Option<TextureId>,
     pub tilemap_texture2: Option<TextureId>,
+    /// Sand-tinted copy of tilemap_texture for road tiles.
+    pub tilemap_road: Option<TextureId>,
     pub water_texture: Option<TextureId>,
     pub foam_texture: Option<TextureId>,
     pub shadow_texture: Option<TextureId>,
@@ -116,6 +118,7 @@ impl Assets {
             avatar_textures: Vec::new(),
             tilemap_texture: None,
             tilemap_texture2: None,
+            tilemap_road: None,
             water_texture: None,
             foam_texture: None,
             shadow_texture: None,
@@ -260,18 +263,21 @@ impl Assets {
         label: &str,
     ) -> TextureId {
         let max_dim = gpu.device.limits().max_texture_dimension_2d;
-        if width > max_dim || height > max_dim {
+        let (pixels, actual_w, actual_h, scale) = if width > max_dim || height > max_dim {
+            let (scaled, sw, sh) = downscale_to_fit(rgba, width, height, max_dim);
+            let s = sw as f32 / width as f32;
             log::warn!(
-                "Texture {label} ({width}x{height}) exceeds max {max_dim}, creating 1x1 placeholder"
+                "Texture {label} ({width}x{height}) exceeds max {max_dim}, downscaled to {sw}x{sh}"
             );
-            // Create a tiny placeholder texture so the game doesn't crash
-            return self.upload_rgba(gpu, &[255, 0, 255, 255], 1, 1, label);
-        }
+            (scaled, sw, sh, s)
+        } else {
+            (rgba.to_vec(), width, height, 1.0)
+        };
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: actual_w,
+                height: actual_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -289,15 +295,15 @@ impl Assets {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba,
+            &pixels,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * width),
-                rows_per_image: Some(height),
+                bytes_per_row: Some(4 * actual_w),
+                rows_per_image: Some(actual_h),
             },
             wgpu::Extent3d {
-                width,
-                height,
+                width: actual_w,
+                height: actual_h,
                 depth_or_array_layers: 1,
             },
         );
@@ -310,8 +316,9 @@ impl Assets {
             _texture: texture,
             view,
             bind_group,
-            width,
-            height,
+            width: actual_w,
+            height: actual_h,
+            scale,
         });
         id
     }
@@ -352,8 +359,10 @@ impl Assets {
                     let Some(spec) = asset_manifest::unit_sprite(kind, anim) else {
                         continue;
                     };
-                    let path =
-                        format!("{ASSET_BASE}/Units/{folder}/{kind_folder}/{}", spec.filename);
+                    let path = format!(
+                        "{ASSET_BASE}/Units/{folder}/{kind_folder}/{}",
+                        spec.filename
+                    );
                     if let Some(id) = self.load_png(gpu, &path) {
                         self.unit_textures.insert(
                             UnitTexKey {
@@ -421,10 +430,17 @@ impl Assets {
     // ── Load terrain (matches SDL assets.rs lines 308-324) ──────────────
 
     fn load_terrain(&mut self, gpu: &GpuContext) {
-        self.tilemap_texture =
-            self.load_png(gpu, &format!("{ASSET_BASE}/Terrain/Tileset/Tilemap_color1.png"));
-        self.tilemap_texture2 =
-            self.load_png(gpu, &format!("{ASSET_BASE}/Terrain/Tileset/Tilemap_color2.png"));
+        self.tilemap_texture = self.load_png(
+            gpu,
+            &format!("{ASSET_BASE}/Terrain/Tileset/Tilemap_color1.png"),
+        );
+        // Pre-tinted sand tileset generated offline with PIL
+        self.tilemap_road = self.load_png(gpu, "assets/Tilemap_road.png");
+
+        self.tilemap_texture2 = self.load_png(
+            gpu,
+            &format!("{ASSET_BASE}/Terrain/Tileset/Tilemap_color2.png"),
+        );
         self.water_texture = self.load_png(
             gpu,
             &format!("{ASSET_BASE}/Terrain/Tileset/Water Background color.png"),
@@ -557,15 +573,27 @@ impl Assets {
 
         // 3-slice bars
         let bar_cells: [[f64; 4]; 3] = [
-            [render_util::BAR_LEFT.0, render_util::BAR_LEFT.1, render_util::BAR_LEFT.2, render_util::BAR_LEFT.3],
-            [render_util::BAR_CENTER.0, render_util::BAR_CENTER.1, render_util::BAR_CENTER.2, render_util::BAR_CENTER.3],
-            [render_util::BAR_RIGHT.0, render_util::BAR_RIGHT.1, render_util::BAR_RIGHT.2, render_util::BAR_RIGHT.3],
+            [
+                render_util::BAR_LEFT.0,
+                render_util::BAR_LEFT.1,
+                render_util::BAR_LEFT.2,
+                render_util::BAR_LEFT.3,
+            ],
+            [
+                render_util::BAR_CENTER.0,
+                render_util::BAR_CENTER.1,
+                render_util::BAR_CENTER.2,
+                render_util::BAR_CENTER.3,
+            ],
+            [
+                render_util::BAR_RIGHT.0,
+                render_util::BAR_RIGHT.1,
+                render_util::BAR_RIGHT.2,
+                render_util::BAR_RIGHT.3,
+            ],
         ];
-        self.ui_bar_base = self.load_3slice_atlas(
-            gpu,
-            &format!("{ui_base}/Bars/BigBar_Base.png"),
-            &bar_cells,
-        );
+        self.ui_bar_base =
+            self.load_3slice_atlas(gpu, &format!("{ui_base}/Bars/BigBar_Base.png"), &bar_cells);
 
         // Bar fill — load and convert to greyscale for color tinting
         self.ui_bar_fill = self.load_bar_fill(gpu, &format!("{ui_base}/Bars/BigBar_Fill.png"));
@@ -576,7 +604,10 @@ impl Assets {
     }
 
     fn load_9slice_atlas(
-        &mut self, gpu: &GpuContext, path: &str, cells: &[[f64; 4]; 9],
+        &mut self,
+        gpu: &GpuContext,
+        path: &str,
+        cells: &[[f64; 4]; 9],
     ) -> Option<(TextureId, u32, u32)> {
         let data = battlefield_assets::get(path)?;
         let (src_pixels, src_w, _src_h) = decode_png(data);
@@ -585,7 +616,12 @@ impl Assets {
         let mut atlas = vec![0u8; (aw as usize) * (ah as usize) * 4];
 
         for (i, cell) in cells.iter().enumerate() {
-            let (sx, sy, sw, sh) = (cell[0] as usize, cell[1] as usize, cell[2] as usize, cell[3] as usize);
+            let (sx, sy, sw, sh) = (
+                cell[0] as usize,
+                cell[1] as usize,
+                cell[2] as usize,
+                cell[3] as usize,
+            );
             let (dx, dy) = (positions[i].0 as usize, positions[i].1 as usize);
             for row in 0..sh {
                 for col in 0..sw {
@@ -603,7 +639,10 @@ impl Assets {
     }
 
     fn load_3slice_atlas(
-        &mut self, gpu: &GpuContext, path: &str, cells: &[[f64; 4]; 3],
+        &mut self,
+        gpu: &GpuContext,
+        path: &str,
+        cells: &[[f64; 4]; 3],
     ) -> Option<(TextureId, u32, u32)> {
         let data = battlefield_assets::get(path)?;
         let (src_pixels, src_w, _src_h) = decode_png(data);
@@ -613,7 +652,12 @@ impl Assets {
 
         let mut dx_offset = 0usize;
         for cell in cells {
-            let (sx, sy, sw, sh) = (cell[0] as usize, cell[1] as usize, cell[2] as usize, cell[3] as usize);
+            let (sx, sy, sw, sh) = (
+                cell[0] as usize,
+                cell[1] as usize,
+                cell[2] as usize,
+                cell[3] as usize,
+            );
             for row in 0..sh {
                 for col in 0..sw {
                     let si = ((sy + row) * src_w as usize + (sx + col)) * 4;
@@ -637,13 +681,20 @@ impl Assets {
         let mut grey = vec![0u8; (w * h * 4) as usize];
         for i in 0..(w * h) as usize {
             let si = i * 4;
-            let lum = ((src[si] as u16 * 77 + src[si + 1] as u16 * 150 + src[si + 2] as u16 * 29) >> 8) as u8;
+            let lum = ((src[si] as u16 * 77 + src[si + 1] as u16 * 150 + src[si + 2] as u16 * 29)
+                >> 8) as u8;
             let boosted = 128 + (lum as u16 * 127 / 255) as u8;
             let di = i * 4;
             grey[di] = boosted;
             grey[di + 1] = boosted;
             grey[di + 2] = boosted;
-            grey[di + 3] = if src.len() > si + 3 { src[si + 3] } else if lum > 10 { 255 } else { 0 };
+            grey[di + 3] = if src.len() > si + 3 {
+                src[si + 3]
+            } else if lum > 10 {
+                255
+            } else {
+                0
+            };
         }
         Some(self.upload_rgba(gpu, &grey, w, h, path))
     }
@@ -664,7 +715,7 @@ impl Assets {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -680,6 +731,7 @@ impl Assets {
             bind_group,
             width: size,
             height: size,
+            scale: 1.0,
         });
         self.fog_texture = Some(id);
         self.fog_wgpu_texture = Some(texture);
@@ -767,4 +819,45 @@ fn decode_png(data: &[u8]) -> (Vec<u8>, u32, u32) {
             (vec![0u8; pixel_count * 4], width, height)
         }
     }
+}
+
+/// Halve an RGBA image repeatedly until both dimensions are <= max_dim.
+fn downscale_to_fit(rgba: &[u8], mut w: u32, mut h: u32, max_dim: u32) -> (Vec<u8>, u32, u32) {
+    let mut src = rgba.to_vec();
+    while w > max_dim || h > max_dim {
+        let nw = (w / 2).max(1);
+        let nh = (h / 2).max(1);
+        let mut dst = vec![0u8; (nw * nh * 4) as usize];
+        for dy in 0..nh {
+            for dx in 0..nw {
+                let sx = (dx * 2).min(w - 1);
+                let sy = (dy * 2).min(h - 1);
+                // 2x2 box filter average
+                let mut r = 0u32;
+                let mut g = 0u32;
+                let mut b = 0u32;
+                let mut a = 0u32;
+                for oy in 0..2u32 {
+                    for ox in 0..2u32 {
+                        let px = (sx + ox).min(w - 1);
+                        let py = (sy + oy).min(h - 1);
+                        let i = ((py * w + px) * 4) as usize;
+                        r += src[i] as u32;
+                        g += src[i + 1] as u32;
+                        b += src[i + 2] as u32;
+                        a += src[i + 3] as u32;
+                    }
+                }
+                let di = ((dy * nw + dx) * 4) as usize;
+                dst[di] = (r / 4) as u8;
+                dst[di + 1] = (g / 4) as u8;
+                dst[di + 2] = (b / 4) as u8;
+                dst[di + 3] = (a / 4) as u8;
+            }
+        }
+        src = dst;
+        w = nw;
+        h = nh;
+    }
+    (src, w, h)
 }

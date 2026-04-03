@@ -37,8 +37,8 @@ pub fn execute_melee(attacker: &mut Unit, defender: &mut Unit, grid: &Grid) -> C
 }
 
 /// Execute a heal: restore HP to an ally. Returns amount healed.
-pub fn execute_heal(healer: &mut Unit, target: &mut Unit) -> i32 {
-    let heal_amount = 3.min(target.stats.max_hp - target.hp);
+pub fn execute_heal(healer: &mut Unit, target: &mut Unit, base_heal: i32) -> i32 {
+    let heal_amount = base_heal.min(target.stats.max_hp - target.hp);
     target.hp += heal_amount;
     healer.start_attack_cooldown();
     let anim = healer.next_attack_anim();
