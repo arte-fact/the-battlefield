@@ -54,8 +54,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Work in tile-pixel space (64 pixels per tile)
     let pixel_pos = in.world_pos;
 
-    // Pixel grid size — each "pixel" is 1 world unit
-    let grid = 4.0;  // caustic cell size in world pixels
+    // Pixel grid size — matches sprite texel density (1 texel = 1 world unit)
+    let grid = 1.0;
 
     // Quantize position to pixel grid
     let qp = floor(pixel_pos / grid);
