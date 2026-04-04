@@ -128,9 +128,6 @@ pub struct Game {
     spawn_queue: [Vec<UnitKind>; 2],
     /// Timer between individual unit spawns per faction [Blue, Red].
     spawn_timer: [f32; 2],
-    /// Flat grid of occupied cells for AI pathfinding (rebuilt each frame).
-    /// Indexed as `[gy * grid_width + gx]`. Fits in L1 cache (160x160 = 25KB).
-    ai_occupied_grid: Vec<bool>,
     /// Unified flow field for Blue faction (multi-source, all map objectives).
     blue_flow: FactionFlowState,
     /// Unified flow field for Red faction (multi-source, all map objectives).
@@ -189,7 +186,6 @@ impl Game {
             winner: None,
             spawn_queue: [Vec::new(), Vec::new()],
             spawn_timer: [0.0; 2],
-            ai_occupied_grid: vec![false; (GRID_SIZE * GRID_SIZE) as usize],
             blue_flow: FactionFlowState::new(),
             red_flow: FactionFlowState::new(),
             macro_objectives: [Vec::new(), Vec::new()],

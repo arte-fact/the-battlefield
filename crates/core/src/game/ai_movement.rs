@@ -30,11 +30,7 @@ impl Game {
                 let gx = gx.max(0) as u32;
                 let gy = gy.max(0) as u32;
 
-                let occ = &self.ai_occupied_grid;
-                let gw = self.grid.width as usize;
-                let path = self.grid.find_path(ax, ay, gx, gy, self.config.astar_search_limit, |cx, cy| {
-                    occ[cy as usize * gw + cx as usize] && (cx, cy) != (ax, ay) && (cx, cy) != (gx, gy)
-                });
+                let path = self.grid.find_path(ax, ay, gx, gy, self.config.astar_search_limit, |_, _| false);
 
                 if let Some(steps) = path {
                     self.units[ai_idx].ai_waypoints = steps

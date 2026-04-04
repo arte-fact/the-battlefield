@@ -8,16 +8,6 @@ impl Game {
         // Rebuild spatial hash for O(1) neighbour queries (separation, enemy search)
         self.rebuild_spatial();
 
-        // Rebuild flat occupied grid once per frame (L1-friendly array lookup in A*)
-        self.ai_occupied_grid.fill(false);
-        let gw = self.grid.width as usize;
-        for u in &self.units {
-            if u.alive {
-                let (gx, gy) = u.grid_cell();
-                self.ai_occupied_grid[gy as usize * gw + gx as usize] = true;
-            }
-        }
-
         // Recompute macro objectives periodically, staggering factions to avoid
         // both score_all_zones() calls landing on the same frame.
         self.objective_timer += dt;
