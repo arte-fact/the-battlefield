@@ -150,19 +150,22 @@ pub fn render_frame(
 
     // ── World-space base (terrain layer) ───────────────────────────────
 
+    let mut water_sprites = SpriteBatch::new();
     let mut base_sprites = SpriteBatch::new();
     let mut grass_sprites = SpriteBatch::new();
+    water_sprites.begin();
     base_sprites.begin();
     grass_sprites.begin();
 
     draw_water(
-        &mut base_sprites,
+        &mut water_sprites,
         game,
         assets,
         min_gx,
         min_gy,
         max_gx,
         max_gy,
+        elapsed,
     );
     draw_foam(
         &mut base_sprites,
@@ -205,6 +208,7 @@ pub fn render_frame(
         max_gy,
     );
 
+    water_sprites.finish(gpu);
     base_sprites.finish(gpu);
     grass_sprites.finish(gpu);
 
@@ -369,7 +373,8 @@ pub fn render_frame(
             occlusion_query_set: None,
         });
 
-        // World-space draws: base terrain → grass (wind shader) → effects → foreground → fog → prims
+        // World-space draws: water → base terrain → grass → effects → foreground → fog → prims
+        water_sprites.render_with_pipeline(&mut pass, gpu, &assets.textures, text_textures, &gpu.water_pipeline);
         base_sprites.render(&mut pass, gpu, &assets.textures, text_textures);
         grass_sprites.render_with_pipeline(&mut pass, gpu, &assets.textures, text_textures, &gpu.grass_pipeline);
         effects.render(&mut pass, gpu);
@@ -402,12 +407,14 @@ fn draw_water(
     min_gy: u32,
     max_gx: u32,
     max_gy: u32,
+    elapsed: f64,
 ) {
     let Some(tex_id) = assets.water_texture else {
         return;
     };
     let tex = &assets.textures[tex_id];
     let ts = TILE_SIZE;
+    let time = (elapsed % 1000.0) as f32;
     for gy in min_gy..max_gy {
         for gx in min_gx..max_gx {
             if game.grid.get(gx, gy) != TileKind::Water
@@ -425,7 +432,7 @@ fn draw_water(
                 [gx as f32 * ts, gy as f32 * ts, ts, ts],
                 (tex.width, tex.height),
                 false,
-                [1.0, 1.0, 1.0, 1.0],
+                [time, 0.0, 0.0, 1.0],
             );
         }
     }
