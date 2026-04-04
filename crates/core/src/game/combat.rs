@@ -1,7 +1,6 @@
 use super::*;
 
 impl Game {
-
     /// Execute an attack. For ranged attacks, `target_snapshot_pos` is the world position
     /// the target was at when the archer decided to shoot (for projectile lag/miss).
     pub(super) fn execute_attack(
@@ -47,14 +46,26 @@ impl Game {
             let ay = self.units[attacker_idx].y;
 
             // Start cooldown + attack anim on attacker
-            let cd = self.units[attacker_idx].kind.cooldown_from_config(&self.config);
+            let cd = self.units[attacker_idx]
+                .kind
+                .cooldown_from_config(&self.config);
             self.units[attacker_idx].start_attack_cooldown_cfg(cd);
             let anim = self.units[attacker_idx].next_attack_anim();
             self.units[attacker_idx].set_anim(anim);
 
             // Spawn ballistic projectile — damage applied on landing
-            self.projectiles
-                .push(Projectile::new_with_speed(ax, ay, snap_x, snap_y, damage, faction, self.config.arrow_speed, self.config.arrow_arc_base));
+            let mut proj = Projectile::new_with_speed(
+                ax,
+                ay,
+                snap_x,
+                snap_y,
+                damage,
+                faction,
+                self.config.arrow_speed,
+                self.config.arrow_arc_base,
+            );
+            proj.target_unit = Some(defender_id);
+            self.projectiles.push(proj);
 
             self.turn_events.push(TurnEvent::RangedAttack {
                 attacker_id,
@@ -169,25 +180,6 @@ impl Game {
         best
     }
 
-    /// Distance from a world position to the nearest enemy of the given faction.
-    /// Returns `f32::MAX` if no enemies exist.
-    /// Uses the spatial hash, searching up to vision radius first; falls back to full scan
-    /// only if no enemy is found within that range (rare).
-    pub(super) fn nearest_enemy_dist(&self, x: f32, y: f32, faction: Faction) -> f32 {
-        let search_radius = self.config.ai_vision_radius as f32 * TILE_SIZE;
-        let mut best = f32::MAX;
-        for i in self.spatial.query(x, y, search_radius) {
-            let u = &self.units[i];
-            if u.faction == faction {
-                continue;
-            }
-            let d = u.distance_to_pos(x, y);
-            if d < best {
-                best = d;
-            }
-        }
-        best
-    }
     /// Tick building combat: find nearest enemy, fire projectiles.
     /// Zone-linked buildings derive their faction from zone capture progress.
     pub(super) fn tick_building_combat(&mut self, dt: f32) {
@@ -225,14 +217,22 @@ impl Game {
 
             if let Some((tx, ty)) = self.find_nearest_enemy_from(bx.0, bx.1, faction, range) {
                 self.buildings[i].attack_cooldown = self.buildings[i].kind.base_cooldown();
-                self.projectiles
-                    .push(Projectile::new_with_speed(bx.0, bx.1, tx, ty, damage, faction, self.config.arrow_speed, self.config.arrow_arc_base));
+                self.projectiles.push(Projectile::new_with_speed(
+                    bx.0,
+                    bx.1,
+                    tx,
+                    ty,
+                    damage,
+                    faction,
+                    self.config.arrow_speed,
+                    self.config.arrow_arc_base,
+                ));
             }
         }
     }
 
     /// Find the nearest alive enemy of the opposing faction within range from a world position.
-    /// Uses the spatial hash to limit the search.
+    /// Uses the spatial hash to limit the search. Checks line of sight.
     fn find_nearest_enemy_from(
         &self,
         x: f32,
@@ -247,7 +247,10 @@ impl Game {
                 continue;
             }
             let dist = u.distance_to_pos(x, y);
-            if dist <= range && best.map_or(true, |b| dist < b.2) {
+            if dist <= range
+                && self.has_line_of_sight(x, y, u.x, u.y)
+                && best.map_or(true, |b| dist < b.2)
+            {
                 best = Some((u.x, u.y, dist));
             }
         }

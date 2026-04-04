@@ -8,11 +8,11 @@ mod orders;
 mod player;
 mod setup;
 
-use crate::config::GameConfig;
 use crate::animation::TurnEvent;
 use crate::building::{self, BaseBuilding};
 use crate::camera::Camera;
 use crate::combat as crate_combat;
+use crate::config::GameConfig;
 use crate::flowfield::FactionFlowState;
 use crate::grid::{self, Grid, TileKind, GRID_SIZE, TILE_SIZE};
 use crate::mapgen;
@@ -128,6 +128,8 @@ pub struct Game {
     spawn_queue: [Vec<UnitKind>; 2],
     /// Timer between individual unit spawns per faction [Blue, Red].
     spawn_timer: [f32; 2],
+    /// Per-faction flag: skip rally_hold when dominating (all zones held).
+    skip_rally: [bool; 2],
     /// Unified flow field for Blue faction (multi-source, all map objectives).
     blue_flow: FactionFlowState,
     /// Unified flow field for Red faction (multi-source, all map objectives).
@@ -186,6 +188,7 @@ impl Game {
             winner: None,
             spawn_queue: [Vec::new(), Vec::new()],
             spawn_timer: [0.0; 2],
+            skip_rally: [false; 2],
             blue_flow: FactionFlowState::new(),
             red_flow: FactionFlowState::new(),
             macro_objectives: [Vec::new(), Vec::new()],
@@ -286,10 +289,21 @@ impl Game {
             proj.update(dt as f32);
         }
 
-        // Apply damage on arrow impact
+        // Apply damage on arrow impact — prefer the original target if still alive and nearby
         for proj in &self.projectiles {
             if proj.finished && proj.damage > 0 {
-                if let Some(idx) = self.find_unit_near(proj.target_x, proj.target_y, proj.faction) {
+                let hit_radius = TILE_SIZE * 0.75;
+                let target_idx = proj
+                    .target_unit
+                    .and_then(|tid| {
+                        self.units.iter().position(|u| {
+                            u.id == tid
+                                && u.alive
+                                && u.distance_to_pos(proj.target_x, proj.target_y) <= hit_radius
+                        })
+                    })
+                    .or_else(|| self.find_unit_near(proj.target_x, proj.target_y, proj.faction));
+                if let Some(idx) = target_idx {
                     self.units[idx].take_damage(proj.damage);
                 }
             }
@@ -361,7 +375,6 @@ impl Game {
         self.tick_authority();
         self.tick_sheep(dt);
         self.tick_pawns(dt);
-
     }
 
     fn tick_sheep(&mut self, dt: f32) {

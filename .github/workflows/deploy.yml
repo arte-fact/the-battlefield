@@ -23,27 +23,25 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-emscripten
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Emscripten SDK
-        uses: mymindstorm/setup-emsdk@v14
-        with:
-          version: latest
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli
 
-      - name: Build SDL Emscripten
-        run: bash build-sdl-web.sh
+      - name: Build wgpu web
+        run: bash build-wgpu-web.sh
 
       - name: Prepare deployment
         run: |
           mkdir -p _site
-          cp web-sdl/dist/index.html _site/
-          cp web-sdl/dist/battlefield.js _site/
-          cp web-sdl/dist/battlefield.wasm _site/
-          cp web-sdl/dist/manifest.json _site/
-          cp web-sdl/dist/sw.js _site/
-          cp -r web-sdl/dist/icons _site/icons 2>/dev/null || true
+          cp web-wgpu/index.html _site/
+          cp web-wgpu/battlefield_wgpu_native.js _site/
+          cp web-wgpu/battlefield_wgpu_native_bg.wasm _site/
+          cp web-wgpu/manifest.json _site/
+          cp web-wgpu/sw.js _site/
+          cp -r web-wgpu/icons _site/icons 2>/dev/null || true
 
       - uses: actions/upload-pages-artifact@v3
 

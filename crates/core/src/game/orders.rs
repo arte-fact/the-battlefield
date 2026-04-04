@@ -125,7 +125,8 @@ impl Game {
             // same result every time at the same authority level.
             let accepts = {
                 let auth_bracket = (self.authority * 10.0) as u32; // changes every ~10 rep
-                let mut h = self.units[idx].id.wrapping_mul(2654435761) ^ auth_bracket.wrapping_mul(40503);
+                let mut h =
+                    self.units[idx].id.wrapping_mul(2654435761) ^ auth_bracket.wrapping_mul(40503);
                 h ^= h >> 13;
                 h = h.wrapping_mul(0x5bd1e995);
                 h ^= h >> 15;
@@ -142,8 +143,10 @@ impl Game {
                 "charge" => {
                     let aim = self.player_aim_dir;
                     OrderKind::Charge {
-                        target_x: player_x + aim.cos() * self.config.charge_distance_tiles * TILE_SIZE,
-                        target_y: player_y + aim.sin() * self.config.charge_distance_tiles * TILE_SIZE,
+                        target_x: player_x
+                            + aim.cos() * self.config.charge_distance_tiles * TILE_SIZE,
+                        target_y: player_y
+                            + aim.sin() * self.config.charge_distance_tiles * TILE_SIZE,
                     }
                 }
                 "defend" => OrderKind::Defend {
@@ -165,6 +168,23 @@ impl Game {
             self.units[idx].ai_waypoints.clear();
             self.units[idx].ai_waypoint_idx = 0;
             self.units[idx].ai_path_cooldown = 0.0;
+            self.units[idx].follow_arrived = false;
+            // Assign stable defend slot at issue time (not re-sorted every frame)
+            if matches!(order, OrderKind::Defend { .. }) {
+                let slot = self
+                    .units
+                    .iter()
+                    .filter(|u| {
+                        u.alive
+                            && u.kind == self.units[idx].kind
+                            && matches!(u.order, Some(OrderKind::Defend { .. }))
+                            && u.defend_slot.is_some()
+                    })
+                    .count() as u8;
+                self.units[idx].defend_slot = Some(slot);
+            } else {
+                self.units[idx].defend_slot = None;
+            }
             acknowledged += 1;
         }
         acknowledged
@@ -183,13 +203,26 @@ impl Game {
         };
 
         // Combat (leashed to player position)
-        if self.ai_order_combat(ai_idx, player_x, player_y, self.config.order_leash_tiles * TILE_SIZE, dt) {
+        if self.ai_order_combat(
+            ai_idx,
+            player_x,
+            player_y,
+            self.config.order_leash_tiles * TILE_SIZE,
+            dt,
+        ) {
             return;
         }
 
-        // Follow the player — spread out in a ring
+        // Follow the player — spread out in a ring (with dead-band to prevent overshoot jitter)
         let dist = self.units[ai_idx].distance_to_pos(player_x, player_y);
-        if dist < self.config.follow_distance_tiles * TILE_SIZE {
+        let inner = self.config.follow_distance_tiles * TILE_SIZE;
+        let outer = inner + self.config.follow_deadband_tiles * TILE_SIZE;
+        if dist < inner {
+            self.units[ai_idx].follow_arrived = true;
+        } else if dist > outer {
+            self.units[ai_idx].follow_arrived = false;
+        }
+        if self.units[ai_idx].follow_arrived {
             self.units[ai_idx].set_anim(UnitAnim::Idle);
         } else {
             let slot = self.units[ai_idx].id as f32;
@@ -263,22 +296,15 @@ impl Game {
             UnitKind::Monk => self.config.defend_line_monk_tiles * TILE_SIZE,
         };
 
-        // Assign a slot within the line based on unit ID among same-kind defenders
-        let unit_id = self.units[ai_idx].id;
-        let mut same_kind_ids: Vec<UnitId> = self
+        // Use stable slot assigned at order-issue time (prevents jumping on ally death)
+        let slot = self.units[ai_idx].defend_slot.unwrap_or(0) as f32;
+        let count = self
             .units
             .iter()
             .filter(|u| {
                 u.alive && u.kind == kind && matches!(u.order, Some(OrderKind::Defend { .. }))
             })
-            .map(|u| u.id)
-            .collect();
-        same_kind_ids.sort_unstable();
-        let slot = same_kind_ids
-            .iter()
-            .position(|&id| id == unit_id)
-            .unwrap_or(0) as f32;
-        let count = same_kind_ids.len() as f32;
+            .count() as f32;
 
         // Behind direction (opposite of facing)
         let behind_dir = facing_dir + std::f32::consts::PI;
@@ -289,13 +315,16 @@ impl Game {
         // Position: anchor + behind offset + perpendicular spread
         let behind_x = behind_dir.cos() * row_dist;
         let behind_y = behind_dir.sin() * row_dist;
-        let lateral_offset = (slot - (count - 1.0) / 2.0) * self.config.defend_spacing_tiles * TILE_SIZE;
+        let lateral_offset =
+            (slot - (count - 1.0) / 2.0) * self.config.defend_spacing_tiles * TILE_SIZE;
         let post_x = anchor_x + behind_x + perp_x * lateral_offset;
         let post_y = anchor_y + behind_y + perp_y * lateral_offset;
 
         // Combat (leashed to formation post — melee stays close, ranged has longer reach)
         let leash = match kind {
-            UnitKind::Warrior | UnitKind::Lancer => self.config.defend_leash_melee_tiles * TILE_SIZE,
+            UnitKind::Warrior | UnitKind::Lancer => {
+                self.config.defend_leash_melee_tiles * TILE_SIZE
+            }
             UnitKind::Archer => self.config.defend_leash_ranged_tiles * TILE_SIZE,
             UnitKind::Monk => self.config.defend_leash_melee_tiles * TILE_SIZE,
         };

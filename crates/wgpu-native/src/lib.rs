@@ -5,6 +5,59 @@ use wasm_bindgen::JsCast;
 
 static GAME_LOOP_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// Read the browser viewport size in device pixels every frame, matching
+/// SDL's `emscripten::viewport_size_device_pixels()` approach.  Winit's
+/// `inner_size()` returns a cached value that can be stale during mobile
+/// orientation changes.
+///
+/// Prefers `visualViewport` (accurate on mobile — excludes virtual keyboard,
+/// tracks address-bar state) with `window.innerWidth/Height` fallback.
+fn viewport_size_device_pixels() -> (u32, u32, f64) {
+    use wasm_bindgen::JsValue;
+    let window = web_sys::window().expect("no window");
+    let dpr = window.device_pixel_ratio().max(1.0);
+
+    // visualViewport gives the actual visible area on mobile
+    let vv = js_sys::Reflect::get(&window, &JsValue::from_str("visualViewport"))
+        .ok()
+        .filter(|v| !v.is_undefined() && !v.is_null());
+    let (css_w, css_h) = if let Some(ref vv) = vv {
+        let w = js_sys::Reflect::get(vv, &JsValue::from_str("width"))
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let h = js_sys::Reflect::get(vv, &JsValue::from_str("height"))
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        if w > 0.0 && h > 0.0 {
+            (w, h)
+        } else {
+            (
+                window.inner_width().unwrap().as_f64().unwrap_or(960.0),
+                window.inner_height().unwrap().as_f64().unwrap_or(640.0),
+            )
+        }
+    } else {
+        (
+            window.inner_width().unwrap().as_f64().unwrap_or(960.0),
+            window.inner_height().unwrap().as_f64().unwrap_or(640.0),
+        )
+    };
+
+    // Respect canvas CSS width when the AI panel narrows the container.
+    let effective_w = window
+        .document()
+        .and_then(|d| d.get_element_by_id("canvas"))
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+        .map(|el| el.offset_width() as f64)
+        .filter(|&w| w > 0.0 && w < css_w)
+        .unwrap_or(css_w);
+    let w = (effective_w * dpr).round() as u32;
+    let h = (css_h * dpr).round() as u32;
+    (w.max(1), h.max(1), dpr)
+}
+
 #[wasm_bindgen(start)]
 pub fn web_main() {
     console_error_panic_hook::set_once();
@@ -58,10 +111,11 @@ pub fn web_main() {
 
             wasm_bindgen_futures::spawn_local(async move {
                 let mut game_loop = GameLoop::new_async(window_clone.clone()).await;
-                let size = window_clone.inner_size();
-                let dpr = window_clone.scale_factor();
-                if size.width > 1 && size.height > 1 {
-                    game_loop.resize(size.width, size.height);
+                // Use JS viewport dimensions for initial size (winit's
+                // inner_size may not reflect the true viewport yet).
+                let (vp_w, vp_h, dpr) = viewport_size_device_pixels();
+                if vp_w > 1 && vp_h > 1 {
+                    game_loop.resize(vp_w, vp_h);
                     game_loop.set_dpi(dpr);
                 }
                 let ptr = Box::into_raw(Box::new(game_loop));
@@ -92,24 +146,23 @@ pub fn web_main() {
                     game_loop.resize(size.width, size.height);
                 }
                 WindowEvent::ScaleFactorChanged { .. } => {
-                    if let Some(w) = &self.window {
-                        game_loop.set_dpi(w.scale_factor());
-                        let size = w.inner_size();
-                        game_loop.resize(size.width, size.height);
-                    }
+                    let (vp_w, vp_h, dpr) = viewport_size_device_pixels();
+                    game_loop.set_dpi(dpr);
+                    game_loop.resize(vp_w, vp_h);
                 }
                 WindowEvent::RedrawRequested => {
-                    if let Some(w) = &self.window {
-                        let size = w.inner_size();
-                        let cur_w = game_loop.gpu.surface_config.width;
-                        let cur_h = game_loop.gpu.surface_config.height;
-                        if size.width != cur_w || size.height != cur_h {
-                            game_loop.resize(size.width, size.height);
-                        }
-                        let dpr = w.scale_factor();
-                        if (dpr - game_loop.dpi_scale).abs() > 0.01 {
-                            game_loop.set_dpi(dpr);
-                        }
+                    // Poll actual viewport size from JS every frame (like
+                    // SDL's emscripten::viewport_size_device_pixels).
+                    // Winit's inner_size() returns a cached value that can
+                    // be stale during orientation changes on mobile.
+                    let (vp_w, vp_h, dpr) = viewport_size_device_pixels();
+                    let cur_w = game_loop.gpu.surface_config.width;
+                    let cur_h = game_loop.gpu.surface_config.height;
+                    if vp_w != cur_w || vp_h != cur_h {
+                        game_loop.resize(vp_w, vp_h);
+                    }
+                    if (dpr - game_loop.dpi_scale).abs() > 0.01 {
+                        game_loop.set_dpi(dpr);
                     }
                     game_loop.step();
                     game_loop.end_frame();

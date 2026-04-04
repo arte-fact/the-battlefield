@@ -338,23 +338,41 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
     let px = perp_x / perp_len;
     let py = perp_y / perp_len;
     let spread_near = 16.0; // offset for B1/B2 and R1/R2 (narrow ends of diamond)
-    let spread_mid = 30.0;  // offset for C1/C3 (wide center of diamond)
+    let spread_mid = 30.0; // offset for C1/C3 (wide center of diamond)
 
     // B1, B2: 30% from Blue base, offset left/right (narrow)
     let t_near = 0.28;
-    let b1 = ((bx + dx * t_near + px * spread_near) as u32, (by + dy * t_near + py * spread_near) as u32);
-    let b2 = ((bx + dx * t_near - px * spread_near) as u32, (by + dy * t_near - py * spread_near) as u32);
+    let b1 = (
+        (bx + dx * t_near + px * spread_near) as u32,
+        (by + dy * t_near + py * spread_near) as u32,
+    );
+    let b2 = (
+        (bx + dx * t_near - px * spread_near) as u32,
+        (by + dy * t_near - py * spread_near) as u32,
+    );
 
     // C1, C2, C3: center line (50%), C1/C3 pushed wide for diamond shape
     let t_mid = 0.50;
-    let c1 = ((bx + dx * t_mid + px * spread_mid) as u32, (by + dy * t_mid + py * spread_mid) as u32);
+    let c1 = (
+        (bx + dx * t_mid + px * spread_mid) as u32,
+        (by + dy * t_mid + py * spread_mid) as u32,
+    );
     let c2 = ((bx + dx * t_mid) as u32, (by + dy * t_mid) as u32);
-    let c3 = ((bx + dx * t_mid - px * spread_mid) as u32, (by + dy * t_mid - py * spread_mid) as u32);
+    let c3 = (
+        (bx + dx * t_mid - px * spread_mid) as u32,
+        (by + dy * t_mid - py * spread_mid) as u32,
+    );
 
     // R1, R2: 30% from Red base (= 70% from Blue), offset left/right (narrow)
     let t_far = 0.72;
-    let r1 = ((bx + dx * t_far + px * spread_near) as u32, (by + dy * t_far + py * spread_near) as u32);
-    let r2 = ((bx + dx * t_far - px * spread_near) as u32, (by + dy * t_far - py * spread_near) as u32);
+    let r1 = (
+        (bx + dx * t_far + px * spread_near) as u32,
+        (by + dy * t_far + py * spread_near) as u32,
+    );
+    let r2 = (
+        (bx + dx * t_far - px * spread_near) as u32,
+        (by + dy * t_far - py * spread_near) as u32,
+    );
 
     // Order: B1, B2, C1, C2, C3, R1, R2 (indices 0-6)
     let zone_centers = vec![b1, b2, c1, c2, c3, r1, r2];

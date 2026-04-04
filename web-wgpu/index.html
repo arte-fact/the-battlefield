@@ -18,21 +18,23 @@
     <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
 
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; }
         html, body {
             background: #1a1a2e;
             overflow: hidden;
             width: 100%;
-            height: 100%;
+            height: 100dvh;            /* dvh tracks address-bar show/hide */
+            height: 100%;              /* fallback for older browsers */
+            position: fixed;           /* prevent iOS rubber-band scroll */
             overscroll-behavior: none;
             touch-action: none;
             -webkit-touch-callout: none;
             -webkit-user-select: none;
             user-select: none;
-            padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+            /* safe-area handled by game rendering, not body padding */
         }
         #canvas-container {
-            position: absolute;
+            position: fixed;
             top: 0;
             left: 0;
             right: 0;
@@ -519,26 +521,68 @@
         document.getElementById('ai-config-toggle').addEventListener('click', togglePanel);
         document.getElementById('ai-config-reset').addEventListener('click', resetAll);
 
+        // ── Viewport helpers ─────────────────────────────────────────
+        // visualViewport gives the actual visible area on mobile (excludes
+        // virtual keyboard, accounts for pinch-zoom and address-bar state).
+        function viewportW() {
+            return (window.visualViewport ? window.visualViewport.width : window.innerWidth);
+        }
+        function viewportH() {
+            return (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+        }
+
         function resizeCanvas() {
             var container = document.getElementById('canvas-container');
             var c = document.getElementById('canvas');
-            var dpr = window.devicePixelRatio || 1;
-            var w = container.clientWidth;
-            var h = container.clientHeight;
+            var w = aiPanelOpen ? container.clientWidth : viewportW();
+            var h = viewportH();
+            // Only set CSS dimensions — wgpu owns the canvas drawing buffer
+            // via surface.configure(). Setting canvas.width/height from JS
+            // races with wgpu and causes flicker on mobile.
             c.style.width = w + 'px';
             c.style.height = h + 'px';
-            c.width = Math.round(w * dpr);
-            c.height = Math.round(h * dpr);
         }
         resizeCanvas();
         window.addEventListener('resize', resizeCanvas);
-
-        // Register Service Worker
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(function() {});
+        // visualViewport fires when address bar shows/hides or keyboard opens
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', resizeCanvas);
         }
 
-        // Fullscreen + wake lock + orientation lock
+        // ── Service Worker + update notification ────────────────────
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js', { scope: './' })
+                .then(function(reg) {
+                    // Detect new service worker ready → reload for update
+                    reg.addEventListener('updatefound', function() {
+                        var newSW = reg.installing;
+                        if (newSW) {
+                            newSW.addEventListener('statechange', function() {
+                                if (newSW.state === 'activated' && navigator.serviceWorker.controller) {
+                                    // New version cached — reload on next focus
+                                    window.__swUpdateReady = true;
+                                }
+                            });
+                        }
+                    });
+                }).catch(function() {});
+        }
+
+        // ── Platform detection ──────────────────────────────────────
+        var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+            || ('ontouchstart' in window && navigator.maxTouchPoints > 1);
+        var isStandalone = window.matchMedia('(display-mode: standalone)').matches
+            || window.matchMedia('(display-mode: fullscreen)').matches
+            || window.navigator.standalone === true;
+        var isFullscreen = false;
+
+        // ── Fullscreen + wake lock ──────────────────────────────────
+        function requestWakeLock() {
+            if ('wakeLock' in navigator) {
+                navigator.wakeLock.request('screen').catch(function() {});
+            }
+        }
+
         window.__requestFullscreen = function() {
             var el = document.documentElement;
             var rfs = el.requestFullscreen
@@ -547,47 +591,73 @@
                 || el.msRequestFullscreen;
             if (rfs) {
                 rfs.call(el).then(function() {
-                    // Try to lock orientation to current after entering fullscreen
+                    isFullscreen = true;
                     if (screen.orientation && screen.orientation.lock) {
                         screen.orientation.lock('any').catch(function() {});
                     }
                 }).catch(function() {});
             }
-            if ('wakeLock' in navigator) {
-                navigator.wakeLock.request('screen').catch(function() {});
-            }
+            requestWakeLock();
         };
 
-        // Trigger fullscreen on first user interaction (matches SDL PWA behavior).
-        // Browsers require a user gesture to enter fullscreen.
-        var fullscreenRequested = false;
-        function onFirstInteraction() {
-            if (fullscreenRequested) return;
-            fullscreenRequested = true;
-            // Only auto-fullscreen in standalone/PWA mode or mobile
-            var isStandalone = window.matchMedia('(display-mode: standalone)').matches
-                || window.matchMedia('(display-mode: fullscreen)').matches
-                || window.navigator.standalone === true;
-            var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-            if (isStandalone || isMobile) {
+        // ── Force fullscreen on EVERY user tap (mobile only) ────────
+        // Mobile browsers can exit fullscreen via swipe or system gestures.
+        // Re-enter on the next touch so the game stays immersive.
+        function onInteraction() {
+            if (!isMobile && !isStandalone) return;
+            if (!isFullscreen) {
                 window.__requestFullscreen();
             }
-            document.removeEventListener('click', onFirstInteraction);
-            document.removeEventListener('touchstart', onFirstInteraction);
         }
-        document.addEventListener('click', onFirstInteraction, { once: true });
-        document.addEventListener('touchstart', onFirstInteraction, { once: true });
+        document.addEventListener('touchstart', onInteraction, { passive: true });
+        document.addEventListener('click', onInteraction);
 
-        // Re-request wake lock when page becomes visible again (e.g. switching back to tab)
+        // Track fullscreen state so we know when to re-enter
+        function onFullscreenChange() {
+            isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+            resizeCanvas();
+            setTimeout(resizeCanvas, 100);
+        }
+        document.addEventListener('fullscreenchange', onFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
+        // ── Visibility change: re-acquire wake lock + apply SW update ──
         document.addEventListener('visibilitychange', function() {
-            if (document.visibilityState === 'visible' && 'wakeLock' in navigator) {
-                navigator.wakeLock.request('screen').catch(function() {});
+            if (document.visibilityState === 'visible') {
+                requestWakeLock();
+                // If a SW update landed while backgrounded, reload
+                if (window.__swUpdateReady) {
+                    window.__swUpdateReady = false;
+                    location.reload();
+                }
             }
         });
 
-        // Handle fullscreen exit — resize canvas
-        document.addEventListener('fullscreenchange', function() { resizeCanvas(); setTimeout(resizeCanvas, 100); });
-        document.addEventListener('webkitfullscreenchange', function() { resizeCanvas(); setTimeout(resizeCanvas, 100); });
+        // ── Orientation change backup ───────────────────────────────
+        if (screen.orientation) {
+            screen.orientation.addEventListener('change', function() {
+                setTimeout(resizeCanvas, 50);
+                setTimeout(resizeCanvas, 200);
+            });
+        }
+
+        // ── PWA install prompt ──────────────────────────────────────
+        // Capture Chrome's beforeinstallprompt so we can trigger it later.
+        var deferredInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', function(e) {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+        });
+        // Expose for game UI to call (e.g. an "Install" button)
+        window.__installPWA = function() {
+            if (deferredInstallPrompt) {
+                deferredInstallPrompt.prompt();
+                deferredInstallPrompt.userChoice.then(function() {
+                    deferredInstallPrompt = null;
+                });
+            }
+        };
+        window.__canInstallPWA = function() { return !!deferredInstallPrompt; };
     </script>
     <script type="module">
         import init, { get_ai_config, set_ai_config } from './battlefield_wgpu_native.js';

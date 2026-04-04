@@ -128,10 +128,17 @@ impl GameLoop {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.gpu.resize(width, height);
+        self.gpu.resize(width, height); // proportionally clamped inside
+                                        // Camera and input use raw device pixel dimensions, matching
+                                        // winit touch/cursor coordinates.  The GPU surface renders at
+                                        // lower resolution but same aspect ratio — no distortion.
         if width > 0 && height > 0 {
             self.game.camera.resize(width as f32, height as f32);
-            self.game.camera.zoom = self.game.camera.ideal_zoom();
+            self.game.camera.zoom = self.game.camera.ideal_zoom_for_dpi(self.touch_dpr);
+            self.input_state
+                .set_canvas_size(width as f32, height as f32);
+            self.input_state
+                .update_layout(width as f32, height as f32, self.touch_dpr);
         }
     }
 
@@ -233,8 +240,10 @@ impl GameLoop {
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_gamepad();
 
-        let vw = self.gpu.surface_config.width;
-        let vh = self.gpu.surface_config.height;
+        // Use camera viewport (raw device pixels) — matches winit
+        // touch/cursor coordinates, not the clamped GPU surface.
+        let vw = self.game.camera.viewport_w as u32;
+        let vh = self.game.camera.viewport_h as u32;
 
         // Update touch layout
         self.input_state.set_canvas_size(vw as f32, vh as f32);

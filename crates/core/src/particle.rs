@@ -104,6 +104,8 @@ pub struct Projectile {
     pub damage: i32,
     /// Faction of the archer who fired (enemies of this faction can be hit).
     pub faction: Faction,
+    /// Original target unit ID — prefer this unit on impact if still alive and nearby.
+    pub target_unit: Option<u32>,
 }
 
 impl Projectile {
@@ -115,7 +117,16 @@ impl Projectile {
         damage: i32,
         faction: Faction,
     ) -> Self {
-        Self::new_with_speed(start_x, start_y, target_x, target_y, damage, faction, ARROW_SPEED, ARC_BASE)
+        Self::new_with_speed(
+            start_x,
+            start_y,
+            target_x,
+            target_y,
+            damage,
+            faction,
+            ARROW_SPEED,
+            ARC_BASE,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -154,6 +165,7 @@ impl Projectile {
             arc_height,
             damage,
             faction,
+            target_unit: None,
         }
     }
 

@@ -209,9 +209,7 @@ pub(super) fn draw_hud(
             stroke_circle(canvas, cx, cy, pip_r);
         }
     }
-
 }
-
 
 pub(super) fn draw_minimap(canvas: &mut Canvas<Window>, game: &Game, assets: &Assets) {
     let (canvas_w, _canvas_h) = canvas.output_size().unwrap_or((960, 640));

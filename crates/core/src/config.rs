@@ -22,6 +22,14 @@ pub struct GameConfig {
     pub separation_radius_mult: f32,
     pub flow_weight: f32,
     pub separation_weight: f32,
+    pub zone_lock_duration: f32,
+    pub combat_target_commit_secs: f32,
+    pub combat_disengage_margin_tiles: f32,
+    pub kite_hysteresis_tiles: f32,
+    pub lancer_backoff_hysteresis_tiles: f32,
+    pub follow_deadband_tiles: f32,
+    pub zone_idle_margin_tiles: f32,
+    pub separation_smoothing: f32,
     pub fov_radius: i32,
     pub move_speed_divisor: f32,
 
@@ -110,9 +118,16 @@ impl Default for GameConfig {
             separation_radius_mult: 3.0,
             flow_weight: 0.8,
             separation_weight: 0.2,
+            zone_lock_duration: 5.0,
+            combat_target_commit_secs: 1.0,
+            combat_disengage_margin_tiles: 2.0,
+            kite_hysteresis_tiles: 0.75,
+            lancer_backoff_hysteresis_tiles: 0.5,
+            follow_deadband_tiles: 0.5,
+            zone_idle_margin_tiles: 1.5,
+            separation_smoothing: 0.3,
             fov_radius: 15,
             move_speed_divisor: 0.90,
-
 
             // Authority System
             authority_follow_base: 0.30,
@@ -174,7 +189,7 @@ impl Default for GameConfig {
             base_capture_time: 16.0,
             max_capture_multiplier: 3.0,
             max_units_per_faction: 35,
-            zone_radius: 4,
+            zone_radius: 6,
             victory_hold_time: 60.0,
         }
     }

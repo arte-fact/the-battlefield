@@ -245,6 +245,22 @@ pub struct Unit {
     /// Seconds remaining before this unit can be reassigned to a different zone.
     /// Prevents oscillation between zones mid-travel.
     pub zone_lock_timer: f32,
+    /// Sticky combat target — prevents frame-to-frame target switching.
+    pub combat_target: Option<UnitId>,
+    /// Seconds remaining on combat target commitment.
+    pub combat_target_timer: f32,
+    /// Archer kite hysteresis state (true = actively kiting).
+    pub is_kiting: bool,
+    /// Lancer backoff hysteresis state (true = actively backing off).
+    pub is_backing_off: bool,
+    /// Follow order dead-band state (true = close enough to idle).
+    pub follow_arrived: bool,
+    /// Cached defend formation slot — stable across ally deaths.
+    pub defend_slot: Option<u8>,
+    /// EMA-smoothed separation steering X component.
+    pub sep_smooth_x: f32,
+    /// EMA-smoothed separation steering Y component.
+    pub sep_smooth_y: f32,
 }
 
 impl Unit {
@@ -285,6 +301,14 @@ impl Unit {
             attack_variant: false,
             assigned_zone: None,
             zone_lock_timer: 0.0,
+            combat_target: None,
+            combat_target_timer: 0.0,
+            is_kiting: false,
+            is_backing_off: false,
+            follow_arrived: false,
+            defend_slot: None,
+            sep_smooth_x: 0.0,
+            sep_smooth_y: 0.0,
         }
     }
 
@@ -333,11 +357,17 @@ impl Unit {
         self.order_flash = (self.order_flash - dt).max(0.0);
         self.reject_flash = (self.reject_flash - dt).max(0.0);
         self.zone_lock_timer = (self.zone_lock_timer - dt).max(0.0);
+        self.combat_target_timer = (self.combat_target_timer - dt).max(0.0);
+        if self.combat_target_timer <= 0.0 {
+            self.combat_target = None;
+        }
         if self.order.is_some() {
             self.order_timer -= dt;
             if self.order_timer <= 0.0 {
                 self.order = None;
                 self.order_timer = 0.0;
+                self.follow_arrived = false;
+                self.defend_slot = None;
             }
         }
     }

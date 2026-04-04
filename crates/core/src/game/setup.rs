@@ -82,7 +82,11 @@ impl Game {
             self.zone_manager.zones.iter().map(|z| z.state).collect();
 
         self.zone_manager.count_units(&self.units);
-        self.zone_manager.tick_capture(dt, self.config.base_capture_time, self.config.max_capture_multiplier);
+        self.zone_manager.tick_capture(
+            dt,
+            self.config.base_capture_time,
+            self.config.max_capture_multiplier,
+        );
 
         // Collect zone state changes, then apply reputation
         let zone_changes: Vec<_> = self
@@ -120,7 +124,10 @@ impl Game {
         }
 
         if self.winner.is_none() {
-            if let Some(faction) = self.zone_manager.tick_victory(dt, self.config.victory_hold_time) {
+            if let Some(faction) = self
+                .zone_manager
+                .tick_victory(dt, self.config.victory_hold_time)
+            {
                 self.winner = Some(faction);
             }
         }
@@ -140,14 +147,19 @@ impl Game {
                     .filter(|u| u.alive && u.faction == faction)
                     .count();
                 if alive_count < self.config.max_units_per_faction {
-                    let holds_zone = self
+                    let controlled: usize = self
                         .zone_manager
                         .zones
                         .iter()
-                        .any(|z| z.state == crate::zone::ZoneState::Controlled(faction));
-                    let slots = self.config.max_units_per_faction.saturating_sub(alive_count);
+                        .filter(|z| z.state == crate::zone::ZoneState::Controlled(faction))
+                        .count();
+                    let zone_count = self.zone_manager.zones.len();
+                    let slots = self
+                        .config
+                        .max_units_per_faction
+                        .saturating_sub(alive_count);
                     // Double wave size when holding no zones (fill army faster)
-                    let max_wave = if holds_zone {
+                    let max_wave = if controlled > 0 {
                         Self::WAVE.len()
                     } else {
                         Self::WAVE.len() * 2
@@ -160,6 +172,8 @@ impl Game {
                     }
                     self.spawn_queue[fi] = queue;
                     self.spawn_timer[fi] = 0.0;
+                    // Skip rally when dominating — reinforcements march out immediately
+                    self.skip_rally[fi] = zone_count > 0 && controlled == zone_count;
                 }
             }
 
@@ -184,9 +198,12 @@ impl Game {
                         _ => self.red_gather,
                     });
                 let id = self.spawn_unit(kind, faction, sx, sy, false);
-                // Set rally hold — unit waits at base until wave is complete
-                if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
-                    u.rally_hold = true;
+                // Rally hold — unit waits at base until wave is complete.
+                // Skip when dominating (all zones held) — just reinforce.
+                if !self.skip_rally[fi] {
+                    if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
+                        u.rally_hold = true;
+                    }
                 }
 
                 // Wave complete — release all rallying units

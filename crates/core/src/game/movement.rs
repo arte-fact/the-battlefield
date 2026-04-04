@@ -133,7 +133,7 @@ impl Game {
             let ny = dy / dist;
 
             let same_faction = self.units[i].faction == self.units[j].faction;
-            let strength = if same_faction { 0.4 } else { 1.0 };
+            let strength = if same_faction { 0.7 } else { 1.0 };
             let push = overlap * strength;
 
             let i_is_player = self.units[i].is_player;

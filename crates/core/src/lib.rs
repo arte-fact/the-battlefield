@@ -1,10 +1,10 @@
-pub mod config;
 pub mod animation;
 pub mod asset_manifest;
 pub mod autotile;
 pub mod building;
 pub mod camera;
 pub mod combat;
+pub mod config;
 pub mod flowfield;
 pub mod game;
 pub mod grid;

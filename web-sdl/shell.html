@@ -18,12 +18,14 @@
     <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
 
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; }
         html, body {
             background: #1a1a2e;
             overflow: hidden;
             width: 100%;
+            height: 100dvh;
             height: 100%;
+            position: fixed;
             overscroll-behavior: none;
             touch-action: none;
             -webkit-touch-callout: none;
@@ -52,10 +54,17 @@
     <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
     <div id="loading">Loading...</div>
     <script>
+        function viewportW() {
+            return (window.visualViewport ? window.visualViewport.width : window.innerWidth);
+        }
+        function viewportH() {
+            return (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+        }
+
         function resizeCanvas() {
             var c = document.getElementById('canvas');
-            var w = window.innerWidth;
-            var h = window.innerHeight;
+            var w = viewportW();
+            var h = viewportH();
             // SDL2 manages the canvas pixel dimensions; CSS just fills the viewport
             c.style.width = w + 'px';
             c.style.height = h + 'px';
@@ -72,12 +81,38 @@
             }
         };
 
-        // Register Service Worker
+        // ── Platform detection ──────────────────────────────────────
+        var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+            || ('ontouchstart' in window && navigator.maxTouchPoints > 1);
+        var isStandalone = window.matchMedia('(display-mode: standalone)').matches
+            || window.matchMedia('(display-mode: fullscreen)').matches
+            || window.navigator.standalone === true;
+        var isFullscreen = false;
+
+        // ── Service Worker + update notification ────────────────────
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(function() {});
+            navigator.serviceWorker.register('./sw.js', { scope: './' })
+                .then(function(reg) {
+                    reg.addEventListener('updatefound', function() {
+                        var newSW = reg.installing;
+                        if (newSW) {
+                            newSW.addEventListener('statechange', function() {
+                                if (newSW.state === 'activated' && navigator.serviceWorker.controller) {
+                                    window.__swUpdateReady = true;
+                                }
+                            });
+                        }
+                    });
+                }).catch(function() {});
         }
 
-        // Fullscreen + wake lock
+        // ── Fullscreen + wake lock ──────────────────────────────────
+        function requestWakeLock() {
+            if ('wakeLock' in navigator) {
+                navigator.wakeLock.request('screen').catch(function() {});
+            }
+        }
+
         window.__requestFullscreen = function() {
             var el = document.documentElement;
             var rfs = el.requestFullscreen
@@ -85,15 +120,75 @@
                 || el.mozRequestFullScreen
                 || el.msRequestFullscreen;
             if (rfs) {
-                rfs.call(el).catch(function() {});
+                rfs.call(el).then(function() {
+                    isFullscreen = true;
+                    if (screen.orientation && screen.orientation.lock) {
+                        screen.orientation.lock('any').catch(function() {});
+                    }
+                }).catch(function() {});
             }
-            if ('wakeLock' in navigator) {
-                navigator.wakeLock.request('screen').catch(function() {});
+            requestWakeLock();
+        };
+
+        // Re-enter fullscreen on every touch (mobile only).
+        // Mobile browsers can exit fullscreen via swipe or system gesture.
+        function onInteraction() {
+            if (!isMobile && !isStandalone) return;
+            if (!isFullscreen) {
+                window.__requestFullscreen();
+            }
+        }
+        document.addEventListener('touchstart', onInteraction, { passive: true });
+        document.addEventListener('click', onInteraction);
+
+        function onFullscreenChange() {
+            isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+            resizeCanvas();
+            setTimeout(resizeCanvas, 100);
+        }
+        document.addEventListener('fullscreenchange', onFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
+        // Re-acquire wake lock + apply SW update on visibility change
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'visible') {
+                requestWakeLock();
+                if (window.__swUpdateReady) {
+                    window.__swUpdateReady = false;
+                    location.reload();
+                }
+            }
+        });
+
+        // Orientation change backup
+        if (screen.orientation) {
+            screen.orientation.addEventListener('change', function() {
+                setTimeout(resizeCanvas, 50);
+                setTimeout(resizeCanvas, 200);
+            });
+        }
+
+        // ── PWA install prompt ──────────────────────────────────────
+        var deferredInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', function(e) {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+        });
+        window.__installPWA = function() {
+            if (deferredInstallPrompt) {
+                deferredInstallPrompt.prompt();
+                deferredInstallPrompt.userChoice.then(function() {
+                    deferredInstallPrompt = null;
+                });
             }
         };
+        window.__canInstallPWA = function() { return !!deferredInstallPrompt; };
 
         resizeCanvas();
         window.addEventListener('resize', resizeCanvas);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', resizeCanvas);
+        }
     </script>
     <script src="battlefield.js"></script>
 </body>

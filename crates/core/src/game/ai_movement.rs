@@ -30,7 +30,9 @@ impl Game {
                 let gx = gx.max(0) as u32;
                 let gy = gy.max(0) as u32;
 
-                let path = self.grid.find_path(ax, ay, gx, gy, self.config.astar_search_limit, |_, _| false);
+                let path =
+                    self.grid
+                        .find_path(ax, ay, gx, gy, self.config.astar_search_limit, |_, _| false);
 
                 if let Some(steps) = path {
                     self.units[ai_idx].ai_waypoints = steps
@@ -40,7 +42,8 @@ impl Game {
                     self.units[ai_idx].ai_waypoint_idx = 0;
                     // Jitter cooldown using golden ratio to spread units evenly
                     let golden = 0.618034;
-                    let jitter = ((self.units[ai_idx].id as f32 * golden) % 1.0) * self.config.repath_cooldown_mod;
+                    let jitter = ((self.units[ai_idx].id as f32 * golden) % 1.0)
+                        * self.config.repath_cooldown_mod;
                     self.units[ai_idx].ai_path_cooldown = self.config.repath_cooldown_base + jitter;
                 } else {
                     self.units[ai_idx].ai_waypoints.clear();
@@ -65,7 +68,20 @@ impl Game {
             } else if dist > 0.01 {
                 let dir_x = ddx / dist;
                 let dir_y = ddy / dist;
-                self.move_unit(ai_idx, dir_x, dir_y, dt);
+                let (raw_sep_x, raw_sep_y) = self.compute_separation(ai_idx);
+                let alpha = self.config.separation_smoothing;
+                self.units[ai_idx].sep_smooth_x =
+                    self.units[ai_idx].sep_smooth_x * (1.0 - alpha) + raw_sep_x * alpha;
+                self.units[ai_idx].sep_smooth_y =
+                    self.units[ai_idx].sep_smooth_y * (1.0 - alpha) + raw_sep_y * alpha;
+                let sep_x = self.units[ai_idx].sep_smooth_x;
+                let sep_y = self.units[ai_idx].sep_smooth_y;
+                let bx = dir_x * self.config.flow_weight + sep_x * self.config.separation_weight;
+                let by = dir_y * self.config.flow_weight + sep_y * self.config.separation_weight;
+                let len = (bx * bx + by * by).sqrt();
+                if len > 0.01 {
+                    self.move_unit(ai_idx, bx / len, by / len, dt);
+                }
             }
         }
     }
@@ -156,7 +172,26 @@ impl Game {
                 continue;
             }
 
-            let field = crate::flowfield::FlowField::generate(&self.grid, gx, gy);
+            // Seed all passable cells inside the zone radius so units spread across the area
+            let zone = &self.zone_manager.zones[zi];
+            let r = zone.radius as i32;
+            let mut goals = Vec::new();
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx * dx + dy * dy > r * r {
+                        continue;
+                    }
+                    let nx = gx as i32 + dx;
+                    let ny = gy as i32 + dy;
+                    if self.grid.in_bounds(nx, ny) && self.grid.is_passable(nx as u32, ny as u32) {
+                        goals.push((nx as u32, ny as u32, 0));
+                    }
+                }
+            }
+            if goals.is_empty() {
+                goals.push((gx, gy, 0));
+            }
+            let field = crate::flowfield::FlowField::generate_multi_source(&self.grid, &goals);
             match faction {
                 Faction::Blue => {
                     self.blue_flow.zone_fields[zi] = Some(field);
@@ -199,11 +234,10 @@ impl Game {
             let mut attack_zone: Option<u8> = None;
 
             for &(wx, wy, score) in objectives {
-                let zi = self
-                    .zone_manager
-                    .zones
-                    .iter()
-                    .position(|z| (z.center_wx - wx).abs() < 1.0 && (z.center_wy - wy).abs() < 1.0);
+                let zi =
+                    self.zone_manager.zones.iter().position(|z| {
+                        (z.center_wx - wx).abs() < 1.0 && (z.center_wy - wy).abs() < 1.0
+                    });
                 let Some(zi) = zi else { continue };
 
                 if score >= 200.0 && defend_zone.is_none() {
@@ -216,12 +250,19 @@ impl Game {
                 }
             }
 
-            // Collect available AI units for this faction, sorted by index
+            // Collect available AI units for this faction, sorted by index.
+            // Skip rally_hold units (still assembling) and zone-locked units (mid-travel).
             let mut available: Vec<usize> = self
                 .units
                 .iter()
                 .enumerate()
-                .filter(|(_, u)| u.alive && !u.is_player && u.faction == faction)
+                .filter(|(_, u)| {
+                    u.alive
+                        && !u.is_player
+                        && u.faction == faction
+                        && !u.rally_hold
+                        && u.zone_lock_timer <= 0.0
+                })
                 .map(|(i, _)| i)
                 .collect();
 
@@ -229,10 +270,13 @@ impl Game {
                 continue;
             }
 
+            let lock_dur = self.config.zone_lock_duration;
+
             match (defend_zone, attack_zone) {
                 (Some(def_zi), Some(atk_zi)) => {
                     // Split: 40% defend, 60% attack. Sort by flow cost to each target.
-                    let n_defend = ((available.len() as f32 * 0.4).ceil() as usize).min(available.len());
+                    let n_defend =
+                        ((available.len() as f32 * 0.4).ceil() as usize).min(available.len());
 
                     // Sort by flow cost to defend zone (nearest first)
                     let flow_state = match faction {
@@ -253,21 +297,21 @@ impl Game {
                     for (i, &ui) in available.iter().enumerate() {
                         let target = if i < n_defend { def_zi } else { atk_zi };
                         self.units[ui].assigned_zone = Some(target);
-                        self.units[ui].rally_hold = false;
+                        self.units[ui].zone_lock_timer = lock_dur;
                     }
                 }
                 (None, Some(atk_zi)) => {
                     // All-in attack
                     for &ui in &available {
                         self.units[ui].assigned_zone = Some(atk_zi);
-                        self.units[ui].rally_hold = false;
+                        self.units[ui].zone_lock_timer = lock_dur;
                     }
                 }
                 (Some(def_zi), None) => {
                     // Only defending — all to defend target
                     for &ui in &available {
                         self.units[ui].assigned_zone = Some(def_zi);
-                        self.units[ui].rally_hold = false;
+                        self.units[ui].zone_lock_timer = lock_dur;
                     }
                 }
                 (None, None) => {
@@ -291,14 +335,14 @@ impl Game {
                         }) {
                             for &ui in &available {
                                 self.units[ui].assigned_zone = Some(zi as u8);
-                                self.units[ui].rally_hold = false;
+                                self.units[ui].zone_lock_timer = lock_dur;
                             }
                         }
                     } else {
                         // Distribute evenly by round-robin
                         for (i, &ui) in available.iter().enumerate() {
                             self.units[ui].assigned_zone = Some(owned[i % owned.len()]);
-                            self.units[ui].rally_hold = false;
+                            self.units[ui].zone_lock_timer = lock_dur;
                         }
                     }
                 }
@@ -327,15 +371,19 @@ impl Game {
             self.nearest_objective_pos(ai_idx)
         };
 
-        // If inside our assigned zone and it's fully captured, hold position.
-        // Don't stop if the zone is contested or has enemies — keep fighting.
+        // If inside our assigned zone (with margin to absorb separation jitter),
+        // hold position. Units still fight enemies (resolve_combat_target runs before this).
         if let Some(zi) = assigned_zone {
             let zi_usize = zi as usize;
             if zi_usize < self.zone_manager.zones.len() {
                 let zone = &self.zone_manager.zones[zi_usize];
-                if zone.contains_world(ux, uy)
-                    && zone.state == crate::zone::ZoneState::Controlled(faction)
-                {
+                let dx = ux - zone.center_wx;
+                let dy = uy - zone.center_wy;
+                let dist_sq = dx * dx + dy * dy;
+                let margin = self.config.zone_idle_margin_tiles * TILE_SIZE;
+                let stop_radius = zone.radius as f32 * TILE_SIZE + margin;
+                if dist_sq <= stop_radius * stop_radius {
+                    self.units[ai_idx].set_anim(UnitAnim::Idle);
                     return;
                 }
             }
@@ -359,9 +407,18 @@ impl Game {
 
         if let Some(dir) = dir {
             if dir != (0, 0) {
-                let (sep_x, sep_y) = self.compute_separation(ai_idx);
-                let bx = dir.0 as f32 * self.config.flow_weight + sep_x * self.config.separation_weight;
-                let by = dir.1 as f32 * self.config.flow_weight + sep_y * self.config.separation_weight;
+                let (raw_sep_x, raw_sep_y) = self.compute_separation(ai_idx);
+                let alpha = self.config.separation_smoothing;
+                self.units[ai_idx].sep_smooth_x =
+                    self.units[ai_idx].sep_smooth_x * (1.0 - alpha) + raw_sep_x * alpha;
+                self.units[ai_idx].sep_smooth_y =
+                    self.units[ai_idx].sep_smooth_y * (1.0 - alpha) + raw_sep_y * alpha;
+                let sep_x = self.units[ai_idx].sep_smooth_x;
+                let sep_y = self.units[ai_idx].sep_smooth_y;
+                let bx =
+                    dir.0 as f32 * self.config.flow_weight + sep_x * self.config.separation_weight;
+                let by =
+                    dir.1 as f32 * self.config.flow_weight + sep_y * self.config.separation_weight;
                 let len = (bx * bx + by * by).sqrt();
                 if len > 0.01 {
                     self.move_unit(ai_idx, bx / len, by / len, dt);

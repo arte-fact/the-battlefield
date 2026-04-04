@@ -556,10 +556,17 @@ impl GpuContext {
     }
 
     /// Reconfigure surface after a window resize.
+    /// If either dimension exceeds the GPU max texture size, both are scaled
+    /// down proportionally so the aspect ratio is preserved.  Without this,
+    /// clamping only the oversized axis causes visible stretching on mobile.
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
-            self.surface_config.width = width;
-            self.surface_config.height = height;
+            let max = self.device.limits().max_texture_dimension_2d;
+            let scale = 1.0_f32
+                .min(max as f32 / width as f32)
+                .min(max as f32 / height as f32);
+            self.surface_config.width = ((width as f32 * scale).round() as u32).max(1);
+            self.surface_config.height = ((height as f32 * scale).round() as u32).max(1);
             self.surface.configure(&self.device, &self.surface_config);
         }
     }

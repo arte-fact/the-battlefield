@@ -16,18 +16,35 @@ impl Game {
         if self.macro_objectives[0].is_empty() && self.macro_objectives[1].is_empty() {
             // First time: compute both
             self.objective_timer = 0.0;
-            self.macro_objectives[0] = self.zone_manager.score_all_zones(Faction::Blue, &self.config);
-            self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red, &self.config);
+            self.macro_objectives[0] = self
+                .zone_manager
+                .score_all_zones(Faction::Blue, &self.config);
+            self.macro_objectives[1] = self
+                .zone_manager
+                .score_all_zones(Faction::Red, &self.config);
             refresh_objectives = true;
         } else if self.objective_timer >= self.config.objective_interval {
             // Blue scores at 0s, Red at 1s (half interval offset)
             self.objective_timer = 0.0;
-            self.macro_objectives[0] = self.zone_manager.score_all_zones(Faction::Blue, &self.config);
+            self.macro_objectives[0] = self
+                .zone_manager
+                .score_all_zones(Faction::Blue, &self.config);
             refresh_objectives = true;
         } else if self.objective_timer >= half_interval && self.objective_timer - dt < half_interval
         {
             // Red scores at the midpoint
-            self.macro_objectives[1] = self.zone_manager.score_all_zones(Faction::Red, &self.config);
+            self.macro_objectives[1] = self
+                .zone_manager
+                .score_all_zones(Faction::Red, &self.config);
+            refresh_objectives = true;
+        } else if !refresh_objectives
+            && self.objective_timer >= half_interval
+            && self.macro_objectives[1].is_empty()
+        {
+            // Catch-up: Red missed its midpoint window (e.g. lag spike)
+            self.macro_objectives[1] = self
+                .zone_manager
+                .score_all_zones(Faction::Red, &self.config);
             refresh_objectives = true;
         }
 
@@ -119,7 +136,8 @@ impl Game {
         match kind {
             UnitKind::Monk => self.ai_monk_tick(ai_idx, dt),
             UnitKind::Archer => self.ai_archer_tick(ai_idx, dt),
-            UnitKind::Warrior | UnitKind::Lancer => self.ai_melee_tick(ai_idx, dt),
+            UnitKind::Lancer => self.ai_lancer_tick(ai_idx, dt),
+            UnitKind::Warrior => self.ai_melee_tick(ai_idx, dt),
         }
     }
 
@@ -152,12 +170,46 @@ impl Game {
         false
     }
 
+    /// Resolve combat target with persistence: stick with the current target
+    /// for `combat_target_commit_secs` before re-scanning. Prevents frame-to-frame
+    /// target flipping and combat/flowfield mode oscillation.
+    fn resolve_combat_target(&mut self, ai_idx: usize) -> Option<(f32, f32, UnitId, f32)> {
+        let ax = self.units[ai_idx].x;
+        let ay = self.units[ai_idx].y;
+        let vision_range = self.config.ai_vision_radius as f32 * TILE_SIZE;
+        let disengage_range = vision_range + self.config.combat_disengage_margin_tiles * TILE_SIZE;
+
+        // Try to keep current target
+        if let Some(tid) = self.units[ai_idx].combat_target {
+            if self.units[ai_idx].combat_target_timer > 0.0 {
+                if let Some(ti) = self.units.iter().position(|u| u.id == tid && u.alive) {
+                    let dist = self.units[ti].distance_to_pos(ax, ay);
+                    if dist <= disengage_range {
+                        return Some((self.units[ti].x, self.units[ti].y, tid, dist));
+                    }
+                }
+            }
+            // Target dead, too far, or timer expired — clear
+            self.units[ai_idx].combat_target = None;
+            self.units[ai_idx].combat_target_timer = 0.0;
+        }
+
+        // Scan for a new target
+        let enemy = self.find_nearest_enemy(ai_idx);
+        if let Some((ex, ey, eid, dist)) = enemy {
+            self.units[ai_idx].combat_target = Some(eid);
+            self.units[ai_idx].combat_target_timer = self.config.combat_target_commit_secs;
+            return Some((ex, ey, eid, dist));
+        }
+        None
+    }
+
     /// Real-time melee AI: attack if in range, else close distance to enemy.
     /// If no enemy visible, follow flow field toward zone objective.
     fn ai_melee_tick(&mut self, ai_idx: usize, dt: f32) {
         let ai_id = self.units[ai_idx].id;
 
-        let enemy = match self.find_nearest_enemy(ai_idx) {
+        let enemy = match self.resolve_combat_target(ai_idx) {
             Some(e) => e,
             None => {
                 self.ai_move_via_flowfield(ai_idx, dt);
@@ -177,27 +229,87 @@ impl Game {
         }
     }
 
-    /// Real-time archer AI: attack if in range, else approach enemy.
+    /// Real-time archer AI: attack if in range, kite if too close, approach if too far.
     /// If no enemy visible, follow flow field toward zone objective.
     fn ai_archer_tick(&mut self, ai_idx: usize, dt: f32) {
         let ai_id = self.units[ai_idx].id;
         let range_world = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
 
-        let enemy = match self.find_nearest_enemy(ai_idx) {
+        let enemy = match self.resolve_combat_target(ai_idx) {
             Some(e) => e,
             None => {
+                self.units[ai_idx].is_kiting = false;
                 self.ai_move_via_flowfield(ai_idx, dt);
                 return;
             }
         };
         let (ex, ey, enemy_id, dist) = enemy;
 
+        // Kite hysteresis: enter at range*0.5, exit at range*0.5 + margin
+        let kite_enter = range_world * 0.5;
+        let kite_exit = kite_enter + self.config.kite_hysteresis_tiles * TILE_SIZE;
+        if dist < kite_enter {
+            self.units[ai_idx].is_kiting = true;
+        } else if dist > kite_exit {
+            self.units[ai_idx].is_kiting = false;
+        }
+
         if self.units[ai_idx].can_act() && dist <= range_world {
             self.execute_attack(ai_id, enemy_id, None);
+        } else if self.units[ai_idx].is_kiting {
+            // Enemy too close — back away to maintain range
+            let ax = self.units[ai_idx].x;
+            let ay = self.units[ai_idx].y;
+            let flee_x = ax + (ax - ex);
+            let flee_y = ay + (ay - ey);
+            self.ai_move_toward_continuous(ai_idx, flee_x, flee_y, dt);
         } else if dist <= range_world {
             // In range but on cooldown — hold position
+            self.units[ai_idx].set_anim(UnitAnim::Idle);
         } else {
             // Out of range — approach enemy
+            self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
+        }
+    }
+
+    /// Real-time lancer AI: attack at reach distance, maintain standoff.
+    /// If no enemy visible, follow flow field toward zone objective.
+    fn ai_lancer_tick(&mut self, ai_idx: usize, dt: f32) {
+        let ai_id = self.units[ai_idx].id;
+
+        let enemy = match self.resolve_combat_target(ai_idx) {
+            Some(e) => e,
+            None => {
+                self.units[ai_idx].is_backing_off = false;
+                self.ai_move_via_flowfield(ai_idx, dt);
+                return;
+            }
+        };
+        let (ex, ey, enemy_id, dist) = enemy;
+
+        let reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
+        let reach = reach.max(MELEE_RANGE);
+
+        // Backoff hysteresis: enter at MELEE_RANGE*0.7, exit at that + margin
+        let backoff_enter = MELEE_RANGE * 0.7;
+        let backoff_exit = backoff_enter + self.config.lancer_backoff_hysteresis_tiles * TILE_SIZE;
+        if dist <= backoff_enter {
+            self.units[ai_idx].is_backing_off = true;
+        } else if dist > backoff_exit {
+            self.units[ai_idx].is_backing_off = false;
+        }
+
+        if self.units[ai_idx].can_act() && dist <= reach {
+            self.execute_attack(ai_id, enemy_id, None);
+        } else if self.units[ai_idx].is_backing_off {
+            // Enemy inside melee range — back off to use reach advantage
+            let ax = self.units[ai_idx].x;
+            let ay = self.units[ai_idx].y;
+            let away_x = ax + (ax - ex);
+            let away_y = ay + (ay - ey);
+            self.ai_move_toward_continuous(ai_idx, away_x, away_y, dt);
+        } else {
+            // Close distance to reach range
             self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
         }
     }
@@ -231,12 +343,10 @@ impl Game {
 
         // Healing is handled by try_monk_heal in ai_unit_tick (before orders)
 
-        // Flee if an enemy is too close
+        // Flee if a visible enemy is too close
         let monk_safe = self.config.monk_safe_dist_tiles * TILE_SIZE;
-        let enemy_dist = self.nearest_enemy_dist(ax, ay, faction);
-        if enemy_dist < monk_safe {
-            if let Some(enemy) = self.find_nearest_enemy(ai_idx) {
-                let (ex, ey, _, _) = enemy;
+        if let Some((ex, ey, _, dist)) = self.resolve_combat_target(ai_idx) {
+            if dist < monk_safe {
                 let flee_x = ax + (ax - ex);
                 let flee_y = ay + (ay - ey);
                 self.ai_move_toward_continuous(ai_idx, flee_x, flee_y, dt);
@@ -319,8 +429,8 @@ mod tests {
     fn tick_ai_archer_holds_in_range() {
         let mut game = Game::new(960.0, 640.0);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        // Archer at distance 3 tiles, within range 7 tiles
-        game.spawn_unit(UnitKind::Archer, Faction::Red, 8, 5, false);
+        // Archer at distance 5 tiles, within range (7) but beyond kite threshold (3.5)
+        game.spawn_unit(UnitKind::Archer, Faction::Red, 10, 5, false);
         let start_x = game.units[1].x;
         game.units[1].attack_cooldown = 0.5;
         game.tick_ai(0.016);
@@ -331,7 +441,28 @@ mod tests {
             .unwrap();
         assert!(
             (archer.x - start_x).abs() < 1.0,
-            "Archer should hold position when in range"
+            "Archer should hold position when in range but beyond kite distance"
+        );
+    }
+
+    #[test]
+    fn tick_ai_archer_kites_when_too_close() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        // Archer at distance 2 tiles — inside kite threshold (range*0.5 = 3.5 tiles)
+        game.spawn_unit(UnitKind::Archer, Faction::Red, 7, 5, false);
+        let start_x = game.units[1].x;
+        game.units[1].attack_cooldown = 0.5;
+        game.tick_ai(0.016);
+        let archer = game
+            .units
+            .iter()
+            .find(|u| u.kind == UnitKind::Archer)
+            .unwrap();
+        assert!(
+            archer.x > start_x,
+            "Archer should kite away when enemy is too close, before={start_x} after={}",
+            archer.x
         );
     }
 }

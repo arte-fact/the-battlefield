@@ -196,7 +196,6 @@ impl GameLoop {
             || cur_h as f32 != self.game.camera.viewport_h
         {
             self.game.camera.resize(cur_w as f32, cur_h as f32);
-            self.game.camera.zoom = self.game.camera.ideal_zoom();
             if self.compute_dpi {
                 let (lw, _lh) = self.canvas.window().size();
                 if lw > 0 {
@@ -204,6 +203,7 @@ impl GameLoop {
                     self.touch_dpr = self.dpi_scale as f32;
                 }
             }
+            self.game.camera.zoom = self.game.camera.ideal_zoom_for_dpi(self.touch_dpr);
         }
 
         // Update touch input with current canvas dimensions and layout

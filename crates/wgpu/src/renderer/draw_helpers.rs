@@ -39,17 +39,80 @@ pub fn draw_panel_scaled(
     let white = [1.0_f32, 1.0, 1.0, 1.0];
 
     // Row 0: TL, TC, TR
-    batch.draw_sprite(tex_id, [0.0, 0.0, sl, st], [dx, dy, dl, dt], tex_size, false, white);
-    batch.draw_sprite(tex_id, [sl, 0.0, cw_src, st], [dx + dl, dy, dst_cw, dt], tex_size, false, white);
-    batch.draw_sprite(tex_id, [sl + cw_src, 0.0, sr, st], [dx + dl + dst_cw, dy, dr, dt], tex_size, false, white);
+    batch.draw_sprite(
+        tex_id,
+        [0.0, 0.0, sl, st],
+        [dx, dy, dl, dt],
+        tex_size,
+        false,
+        white,
+    );
+    batch.draw_sprite(
+        tex_id,
+        [sl, 0.0, cw_src, st],
+        [dx + dl, dy, dst_cw, dt],
+        tex_size,
+        false,
+        white,
+    );
+    batch.draw_sprite(
+        tex_id,
+        [sl + cw_src, 0.0, sr, st],
+        [dx + dl + dst_cw, dy, dr, dt],
+        tex_size,
+        false,
+        white,
+    );
     // Row 1: ML, MC, MR
-    batch.draw_sprite(tex_id, [0.0, st, sl, ch_src], [dx, dy + dt, dl, dst_ch], tex_size, false, white);
-    batch.draw_sprite(tex_id, [sl, st, cw_src, ch_src], [dx + dl, dy + dt, dst_cw, dst_ch], tex_size, false, white);
-    batch.draw_sprite(tex_id, [sl + cw_src, st, sr, ch_src], [dx + dl + dst_cw, dy + dt, dr, dst_ch], tex_size, false, white);
+    batch.draw_sprite(
+        tex_id,
+        [0.0, st, sl, ch_src],
+        [dx, dy + dt, dl, dst_ch],
+        tex_size,
+        false,
+        white,
+    );
+    batch.draw_sprite(
+        tex_id,
+        [sl, st, cw_src, ch_src],
+        [dx + dl, dy + dt, dst_cw, dst_ch],
+        tex_size,
+        false,
+        white,
+    );
+    batch.draw_sprite(
+        tex_id,
+        [sl + cw_src, st, sr, ch_src],
+        [dx + dl + dst_cw, dy + dt, dr, dst_ch],
+        tex_size,
+        false,
+        white,
+    );
     // Row 2: BL, BC, BR
-    batch.draw_sprite(tex_id, [0.0, st + ch_src, sl, sb], [dx, dy + dt + dst_ch, dl, db], tex_size, false, white);
-    batch.draw_sprite(tex_id, [sl, st + ch_src, cw_src, sb], [dx + dl, dy + dt + dst_ch, dst_cw, db], tex_size, false, white);
-    batch.draw_sprite(tex_id, [sl + cw_src, st + ch_src, sr, sb], [dx + dl + dst_cw, dy + dt + dst_ch, dr, db], tex_size, false, white);
+    batch.draw_sprite(
+        tex_id,
+        [0.0, st + ch_src, sl, sb],
+        [dx, dy + dt + dst_ch, dl, db],
+        tex_size,
+        false,
+        white,
+    );
+    batch.draw_sprite(
+        tex_id,
+        [sl, st + ch_src, cw_src, sb],
+        [dx + dl, dy + dt + dst_ch, dst_cw, db],
+        tex_size,
+        false,
+        white,
+    );
+    batch.draw_sprite(
+        tex_id,
+        [sl + cw_src, st + ch_src, sr, sb],
+        [dx + dl + dst_cw, dy + dt + dst_ch, dr, db],
+        tex_size,
+        false,
+        white,
+    );
 }
 
 /// Draw a 9-slice panel using pre-processed gapless atlas.

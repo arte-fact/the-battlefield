@@ -23,7 +23,6 @@ use sprite_batch::SpriteBatch;
 use crate::gpu::{CameraUniform, GpuContext, SpriteVertex};
 use wgpu::util::DeviceExt;
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // WgpuBackend — implements DrawBackend for core's shared foreground rendering
 // ─────────────────────────────────────────────────────────────────────────────
@@ -317,22 +316,42 @@ pub fn render_frame(
     // Fog quad: a single world-sized quad for the fog shader
     let world_size = game.grid.width as f32 * TILE_SIZE;
     let fog_verts = [
-        SpriteVertex { position: [0.0, 0.0],             uv: [0.0, 0.0],       color_mod: [1.0; 4] },
-        SpriteVertex { position: [world_size, 0.0],       uv: [1.0, 0.0],       color_mod: [1.0; 4] },
-        SpriteVertex { position: [world_size, world_size], uv: [1.0, 1.0],      color_mod: [1.0; 4] },
-        SpriteVertex { position: [0.0, world_size],        uv: [0.0, 1.0],      color_mod: [1.0; 4] },
+        SpriteVertex {
+            position: [0.0, 0.0],
+            uv: [0.0, 0.0],
+            color_mod: [1.0; 4],
+        },
+        SpriteVertex {
+            position: [world_size, 0.0],
+            uv: [1.0, 0.0],
+            color_mod: [1.0; 4],
+        },
+        SpriteVertex {
+            position: [world_size, world_size],
+            uv: [1.0, 1.0],
+            color_mod: [1.0; 4],
+        },
+        SpriteVertex {
+            position: [0.0, world_size],
+            uv: [0.0, 1.0],
+            color_mod: [1.0; 4],
+        },
     ];
     let fog_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
-    let fog_vb = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("fog_vb"),
-        contents: bytemuck::cast_slice(&fog_verts),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
-    let fog_ib = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("fog_ib"),
-        contents: bytemuck::cast_slice(&fog_indices),
-        usage: wgpu::BufferUsages::INDEX,
-    });
+    let fog_vb = gpu
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("fog_vb"),
+            contents: bytemuck::cast_slice(&fog_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+    let fog_ib = gpu
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("fog_ib"),
+            contents: bytemuck::cast_slice(&fog_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
 
     // ── Render pass ──────────────────────────────────────────────────────
 
@@ -735,15 +754,29 @@ fn draw_zones(
 
         // Shadow
         assets.text.draw_text_centered(
-            sprites, gpu, zone.name,
-            zone.center_wx + off, label_cy + off, name_font,
-            0, 0, 0, 180,
+            sprites,
+            gpu,
+            zone.name,
+            zone.center_wx + off,
+            label_cy + off,
+            name_font,
+            0,
+            0,
+            0,
+            180,
         );
         // Foreground
         assets.text.draw_text_centered(
-            sprites, gpu, zone.name,
-            zone.center_wx, label_cy, name_font,
-            255, 255, 255, 220,
+            sprites,
+            gpu,
+            zone.name,
+            zone.center_wx,
+            label_cy,
+            name_font,
+            255,
+            255,
+            255,
+            220,
         );
 
         // Capture progress bar below name
@@ -951,7 +984,11 @@ fn upload_fog_visibility(gpu: &GpuContext, game: &Game, assets: &Assets) {
     }
     let size = game.grid.width;
     // Convert bool visibility to u8: true → 255 (1.0 in R8Unorm), false → 0
-    let pixels: Vec<u8> = game.visible.iter().map(|&v| if v { 255 } else { 0 }).collect();
+    let pixels: Vec<u8> = game
+        .visible
+        .iter()
+        .map(|&v| if v { 255 } else { 0 })
+        .collect();
     assets.update_fog(gpu, &pixels, size);
 }
 
@@ -1142,13 +1179,25 @@ fn draw_hud(
         let start_x = vw * 0.5 - total_w * 0.5 + pip_r;
         if let Some((tex_id, aw, ah)) = assets.ui_special_paper {
             draw_helpers::draw_panel_scaled(
-                bg, tex_id, aw, ah,
+                bg,
+                tex_id,
+                aw,
+                ah,
                 &render_util::NINE_SLICE_SPECIAL_PAPER,
-                panel_x, panel_y_pos, panel_w, panel_h,
+                panel_x,
+                panel_y_pos,
+                panel_w,
+                panel_h,
                 scale,
             );
         } else {
-            prim.fill_rect(panel_x, panel_y_pos, panel_w, panel_h, [0.16, 0.12, 0.06, 0.86]);
+            prim.fill_rect(
+                panel_x,
+                panel_y_pos,
+                panel_w,
+                panel_h,
+                [0.16, 0.12, 0.06, 0.86],
+            );
         }
 
         for (i, zone) in game.zone_manager.zones.iter().enumerate() {
@@ -1626,7 +1675,16 @@ fn draw_screen_overlay(
 
         let text_size = (btn.h as f32 * 0.42).max(16.0);
         assets.text.draw_text_centered(
-            sprites, gpu, btn.label, bx, by + 2.0, text_size, 255, 255, 255, 255,
+            sprites,
+            gpu,
+            btn.label,
+            bx,
+            by + 2.0,
+            text_size,
+            255,
+            255,
+            255,
+            255,
         );
 
         buttons.push(ClickableButton {

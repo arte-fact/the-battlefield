@@ -12,7 +12,7 @@ pub struct Camera {
     pub viewport_h: f32,
 }
 
-const MIN_ZOOM: f32 = 0.5;
+const MIN_ZOOM: f32 = 0.3;
 const MAX_ZOOM: f32 = 4.0;
 
 impl Camera {
@@ -55,12 +55,20 @@ impl Camera {
     }
 
     /// Calculate an ideal zoom level based on viewport dimensions.
-    /// Targets ~14 tiles visible along the shortest axis for a close,
-    /// action-focused view on both portrait and landscape.
+    /// Targets ~20 tiles visible along the shortest axis for a wider
+    /// tactical view on both portrait and landscape.
     pub fn ideal_zoom(&self) -> f32 {
+        self.ideal_zoom_for_dpi(1.0)
+    }
+
+    /// Like `ideal_zoom` but accounts for device pixel ratio.
+    /// High-DPI (mobile) screens show fewer tiles so units stay legible
+    /// on the physically smaller display.
+    pub fn ideal_zoom_for_dpi(&self, dpi: f32) -> f32 {
         let tile = crate::grid::TILE_SIZE;
         let short = self.viewport_w.min(self.viewport_h);
-        let target_tiles = 14.0;
+        // Desktop (~1x DPR) → 20 tiles.  Mobile (~2-3x DPR) → ~14 tiles.
+        let target_tiles = if dpi > 1.5 { 14.0 } else { 20.0 };
         let raw = short / (target_tiles * tile);
         let snapped = (raw * 64.0).round() / 64.0;
         snapped.clamp(MIN_ZOOM, MAX_ZOOM)
