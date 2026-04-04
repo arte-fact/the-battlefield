@@ -32,24 +32,10 @@ pub struct GameConfig {
     pub zone_distance_weight: f32,
     pub zone_congestion_weight: f32,
     pub zone_hysteresis: f32,
-    pub zone_authority_influence: f32,
-    pub zone_authority_radius_tiles: f32,
-    pub zone_health_penalty: f32,
-    pub zone_contested_bonus: f32,
-    pub zone_archer_ally_bonus: f32,
     pub zone_capture_commit_base: f32,
     pub zone_capture_commit_extra_base: f32,
     pub zone_capture_commit_progress_mult: f32,
     pub zone_lock_duration: f32,
-
-    // ── Strategic Zone Scoring ──────────────────────────────────────
-    pub strat_uncontrolled: f32,
-    pub strat_erosion_urgency: f32,
-    pub strat_momentum: f32,
-    pub strat_contested: f32,
-    pub strat_enemy_pressure: f32,
-    pub strat_distance_penalty: f32,
-    pub strat_all_controlled_defense: f32,
 
     // ── Authority System ────────────────────────────────────────────
     pub authority_follow_base: f32,
@@ -143,24 +129,10 @@ impl Default for GameConfig {
             zone_distance_weight: -30.0,
             zone_congestion_weight: -8.0,
             zone_hysteresis: 15.0,
-            zone_authority_influence: 10.0,
-            zone_authority_radius_tiles: 15.0,
-            zone_health_penalty: 20.0,
-            zone_contested_bonus: 10.0,
-            zone_archer_ally_bonus: 2.0,
             zone_capture_commit_base: 20.0,
             zone_capture_commit_extra_base: 25.0,
             zone_capture_commit_progress_mult: 20.0,
             zone_lock_duration: 8.0,
-
-            // Strategic Zone Scoring
-            strat_uncontrolled: 40.0,
-            strat_erosion_urgency: 50.0,
-            strat_momentum: 30.0,
-            strat_contested: 20.0,
-            strat_enemy_pressure: 5.0,
-            strat_distance_penalty: -15.0,
-            strat_all_controlled_defense: 10.0,
 
             // Authority System
             authority_follow_base: 0.30,

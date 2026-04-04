@@ -241,8 +241,6 @@ impl Game {
         }
 
         // === Phase 1: Gather read-only data to avoid borrow conflicts ===
-        let player_pos = self.player_unit().map(|p| (p.x, p.y));
-        let authority = self.authority;
 
         let zone_info: Vec<(f32, f32, ZoneState, u32, u32, f32)> = self
             .zone_manager
@@ -322,7 +320,7 @@ impl Game {
         let mut new_blue_cong = vec![0u32; zone_count];
         let mut new_red_cong = vec![0u32; zone_count];
 
-        for (ui, faction, current_zone, hp_ratio, kind, ux, uy, lock_timer, flow_costs) in
+        for (ui, faction, current_zone, _hp_ratio, _kind, ux, uy, lock_timer, flow_costs) in
             &unit_data
         {
             // If unit is locked to its current zone, skip scoring unless zone is
@@ -357,7 +355,7 @@ impl Game {
             let mut best_score = f32::NEG_INFINITY;
             let mut best_zone: Option<u8> = None;
 
-            for (zi, &(zwx, zwy, state, blue_count, red_count, progress)) in
+            for (zi, &(zwx, zwy, state, _blue_count, _red_count, progress)) in
                 zone_info.iter().enumerate()
             {
                 let cost = flow_costs[zi];
@@ -387,49 +385,6 @@ impl Game {
                     0.0
                 };
 
-                // Influence: player authority pulls Blue units toward zones near player
-                let influence = if *faction == Faction::Blue {
-                    if let Some((px, py)) = player_pos {
-                        let d = ((px - zwx).powi(2) + (py - zwy).powi(2)).sqrt();
-                        let r = TILE_SIZE * cfg.zone_authority_radius_tiles;
-                        if d < r {
-                            cfg.zone_authority_influence * (authority / 100.0) * (1.0 - d / r)
-                        } else {
-                            0.0
-                        }
-                    } else {
-                        0.0
-                    }
-                } else {
-                    0.0
-                };
-
-                // Wounded units prefer closer objectives
-                let health_pen = if *hp_ratio < 0.5 {
-                    cost_norm * (1.0 - hp_ratio) * cfg.zone_health_penalty
-                } else {
-                    0.0
-                };
-
-                // Contested bonus: units can make a difference
-                let contested = if state == ZoneState::Contested {
-                    cfg.zone_contested_bonus
-                } else {
-                    0.0
-                };
-
-                // Role bonus: archers prefer zones with allies (safety in numbers)
-                let role_bonus = match kind {
-                    UnitKind::Archer => {
-                        let allies = match faction {
-                            Faction::Blue => blue_count,
-                            Faction::Red => red_count,
-                        };
-                        allies as f32 * cfg.zone_archer_ally_bonus
-                    }
-                    _ => 0.0,
-                };
-
                 // Capture commitment: strong bonus when inside a zone still being captured.
                 let capture_commit = {
                     let dx = ux - zwx;
@@ -455,10 +410,6 @@ impl Game {
                     + cfg.zone_distance_weight * cost_norm
                     + cfg.zone_congestion_weight * cong
                     + hysteresis
-                    + influence
-                    - health_pen
-                    + contested
-                    + role_bonus
                     + capture_commit;
 
                 if score > best_score {

@@ -253,7 +253,7 @@ impl ZoneManager {
     }
 
     /// Score all zones for a faction, return all as (world_x, world_y, score) sorted desc.
-    pub fn score_all_zones(&self, faction: Faction, cfg: &GameConfig) -> Vec<(f32, f32, f32)> {
+    pub fn score_all_zones(&self, faction: Faction, _cfg: &GameConfig) -> Vec<(f32, f32, f32)> {
         if self.zones.is_empty() {
             return Vec::new();
         }
@@ -263,7 +263,6 @@ impl ZoneManager {
             _ => (self.red_base.0 as f32, self.red_base.1 as f32),
         };
 
-        // Max distance for normalization
         let max_dist_sq = self
             .zones
             .iter()
@@ -274,55 +273,41 @@ impl ZoneManager {
             })
             .fold(1.0_f32, f32::max);
 
+        let mut any_controlled = false;
+
         let mut scored: Vec<(f32, f32, f32)> = self
             .zones
             .iter()
             .map(|z| {
-                let mut score = 0.0_f32;
-
                 let controlled_by_us = z.state == ZoneState::Controlled(faction);
                 let progress_for_us = match faction {
-                    Faction::Blue => z.progress, // +1 = fully Blue
-                    Faction::Red => -z.progress, // flip so +1 = fully Red
+                    Faction::Blue => z.progress,
+                    Faction::Red => -z.progress,
                 };
-
-                // Expansion target: zones we don't control
-                if !controlled_by_us {
-                    score += cfg.strat_uncontrolled;
-                }
-
-                // Urgency: zone we own but progress is eroding
-                if controlled_by_us && progress_for_us < 0.99 {
-                    score += cfg.strat_erosion_urgency * (1.0 - progress_for_us);
-                }
-
-                // Momentum: zone we're actively capturing — finish the job
-                if !controlled_by_us && progress_for_us > 0.0 {
-                    score += cfg.strat_momentum * progress_for_us;
-                }
-
-                // Contested bonus
-                if z.state == ZoneState::Contested {
-                    score += cfg.strat_contested;
-                }
-
-                // Enemy pressure
                 let enemy_count = match faction {
                     Faction::Blue => z.red_count,
                     Faction::Red => z.blue_count,
                 };
-                score += cfg.strat_enemy_pressure * enemy_count as f32;
 
-                // Distance penalty (normalized 0-1)
+                // Distance tiebreaker (0..1, closer = lower)
                 let dx = z.center_gx as f32 - own_x;
                 let dy = z.center_gy as f32 - own_y;
                 let norm_dist = (dx * dx + dy * dy) / max_dist_sq;
-                score += cfg.strat_distance_penalty * norm_dist;
 
-                // All zones controlled — defend the most advanced one
-                if controlled_by_us && progress_for_us >= 0.99 {
-                    score = norm_dist * cfg.strat_all_controlled_defense;
-                }
+                // 3-tier scoring: defend > attack > hold
+                let score = if controlled_by_us {
+                    any_controlled = true;
+                    if enemy_count > 0 || progress_for_us < 0.9 {
+                        // Tier 1: Under attack — defend urgently
+                        200.0 + (1.0 - progress_for_us) * 50.0 - norm_dist * 15.0
+                    } else {
+                        // Tier 3: Secure — low priority hold
+                        10.0 - norm_dist * 5.0
+                    }
+                } else {
+                    // Tier 2: Not ours — attack, prefer momentum + nearness
+                    100.0 + progress_for_us.max(0.0) * 30.0 - norm_dist * 15.0
+                };
 
                 (z.center_wx, z.center_wy, score)
             })
@@ -330,6 +315,15 @@ impl ZoneManager {
 
         // Sort by score descending
         scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Focus mechanic: when holding 0 zones, boost the top target so units
+        // concentrate force instead of spreading thin across all zones.
+        if !any_controlled {
+            if let Some(top) = scored.first_mut() {
+                top.2 += 50.0;
+            }
+        }
+
         scored
     }
 
