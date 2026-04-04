@@ -398,8 +398,8 @@ mod tests {
             blue_home_zones: vec![0, 1],
             red_home_zones: vec![5, 6],
             connections: vec![
-                vec![2, 3], vec![3, 4], vec![0, 5], vec![0, 1, 5, 6],
-                vec![1, 6], vec![2, 3], vec![3, 4],
+                vec![1, 2, 3], vec![0, 3, 4], vec![0, 3, 5], vec![0, 1, 2, 4, 5, 6],
+                vec![1, 3, 6], vec![2, 3, 6], vec![3, 4, 5],
             ],
         }
     }

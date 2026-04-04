@@ -386,14 +386,16 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
 
     // Zone connectivity: B1(0)-B2(1)-C1(2)-C2(3)-C3(4)-R1(5)-R2(6)
     // B1↔C1, B1↔C2, B2↔C2, B2↔C3, C1↔R1, C2↔R1, C2↔R2, C3↔R2
+    // Symmetric adjacency: if A↔B then both list each other.
+    // Diamond shape: B1-B2 at top, C1-C2-C3 center, R1-R2 at bottom.
     let connections = vec![
-        vec![2, 3],    // 0 (B1) → C1, C2
-        vec![3, 4],    // 1 (B2) → C2, C3
-        vec![0, 5],    // 2 (C1) → B1, R1
-        vec![0, 1, 5, 6], // 3 (C2) → B1, B2, R1, R2
-        vec![1, 6],    // 4 (C3) → B2, R2
-        vec![2, 3],    // 5 (R1) → C1, C2
-        vec![3, 4],    // 6 (R2) → C2, C3
+        vec![1, 2, 3],          // 0 (B1) ↔ B2, C1, C2
+        vec![0, 3, 4],          // 1 (B2) ↔ B1, C2, C3
+        vec![0, 3, 5],          // 2 (C1) ↔ B1, C2, R1
+        vec![0, 1, 2, 4, 5, 6], // 3 (C2) ↔ B1, B2, C1, C3, R1, R2
+        vec![1, 3, 6],          // 4 (C3) ↔ B2, C2, R2
+        vec![2, 3, 6],          // 5 (R1) ↔ C1, C2, R2
+        vec![3, 4, 5],          // 6 (R2) ↔ C2, C3, R1
     ];
 
     let layout = MapLayout {
