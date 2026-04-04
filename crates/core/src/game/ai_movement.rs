@@ -253,18 +253,21 @@ impl Game {
                     for (i, &ui) in available.iter().enumerate() {
                         let target = if i < n_defend { def_zi } else { atk_zi };
                         self.units[ui].assigned_zone = Some(target);
+                        self.units[ui].rally_hold = false;
                     }
                 }
                 (None, Some(atk_zi)) => {
                     // All-in attack
                     for &ui in &available {
                         self.units[ui].assigned_zone = Some(atk_zi);
+                        self.units[ui].rally_hold = false;
                     }
                 }
                 (Some(def_zi), None) => {
                     // Only defending — all to defend target
                     for &ui in &available {
                         self.units[ui].assigned_zone = Some(def_zi);
+                        self.units[ui].rally_hold = false;
                     }
                 }
                 (None, None) => {
@@ -288,12 +291,14 @@ impl Game {
                         }) {
                             for &ui in &available {
                                 self.units[ui].assigned_zone = Some(zi as u8);
+                                self.units[ui].rally_hold = false;
                             }
                         }
                     } else {
                         // Distribute evenly by round-robin
                         for (i, &ui) in available.iter().enumerate() {
                             self.units[ui].assigned_zone = Some(owned[i % owned.len()]);
+                            self.units[ui].rally_hold = false;
                         }
                     }
                 }

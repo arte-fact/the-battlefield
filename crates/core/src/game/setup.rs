@@ -131,7 +131,8 @@ impl Game {
     pub fn tick_production(&mut self, dt: f32) {
         let factions = [(0usize, Faction::Blue), (1, Faction::Red)];
         for &(fi, faction) in &factions {
-            // Refill queue if empty and under unit cap
+            // Refill queue if empty and under unit cap.
+            // Larger wave when holding 0 zones (desperate comeback).
             if self.spawn_queue[fi].is_empty() {
                 let alive_count = self
                     .units
@@ -139,9 +140,25 @@ impl Game {
                     .filter(|u| u.alive && u.faction == faction)
                     .count();
                 if alive_count < self.config.max_units_per_faction {
+                    let holds_zone = self
+                        .zone_manager
+                        .zones
+                        .iter()
+                        .any(|z| z.state == crate::zone::ZoneState::Controlled(faction));
                     let slots = self.config.max_units_per_faction.saturating_sub(alive_count);
-                    let wave_size = slots.min(Self::WAVE.len());
-                    self.spawn_queue[fi] = Self::WAVE[..wave_size].to_vec();
+                    // Double wave size when holding no zones (fill army faster)
+                    let max_wave = if holds_zone {
+                        Self::WAVE.len()
+                    } else {
+                        Self::WAVE.len() * 2
+                    };
+                    let wave_size = slots.min(max_wave);
+                    // Build wave by cycling through WAVE pattern
+                    let mut queue = Vec::with_capacity(wave_size);
+                    for i in 0..wave_size {
+                        queue.push(Self::WAVE[i % Self::WAVE.len()]);
+                    }
+                    self.spawn_queue[fi] = queue;
                     self.spawn_timer[fi] = 0.0;
                 }
             }
