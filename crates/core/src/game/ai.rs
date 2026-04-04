@@ -152,7 +152,7 @@ impl Game {
         false
     }
 
-    /// Real-time melee AI: attack if in melee range and can_act, else move toward.
+    /// Real-time melee AI: attack if in melee range and can_act, else close distance.
     fn ai_melee_tick(&mut self, ai_idx: usize, dt: f32) {
         let ai_id = self.units[ai_idx].id;
 
@@ -170,14 +170,13 @@ impl Game {
 
         if self.units[ai_idx].can_act() && dist <= reach {
             self.execute_attack(ai_id, enemy_id, None);
-        } else if dist <= reach {
-            // In range but on cooldown — hold position (lancers keep distance)
         } else {
+            // Not in range, or on cooldown — keep closing distance
             self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
         }
     }
 
-    /// Real-time archer AI: ranged if in range, melee if adjacent, hold if on cooldown, approach otherwise.
+    /// Real-time archer AI: ranged if in range, else approach. On cooldown, hold at range.
     fn ai_archer_tick(&mut self, ai_idx: usize, dt: f32) {
         let ai_id = self.units[ai_idx].id;
         let range_world = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
@@ -193,11 +192,11 @@ impl Game {
 
         if self.units[ai_idx].can_act() && dist <= range_world {
             self.execute_attack(ai_id, enemy_id, None);
-        } else if dist <= range_world {
-            // In range but on cooldown — hold position
-        } else {
+        } else if dist > range_world {
+            // Out of range — approach
             self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
         }
+        // In range but on cooldown — archers hold position (intentional)
     }
 
     /// Compute a standoff point for a monk: a position monk_follow_dist away from

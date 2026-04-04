@@ -459,12 +459,17 @@ impl Game {
             self.nearest_objective_pos(ai_idx)
         };
 
-        // If already inside the assigned zone, stop
+        // If inside our assigned zone and it's fully captured, hold position.
+        // Don't stop if the zone is contested or has enemies — keep fighting.
         if let Some(zi) = assigned_zone {
-            if (zi as usize) < self.zone_manager.zones.len()
-                && self.zone_manager.zones[zi as usize].contains_world(ux, uy)
-            {
-                return;
+            let zi_usize = zi as usize;
+            if zi_usize < self.zone_manager.zones.len() {
+                let zone = &self.zone_manager.zones[zi_usize];
+                if zone.contains_world(ux, uy)
+                    && zone.state == crate::zone::ZoneState::Controlled(faction)
+                {
+                    return;
+                }
             }
         }
 
