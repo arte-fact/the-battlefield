@@ -703,10 +703,10 @@ impl Assets {
 
     fn create_fog_texture(&mut self, gpu: &GpuContext) {
         let size = battlefield_core::grid::GRID_SIZE;
-        // Use linear (non-sRGB) format for fog — the pixel data is raw RGBA
-        // with alpha encoding fog darkness. sRGB would distort the values.
+        // R8Unorm: 1 byte per tile (0.0=hidden, 1.0=visible).
+        // The fog shader computes smooth alpha on the GPU.
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("fog"),
+            label: Some("fog_vis"),
             size: wgpu::Extent3d {
                 width: size,
                 height: size,
@@ -715,13 +715,13 @@ impl Assets {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::R8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        // Fog uses linear sampler for smooth edges
+        // Linear sampler — bilinear interpolation gives smooth sub-tile fog gradients
         let bind_group = gpu.create_texture_bind_group(&view, &gpu.linear_sampler);
 
         let id = self.textures.len();
@@ -742,7 +742,7 @@ impl Assets {
         self.white_texture = Some(id);
     }
 
-    /// Update fog of war texture pixels.
+    /// Update fog visibility texture (R8Unorm, 1 byte per tile: 0=hidden, 255=visible).
     pub fn update_fog(&self, gpu: &GpuContext, pixels: &[u8], size: u32) {
         if let Some(tex) = &self.fog_wgpu_texture {
             gpu.queue.write_texture(
@@ -755,7 +755,7 @@ impl Assets {
                 pixels,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(4 * size),
+                    bytes_per_row: Some(size), // 1 byte per pixel
                     rows_per_image: Some(size),
                 },
                 wgpu::Extent3d {

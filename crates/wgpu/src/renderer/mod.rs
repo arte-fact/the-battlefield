@@ -20,7 +20,8 @@ use effects_batch::EffectsBatch;
 use primitive_batch::PrimitiveBatch;
 use sprite_batch::SpriteBatch;
 
-use crate::gpu::{CameraUniform, GpuContext};
+use crate::gpu::{CameraUniform, GpuContext, SpriteVertex};
+use wgpu::util::DeviceExt;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WgpuBackend — implements DrawBackend for core's shared foreground rendering
@@ -238,8 +239,8 @@ pub fn render_frame(
         );
     }
 
-    // Fog of war (drawn before overlays so text stays readable)
-    draw_fog(&mut sprite_batch, gpu, game, assets);
+    // Fog of war — upload visibility data; rendered with fog pipeline in the render pass
+    upload_fog_visibility(gpu, game, assets);
 
     // HP bars + unit markers + order labels (on top of fog)
     draw_unit_overlays(&mut prim_batch, &mut sprite_batch, gpu, game, assets, cam);
@@ -313,6 +314,26 @@ pub fn render_frame(
     gpu.set_camera(&CameraUniform::world_camera(cam));
     gpu.set_hud_camera(&CameraUniform::screen_ortho(vw, vh));
 
+    // Fog quad: a single world-sized quad for the fog shader
+    let world_size = game.grid.width as f32 * TILE_SIZE;
+    let fog_verts = [
+        SpriteVertex { position: [0.0, 0.0],             uv: [0.0, 0.0],       color_mod: [1.0; 4] },
+        SpriteVertex { position: [world_size, 0.0],       uv: [1.0, 0.0],       color_mod: [1.0; 4] },
+        SpriteVertex { position: [world_size, world_size], uv: [1.0, 1.0],      color_mod: [1.0; 4] },
+        SpriteVertex { position: [0.0, world_size],        uv: [0.0, 1.0],      color_mod: [1.0; 4] },
+    ];
+    let fog_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+    let fog_vb = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("fog_vb"),
+        contents: bytemuck::cast_slice(&fog_verts),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let fog_ib = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("fog_ib"),
+        contents: bytemuck::cast_slice(&fog_indices),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+
     // ── Render pass ──────────────────────────────────────────────────────
 
     let mut encoder = gpu
@@ -344,10 +365,11 @@ pub fn render_frame(
             occlusion_query_set: None,
         });
 
-        // World-space draws: base terrain → effects → foreground → prims
+        // World-space draws: base terrain → effects → foreground → fog → prims
         base_sprites.render(&mut pass, gpu, &assets.textures, text_textures);
         effects.render(&mut pass, gpu);
         sprite_batch.render(&mut pass, gpu, &assets.textures, text_textures);
+        render_fog(&mut pass, gpu, assets, &fog_vb, &fog_ib);
         prim_batch.render(&mut pass, gpu);
 
         // HUD draws: bg panels → primitive fills → foreground text/labels
@@ -923,23 +945,35 @@ fn draw_unit_overlays(
     }
 }
 
-fn draw_fog(batch: &mut SpriteBatch, gpu: &GpuContext, game: &Game, assets: &Assets) {
+/// Upload visibility data to the fog texture. The fog shader computes smoothing on the GPU.
+fn upload_fog_visibility(gpu: &GpuContext, game: &Game, assets: &Assets) {
+    if assets.fog_texture.is_none() {
+        return;
+    }
+    let size = game.grid.width;
+    // Convert bool visibility to u8: true → 255 (1.0 in R8Unorm), false → 0
+    let pixels: Vec<u8> = game.visible.iter().map(|&v| if v { 255 } else { 0 }).collect();
+    assets.update_fog(gpu, &pixels, size);
+}
+
+/// Render fog quad using the dedicated fog pipeline.
+fn render_fog<'a>(
+    pass: &mut wgpu::RenderPass<'a>,
+    gpu: &'a GpuContext,
+    assets: &'a Assets,
+    fog_vb: &'a wgpu::Buffer,
+    fog_ib: &'a wgpu::Buffer,
+) {
     let Some(tex_id) = assets.fog_texture else {
         return;
     };
     let tex = &assets.textures[tex_id];
-    let size = game.grid.width;
-    let pixels = render_util::build_fog_pixels(&game.visible, size, game.grid.height);
-    assets.update_fog(gpu, &pixels, size);
-    let world_size = size as f32 * TILE_SIZE;
-    batch.draw_sprite(
-        tex_id,
-        [0.0, 0.0, size as f32, size as f32],
-        [0.0, 0.0, world_size, world_size],
-        (tex.width, tex.height),
-        false,
-        [1.0, 1.0, 1.0, 1.0],
-    );
+    pass.set_pipeline(&gpu.fog_pipeline);
+    pass.set_bind_group(0, &gpu.camera_bind_group, &[]);
+    pass.set_bind_group(1, &tex.bind_group, &[]);
+    pass.set_vertex_buffer(0, fog_vb.slice(..));
+    pass.set_index_buffer(fog_ib.slice(..), wgpu::IndexFormat::Uint32);
+    pass.draw_indexed(0..6, 0, 0..1);
 }
 
 fn draw_floating_texts(

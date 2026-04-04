@@ -150,6 +150,7 @@ pub struct GpuContext {
     pub sprite_pipeline: wgpu::RenderPipeline,
     pub primitive_pipeline: wgpu::RenderPipeline,
     pub effects_pipeline: wgpu::RenderPipeline,
+    pub fog_pipeline: wgpu::RenderPipeline,
 
     // Camera uniforms (bind group 0)
     pub camera_buffer: wgpu::Buffer,
@@ -493,6 +494,46 @@ impl GpuContext {
             cache: None,
         });
 
+        // ── Fog pipeline (GPU-side fog-of-war computation) ──────────────
+        let fog_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("fog_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/fog.wgsl").into()),
+        });
+
+        let fog_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("fog_rp"),
+            layout: Some(&sprite_pipeline_layout), // same layout: camera + texture
+            vertex: wgpu::VertexState {
+                module: &fog_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[SpriteVertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &fog_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend_alpha),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             device,
             queue,
@@ -502,6 +543,7 @@ impl GpuContext {
             sprite_pipeline,
             primitive_pipeline,
             effects_pipeline,
+            fog_pipeline,
             camera_buffer,
             camera_bind_group,
             camera_bind_group_layout,
