@@ -133,7 +133,9 @@ impl Game {
                 continue;
             }
 
+            let slot = self.recruited.len() as u32;
             self.recruited.insert(self.units[idx].id);
+            self.units[idx].follow_slot = slot;
             // Newly recruited units default to Follow
             self.units[idx].order = Some(OrderKind::Follow);
             self.units[idx].order_flash = self.config.order_flash_duration;
@@ -218,9 +220,7 @@ impl Game {
         if dist < self.config.follow_distance_tiles * TILE_SIZE {
             self.units[ai_idx].set_anim(UnitAnim::Idle);
         } else {
-            // Use stable slot index from recruited list (not unit ID) to prevent reshuffle
-            let uid = self.units[ai_idx].id;
-            let slot = self.recruited.iter().position(|&id| id == uid).unwrap_or(0) as f32;
+            let slot = self.units[ai_idx].follow_slot as f32;
             let angle = slot * 2.39996; // golden angle for even spacing
             let offset_x = angle.cos() * self.config.follow_distance_tiles * TILE_SIZE * 0.7;
             let offset_y = angle.sin() * self.config.follow_distance_tiles * TILE_SIZE * 0.7;

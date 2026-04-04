@@ -238,6 +238,8 @@ pub struct Unit {
     pub rally_hold: bool,
     /// Toggle for alternating between Attack and Attack2 animations (warrior only).
     pub attack_variant: bool,
+    /// Cached follow formation slot (set when recruited, avoids per-frame scan).
+    pub follow_slot: u32,
     /// Zone this unit is assigned to navigate toward (per-unit objective scoring).
     pub assigned_zone: Option<u8>,
     /// Seconds remaining before this unit can be reassigned to a different zone.
@@ -280,6 +282,7 @@ impl Unit {
             reject_flash: 0.0,
             rally_hold: false,
             attack_variant: false,
+            follow_slot: 0,
             assigned_zone: None,
             zone_lock_timer: 0.0,
         }

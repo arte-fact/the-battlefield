@@ -20,7 +20,7 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
-            background: #000;
+            background: #1a1a2e;
             overflow: hidden;
             width: 100%;
             height: 100%;
@@ -538,7 +538,7 @@
             navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(function() {});
         }
 
-        // Fullscreen + wake lock
+        // Fullscreen + wake lock + orientation lock
         window.__requestFullscreen = function() {
             var el = document.documentElement;
             var rfs = el.requestFullscreen
@@ -546,12 +546,48 @@
                 || el.mozRequestFullScreen
                 || el.msRequestFullscreen;
             if (rfs) {
-                rfs.call(el).catch(function() {});
+                rfs.call(el).then(function() {
+                    // Try to lock orientation to current after entering fullscreen
+                    if (screen.orientation && screen.orientation.lock) {
+                        screen.orientation.lock('any').catch(function() {});
+                    }
+                }).catch(function() {});
             }
             if ('wakeLock' in navigator) {
                 navigator.wakeLock.request('screen').catch(function() {});
             }
         };
+
+        // Trigger fullscreen on first user interaction (matches SDL PWA behavior).
+        // Browsers require a user gesture to enter fullscreen.
+        var fullscreenRequested = false;
+        function onFirstInteraction() {
+            if (fullscreenRequested) return;
+            fullscreenRequested = true;
+            // Only auto-fullscreen in standalone/PWA mode or mobile
+            var isStandalone = window.matchMedia('(display-mode: standalone)').matches
+                || window.matchMedia('(display-mode: fullscreen)').matches
+                || window.navigator.standalone === true;
+            var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+            if (isStandalone || isMobile) {
+                window.__requestFullscreen();
+            }
+            document.removeEventListener('click', onFirstInteraction);
+            document.removeEventListener('touchstart', onFirstInteraction);
+        }
+        document.addEventListener('click', onFirstInteraction, { once: true });
+        document.addEventListener('touchstart', onFirstInteraction, { once: true });
+
+        // Re-request wake lock when page becomes visible again (e.g. switching back to tab)
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'visible' && 'wakeLock' in navigator) {
+                navigator.wakeLock.request('screen').catch(function() {});
+            }
+        });
+
+        // Handle fullscreen exit — resize canvas
+        document.addEventListener('fullscreenchange', function() { resizeCanvas(); setTimeout(resizeCanvas, 100); });
+        document.addEventListener('webkitfullscreenchange', function() { resizeCanvas(); setTimeout(resizeCanvas, 100); });
     </script>
     <script type="module">
         import init, { get_ai_config, set_ai_config } from './battlefield_wgpu_native.js';

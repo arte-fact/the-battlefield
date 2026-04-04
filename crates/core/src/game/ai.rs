@@ -5,13 +5,15 @@ impl Game {
         // Reset per-tick A* budget
         self.astar_budget = self.config.astar_budget_per_tick;
 
-        // Build occupied set once per frame (shared across all pathfinding calls)
-        self.ai_occupied_cache = self
-            .units
-            .iter()
-            .filter(|u| u.alive)
-            .map(|u| u.grid_cell())
-            .collect();
+        // Rebuild flat occupied grid once per frame (L1-friendly array lookup in A*)
+        self.ai_occupied_grid.fill(false);
+        let gw = self.grid.width as usize;
+        for u in &self.units {
+            if u.alive {
+                let (gx, gy) = u.grid_cell();
+                self.ai_occupied_grid[gy as usize * gw + gx as usize] = true;
+            }
+        }
 
         // Recompute macro objectives periodically, staggering factions to avoid
         // both score_all_zones() calls landing on the same frame.
