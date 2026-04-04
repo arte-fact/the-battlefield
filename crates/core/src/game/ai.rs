@@ -152,7 +152,10 @@ impl Game {
         false
     }
 
-    /// Real-time melee AI: attack if in melee range and can_act, else close distance.
+    /// Real-time melee AI: attack if in range, chase if close, else follow flow field.
+    /// Only diverts from zone objective for enemies within engagement range (4 tiles),
+    /// not the full 10-tile vision range — prevents chasing fleeing monks/archers
+    /// across the map instead of capturing zones.
     fn ai_melee_tick(&mut self, ai_idx: usize, dt: f32) {
         let ai_id = self.units[ai_idx].id;
 
@@ -167,16 +170,20 @@ impl Game {
 
         let reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
         let reach = reach.max(MELEE_RANGE);
+        let engage_range = TILE_SIZE * 4.0; // only chase enemies within 4 tiles
 
         if self.units[ai_idx].can_act() && dist <= reach {
             self.execute_attack(ai_id, enemy_id, None);
-        } else {
-            // Not in range, or on cooldown — keep closing distance
+        } else if dist <= engage_range {
+            // Close enough to be a threat — chase
             self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
+        } else {
+            // Enemy detected but far — keep marching toward zone objective
+            self.ai_move_via_flowfield(ai_idx, dt);
         }
     }
 
-    /// Real-time archer AI: ranged if in range, else approach. On cooldown, hold at range.
+    /// Real-time archer AI: attack if in range, approach if close, else follow flow field.
     fn ai_archer_tick(&mut self, ai_idx: usize, dt: f32) {
         let ai_id = self.units[ai_idx].id;
         let range_world = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
@@ -192,11 +199,15 @@ impl Game {
 
         if self.units[ai_idx].can_act() && dist <= range_world {
             self.execute_attack(ai_id, enemy_id, None);
-        } else if dist > range_world {
-            // Out of range — approach
+        } else if dist <= range_world {
+            // In range but on cooldown — hold position
+        } else if dist <= range_world + TILE_SIZE * 2.0 {
+            // Slightly out of range — close the gap
             self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
+        } else {
+            // Enemy far away — keep marching toward zone objective
+            self.ai_move_via_flowfield(ai_idx, dt);
         }
-        // In range but on cooldown — archers hold position (intentional)
     }
 
     /// Compute a standoff point for a monk: a position monk_follow_dist away from
