@@ -12,6 +12,12 @@ pub struct MapLayout {
     pub blue_gather: (u32, u32),
     /// Rally point for Red: front-center of Red base (toward battlefield).
     pub red_gather: (u32, u32),
+    /// Zone indices that are "home" zones for Blue (always capturable by Blue).
+    pub blue_home_zones: Vec<u8>,
+    /// Zone indices that are "home" zones for Red (always capturable by Red).
+    pub red_home_zones: Vec<u8>,
+    /// Adjacency: connections[i] = list of zone indices connected to zone i.
+    pub connections: Vec<Vec<u8>>,
 }
 
 /// A rectangle used during BSP partitioning.
@@ -319,26 +325,38 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
     let blue_base = sorted_leaves[0].center();
     let red_base = sorted_leaves[sorted_leaves.len() - 1].center();
 
-    // Place 5 zones: 3 along the diagonal between bases + 2 flanks
+    // Place 7 zones: 2 near Blue base, 3 on center line, 2 near Red base.
+    // Layout: B1-B2 (30% from Blue) → C1-C2-C3 (center) → R1-R2 (30% from Red)
     let (bx, by) = (blue_base.0 as f32, blue_base.1 as f32);
     let (rx, ry) = (red_base.0 as f32, red_base.1 as f32);
-    let mid_x = (bx + rx) * 0.5;
-    let mid_y = (by + ry) * 0.5;
     let dx = rx - bx;
     let dy = ry - by;
-    // 3 diagonal zones at 25%, 50%, 75% between bases
-    let diag: Vec<(u32, u32)> = [0.25_f32, 0.50, 0.75]
-        .iter()
-        .map(|&t| ((bx + dx * t) as u32, (by + dy * t) as u32))
-        .collect();
-    // 2 flanks: perpendicular offset from midpoint
-    let perp_x = -dy * 0.25;
-    let perp_y = dx * 0.25;
-    let flank1 = ((mid_x + perp_x) as u32, (mid_y + perp_y) as u32);
-    let flank2 = ((mid_x - perp_x) as u32, (mid_y - perp_y) as u32);
-    let mut zone_centers = diag;
-    zone_centers.push(flank1);
-    zone_centers.push(flank2);
+    // Perpendicular offset for spreading zones across the width
+    let perp_x = -dy;
+    let perp_y = dx;
+    let perp_len = (perp_x * perp_x + perp_y * perp_y).sqrt().max(1.0);
+    let px = perp_x / perp_len;
+    let py = perp_y / perp_len;
+    let spread = 18.0; // offset in tiles from the diagonal
+
+    // B1, B2: 30% from Blue base, offset left/right
+    let t_near = 0.28;
+    let b1 = ((bx + dx * t_near + px * spread) as u32, (by + dy * t_near + py * spread) as u32);
+    let b2 = ((bx + dx * t_near - px * spread) as u32, (by + dy * t_near - py * spread) as u32);
+
+    // C1, C2, C3: center line (50%), spread across width
+    let t_mid = 0.50;
+    let c1 = ((bx + dx * t_mid + px * spread) as u32, (by + dy * t_mid + py * spread) as u32);
+    let c2 = ((bx + dx * t_mid) as u32, (by + dy * t_mid) as u32);
+    let c3 = ((bx + dx * t_mid - px * spread) as u32, (by + dy * t_mid - py * spread) as u32);
+
+    // R1, R2: 30% from Red base (= 70% from Blue), offset left/right
+    let t_far = 0.72;
+    let r1 = ((bx + dx * t_far + px * spread) as u32, (by + dy * t_far + py * spread) as u32);
+    let r2 = ((bx + dx * t_far - px * spread) as u32, (by + dy * t_far - py * spread) as u32);
+
+    // Order: B1, B2, C1, C2, C3, R1, R2 (indices 0-6)
+    let zone_centers = vec![b1, b2, c1, c2, c3, r1, r2];
 
     // Clear 24×28 rect around each base (wider for flank towers, deeper for rear village)
     clear_rect(
@@ -365,12 +383,27 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
     let blue_gather = blue_base;
     let red_gather = red_base;
 
+    // Zone connectivity: B1(0)-B2(1)-C1(2)-C2(3)-C3(4)-R1(5)-R2(6)
+    // B1↔C1, B1↔C2, B2↔C2, B2↔C3, C1↔R1, C2↔R1, C2↔R2, C3↔R2
+    let connections = vec![
+        vec![2, 3],    // 0 (B1) → C1, C2
+        vec![3, 4],    // 1 (B2) → C2, C3
+        vec![0, 5],    // 2 (C1) → B1, R1
+        vec![0, 1, 5, 6], // 3 (C2) → B1, B2, R1, R2
+        vec![1, 6],    // 4 (C3) → B2, R2
+        vec![2, 3],    // 5 (R1) → C1, C2
+        vec![3, 4],    // 6 (R2) → C2, C3
+    ];
+
     let layout = MapLayout {
         blue_base,
         red_base,
         zone_centers,
         blue_gather,
         red_gather,
+        blue_home_zones: vec![0, 1], // B1, B2
+        red_home_zones: vec![5, 6],  // R1, R2
+        connections,
     };
 
     // Generate 2-tile-wide roads connecting bases through capture zones
@@ -1000,12 +1033,12 @@ mod tests {
     }
 
     #[test]
-    fn layout_has_five_zones() {
+    fn layout_has_seven_zones() {
         let (_, layout) = generate_battlefield(42);
         assert_eq!(
             layout.zone_centers.len(),
-            5,
-            "Should have exactly 5 zones (3 diagonal + 2 flanks)"
+            7,
+            "Should have exactly 7 zones (2 Blue-side + 3 center + 2 Red-side)"
         );
     }
 

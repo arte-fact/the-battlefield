@@ -361,6 +361,9 @@ mod tests {
             zone_centers: vec![(50, 50), (80, 80), (110, 110)],
             blue_gather: (21, 21),
             red_gather: (138, 138),
+            blue_home_zones: vec![0],
+            red_home_zones: vec![2],
+            connections: vec![vec![1], vec![0, 2], vec![1]],
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
         let z0gx = game.zone_manager.zones[0].center_gx;

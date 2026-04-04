@@ -133,16 +133,10 @@ impl FlowField {
 /// Per-faction cached flow field state.
 #[derive(Default)]
 pub struct FactionFlowState {
-    /// Unified multi-source field (fallback navigation).
-    pub field: Option<FlowField>,
-    /// Cached (gx, gy, initial_cost) tuples used to detect when regeneration is needed.
-    pub cached_goals: Vec<(u32, u32, u32)>,
     /// Per-zone flow fields, indexed by zone id.
     pub zone_fields: Vec<Option<FlowField>>,
     /// Cached (gx, gy) per zone for change detection.
     pub cached_zone_goals: Vec<Option<(u32, u32)>>,
-    /// Number of units assigned to each zone (updated each scoring cycle).
-    pub zone_congestion: Vec<u32>,
 }
 
 impl FactionFlowState {

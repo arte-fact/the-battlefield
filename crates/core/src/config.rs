@@ -24,18 +24,6 @@ pub struct GameConfig {
     pub separation_weight: f32,
     pub fov_radius: i32,
     pub move_speed_divisor: f32,
-    pub flow_initial_cost_base: u32,
-    pub flow_score_multiplier: f32,
-
-    // ── Zone Assignment Scoring ─────────────────────────────────────
-    pub zone_cost_norm_divisor: f32,
-    pub zone_distance_weight: f32,
-    pub zone_congestion_weight: f32,
-    pub zone_hysteresis: f32,
-    pub zone_capture_commit_base: f32,
-    pub zone_capture_commit_extra_base: f32,
-    pub zone_capture_commit_progress_mult: f32,
-    pub zone_lock_duration: f32,
 
     // ── Authority System ────────────────────────────────────────────
     pub authority_follow_base: f32,
@@ -121,18 +109,7 @@ impl Default for GameConfig {
             separation_weight: 0.2,
             fov_radius: 15,
             move_speed_divisor: 0.90,
-            flow_initial_cost_base: 750,
-            flow_score_multiplier: 5.0,
 
-            // Zone Assignment Scoring
-            zone_cost_norm_divisor: 2500.0,
-            zone_distance_weight: -30.0,
-            zone_congestion_weight: -8.0,
-            zone_hysteresis: 15.0,
-            zone_capture_commit_base: 20.0,
-            zone_capture_commit_extra_base: 25.0,
-            zone_capture_commit_progress_mult: 20.0,
-            zone_lock_duration: 8.0,
 
             // Authority System
             authority_follow_base: 0.30,

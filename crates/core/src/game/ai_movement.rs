@@ -134,9 +134,6 @@ impl Game {
         let ensure_size = |state: &mut crate::flowfield::FactionFlowState, n: usize| {
             state.zone_fields.resize_with(n, || None);
             state.cached_zone_goals.resize_with(n, || None);
-            if state.zone_congestion.len() != n {
-                state.zone_congestion.resize(n, 0);
-            }
         };
         match faction {
             Faction::Blue => ensure_size(&mut self.blue_flow, zone_count),
@@ -177,265 +174,131 @@ impl Game {
     /// Seeds Dijkstra from every scored zone; higher-score zones get lower initial cost.
     pub(super) fn update_flow_fields(&mut self, faction: Faction) {
         self.update_per_zone_fields(faction);
-        let fi = match faction {
-            Faction::Blue => 0,
-            Faction::Red => 1,
-        };
-
-        // Build goal tuples — separate block to avoid borrow conflict with flow state below
-        let goals: Vec<(u32, u32, u32)> = {
-            let objectives = &self.macro_objectives[fi];
-            if objectives.is_empty() {
-                return;
-            }
-            let mut v = Vec::with_capacity(objectives.len());
-            for &(wx, wy, score) in objectives {
-                let (gx, gy) = grid::world_to_grid(wx, wy);
-                let gx = gx.max(0) as u32;
-                let gy = gy.max(0) as u32;
-                let (gx, gy) = if self.grid.is_passable(gx, gy) {
-                    (gx, gy)
-                } else {
-                    self.find_nearest_passable(gx, gy).unwrap_or((gx, gy))
-                };
-                let initial_cost = self.config.flow_initial_cost_base.saturating_sub((score * self.config.flow_score_multiplier).round() as u32);
-                v.push((gx, gy, initial_cost));
-            }
-            v
-        };
-
-        // Skip regeneration if goals are identical to the cached set
-        let cached = match faction {
-            Faction::Blue => &self.blue_flow.cached_goals,
-            _ => &self.red_flow.cached_goals,
-        };
-        let needs_regen = {
-            let field_missing = match faction {
-                Faction::Blue => self.blue_flow.field.is_none(),
-                _ => self.red_flow.field.is_none(),
-            };
-            field_missing
-                || cached.len() != goals.len()
-                || cached.iter().zip(goals.iter()).any(|(a, b)| a != b)
-        };
-
-        if !needs_regen {
-            return;
-        }
-
-        let field = crate::flowfield::FlowField::generate_multi_source(&self.grid, &goals);
-        let state = match faction {
-            Faction::Blue => &mut self.blue_flow,
-            _ => &mut self.red_flow,
-        };
-        state.field = Some(field);
-        state.cached_goals = goals;
     }
 
-    /// Assign each AI unit to its best-scoring zone based on flow cost,
-    /// congestion, influence, role, health, and hysteresis.
+    /// Faction-level objective planner: picks 1-2 target zones and assigns
+    /// all units in bulk. Concentrates force instead of spreading thin.
     pub(super) fn assign_unit_objectives(&mut self) {
         let zone_count = self.zone_manager.zones.len();
         if zone_count == 0 {
             return;
         }
 
-        // === Phase 1: Gather read-only data to avoid borrow conflicts ===
-
-        let zone_info: Vec<(f32, f32, ZoneState, u32, u32, f32)> = self
-            .zone_manager
-            .zones
-            .iter()
-            .map(|z| {
-                (
-                    z.center_wx,
-                    z.center_wy,
-                    z.state,
-                    z.blue_count,
-                    z.red_count,
-                    z.progress,
-                )
-            })
-            .collect();
-        let zone_radius_sq = (self.config.zone_radius as f32 * TILE_SIZE).powi(2);
-
-        let macro_obj = [
-            self.macro_objectives[0].clone(),
-            self.macro_objectives[1].clone(),
-        ];
-
-        // Previous congestion (from last assignment cycle)
-        let prev_blue_cong = self.blue_flow.zone_congestion.clone();
-        let prev_red_cong = self.red_flow.zone_congestion.clone();
-
-        // Collect per-unit data + flow costs (avoids repeated flow state borrows)
-        #[allow(clippy::type_complexity)]
-        let unit_data: Vec<(
-            usize,
-            Faction,
-            Option<u8>,
-            f32,
-            UnitKind,
-            f32,
-            f32,
-            f32,
-            Vec<u32>,
-        )> = self
-            .units
-            .iter()
-            .enumerate()
-            .filter(|(_, u)| u.alive && !u.is_player)
-            .map(|(ui, u)| {
-                let (gx, gy) = u.grid_cell();
-                let flow_state = match u.faction {
-                    Faction::Blue => &self.blue_flow,
-                    _ => &self.red_flow,
-                };
-                let costs: Vec<u32> = (0..zone_count)
-                    .map(|zi| {
-                        flow_state
-                            .zone_fields
-                            .get(zi)
-                            .and_then(|f| f.as_ref())
-                            .map(|f| f.cost_at(gx, gy))
-                            .unwrap_or(u32::MAX)
-                    })
-                    .collect();
-                (
-                    ui,
-                    u.faction,
-                    u.assigned_zone,
-                    u.hp as f32 / u.stats.max_hp as f32,
-                    u.kind,
-                    u.x,
-                    u.y,
-                    u.zone_lock_timer,
-                    costs,
-                )
-            })
-            .collect();
-
-        // === Phase 2: Score zones per-unit and assign ===
-        let mut assignments: Vec<(usize, Option<u8>)> = Vec::with_capacity(unit_data.len());
-        let mut new_blue_cong = vec![0u32; zone_count];
-        let mut new_red_cong = vec![0u32; zone_count];
-
-        for (ui, faction, current_zone, _hp_ratio, _kind, ux, uy, lock_timer, flow_costs) in
-            &unit_data
-        {
-            // If unit is locked to its current zone, skip scoring unless zone is
-            // fully controlled by our faction (no point guarding a secured zone)
-            if *lock_timer > 0.0 {
-                if let Some(zi) = current_zone {
-                    let zi_usize = *zi as usize;
-                    if zi_usize < zone_info.len() {
-                        let (_, _, state, _, _, _) = zone_info[zi_usize];
-                        if state != ZoneState::Controlled(*faction) {
-                            // Still locked — keep current assignment, count in congestion
-                            assignments.push((*ui, *current_zone));
-                            match faction {
-                                Faction::Blue => new_blue_cong[zi_usize] += 1,
-                                Faction::Red => new_red_cong[zi_usize] += 1,
-                            }
-                            continue;
-                        }
-                    }
-                }
-            }
-
+        for &faction in &[Faction::Blue, Faction::Red] {
             let fi = match faction {
                 Faction::Blue => 0,
                 Faction::Red => 1,
             };
-            let prev_cong = match faction {
-                Faction::Blue => &prev_blue_cong,
-                Faction::Red => &prev_red_cong,
-            };
+            let objectives = &self.macro_objectives[fi];
+            if objectives.is_empty() {
+                continue;
+            }
 
-            let mut best_score = f32::NEG_INFINITY;
-            let mut best_zone: Option<u8> = None;
+            // Find defend target (Tier 1: score >= 200) and attack target (Tier 2: score >= 85)
+            let mut defend_zone: Option<u8> = None;
+            let mut attack_zone: Option<u8> = None;
 
-            for (zi, &(zwx, zwy, state, _blue_count, _red_count, progress)) in
-                zone_info.iter().enumerate()
-            {
-                let cost = flow_costs[zi];
-                if cost == u32::MAX {
-                    continue;
-                }
-
-                // Base strategic score from macro objectives
-                let base_score = macro_obj[fi]
+            for &(wx, wy, score) in objectives {
+                let zi = self
+                    .zone_manager
+                    .zones
                     .iter()
-                    .find(|(wx, wy, _)| (wx - zwx).abs() < 1.0 && (wy - zwy).abs() < 1.0)
-                    .map(|(_, _, s)| *s)
-                    .unwrap_or(0.0);
+                    .position(|z| (z.center_wx - wx).abs() < 1.0 && (z.center_wy - wy).abs() < 1.0);
+                let Some(zi) = zi else { continue };
 
-                let cfg = &self.config;
+                if score >= 200.0 && defend_zone.is_none() {
+                    defend_zone = Some(zi as u8);
+                } else if score >= 85.0 && attack_zone.is_none() {
+                    attack_zone = Some(zi as u8);
+                }
+                if defend_zone.is_some() && attack_zone.is_some() {
+                    break;
+                }
+            }
 
-                // Terrain-aware distance penalty (normalized)
-                let cost_norm = cost as f32 / cfg.zone_cost_norm_divisor;
+            // Collect available AI units for this faction, sorted by index
+            let mut available: Vec<usize> = self
+                .units
+                .iter()
+                .enumerate()
+                .filter(|(_, u)| u.alive && !u.is_player && u.faction == faction)
+                .map(|(i, _)| i)
+                .collect();
 
-                // Congestion: fewer allies heading there = better
-                let cong = prev_cong.get(zi).copied().unwrap_or(0) as f32;
+            if available.is_empty() {
+                continue;
+            }
 
-                // Hysteresis: bonus for staying on current assignment
-                let hysteresis = if *current_zone == Some(zi as u8) {
-                    cfg.zone_hysteresis
-                } else {
-                    0.0
-                };
+            match (defend_zone, attack_zone) {
+                (Some(def_zi), Some(atk_zi)) => {
+                    // Split: 40% defend, 60% attack. Sort by flow cost to each target.
+                    let n_defend = ((available.len() as f32 * 0.4).ceil() as usize).min(available.len());
 
-                // Capture commitment: strong bonus when inside a zone still being captured.
-                let capture_commit = {
-                    let dx = ux - zwx;
-                    let dy = uy - zwy;
-                    let inside = dx * dx + dy * dy <= zone_radius_sq;
-                    if inside && state != ZoneState::Controlled(*faction) {
-                        let progress_for_us = match faction {
-                            Faction::Blue => progress,
-                            Faction::Red => -progress,
-                        };
-                        if progress_for_us > 0.0 {
-                            cfg.zone_capture_commit_extra_base
-                                + cfg.zone_capture_commit_progress_mult * progress_for_us
-                        } else {
-                            cfg.zone_capture_commit_base
+                    // Sort by flow cost to defend zone (nearest first)
+                    let flow_state = match faction {
+                        Faction::Blue => &self.blue_flow,
+                        _ => &self.red_flow,
+                    };
+                    available.sort_by_key(|&ui| {
+                        let (gx, gy) = self.units[ui].grid_cell();
+                        flow_state
+                            .zone_fields
+                            .get(def_zi as usize)
+                            .and_then(|f| f.as_ref())
+                            .map(|f| f.cost_at(gx, gy))
+                            .unwrap_or(u32::MAX)
+                    });
+
+                    // Nearest n_defend → defend, rest → attack
+                    for (i, &ui) in available.iter().enumerate() {
+                        let target = if i < n_defend { def_zi } else { atk_zi };
+                        self.units[ui].assigned_zone = Some(target);
+                    }
+                }
+                (None, Some(atk_zi)) => {
+                    // All-in attack
+                    for &ui in &available {
+                        self.units[ui].assigned_zone = Some(atk_zi);
+                    }
+                }
+                (Some(def_zi), None) => {
+                    // Only defending — all to defend target
+                    for &ui in &available {
+                        self.units[ui].assigned_zone = Some(def_zi);
+                    }
+                }
+                (None, None) => {
+                    // All secure — spread evenly across owned zones (Tier 3)
+                    let owned: Vec<u8> = self
+                        .zone_manager
+                        .zones
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, z)| z.state == ZoneState::Controlled(faction))
+                        .map(|(i, _)| i as u8)
+                        .collect();
+
+                    if owned.is_empty() {
+                        // Fallback: send all to first objective
+                        if let Some(zi) = self.zone_manager.zones.iter().position(|z| {
+                            let (wx, wy) = (z.center_wx, z.center_wy);
+                            objectives
+                                .iter()
+                                .any(|(ox, oy, _)| (ox - wx).abs() < 1.0 && (oy - wy).abs() < 1.0)
+                        }) {
+                            for &ui in &available {
+                                self.units[ui].assigned_zone = Some(zi as u8);
+                            }
                         }
                     } else {
-                        0.0
+                        // Distribute evenly by round-robin
+                        for (i, &ui) in available.iter().enumerate() {
+                            self.units[ui].assigned_zone = Some(owned[i % owned.len()]);
+                        }
                     }
-                };
-
-                let score = base_score
-                    + cfg.zone_distance_weight * cost_norm
-                    + cfg.zone_congestion_weight * cong
-                    + hysteresis
-                    + capture_commit;
-
-                if score > best_score {
-                    best_score = score;
-                    best_zone = Some(zi as u8);
-                }
-            }
-
-            assignments.push((*ui, best_zone));
-            if let Some(zi) = best_zone {
-                match faction {
-                    Faction::Blue => new_blue_cong[zi as usize] += 1,
-                    Faction::Red => new_red_cong[zi as usize] += 1,
                 }
             }
         }
-
-        // === Phase 3: Apply assignments and congestion ===
-        for (ui, zone) in assignments {
-            if zone != self.units[ui].assigned_zone {
-                self.units[ui].zone_lock_timer = self.config.zone_lock_duration;
-            }
-            self.units[ui].assigned_zone = zone;
-        }
-        self.blue_flow.zone_congestion = new_blue_cong;
-        self.red_flow.zone_congestion = new_red_cong;
     }
 
     /// Move AI unit via its assigned zone's per-zone flow field.
@@ -473,23 +336,20 @@ impl Game {
             }
         }
 
-        // Read direction from assigned zone's per-zone field, else unified field
+        // Read direction from assigned zone's per-zone flow field
         let (gx, gy) = self.units[ai_idx].grid_cell();
         let dir = {
             let flow_state = match faction {
                 Faction::Blue => &self.blue_flow,
                 _ => &self.red_flow,
             };
-            // Try per-zone field first
-            let zone_dir = assigned_zone.and_then(|zi| {
+            assigned_zone.and_then(|zi| {
                 flow_state
                     .zone_fields
                     .get(zi as usize)
                     .and_then(|f| f.as_ref())
                     .map(|f| f.direction_at(gx, gy))
-            });
-            // Fallback to unified field
-            zone_dir.or_else(|| flow_state.field.as_ref().map(|f| f.direction_at(gx, gy)))
+            })
         };
 
         if let Some(dir) = dir {
@@ -580,6 +440,9 @@ mod tests {
             zone_centers: vec![(50, 50), (80, 80), (110, 110)],
             blue_gather: (21, 21),
             red_gather: (138, 138),
+            blue_home_zones: vec![0],
+            red_home_zones: vec![2],
+            connections: vec![vec![1], vec![0, 2], vec![1]],
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
         game.blue_objective = grid::grid_to_world(138, 138);

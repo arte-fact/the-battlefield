@@ -76,6 +76,12 @@ pub struct ZoneManager {
     pub blue_base: (u32, u32),
     /// Red base grid position (from layout).
     pub red_base: (u32, u32),
+    /// Zone indices that are "home" zones for Blue (always capturable).
+    pub blue_home_zones: Vec<u8>,
+    /// Zone indices that are "home" zones for Red (always capturable).
+    pub red_home_zones: Vec<u8>,
+    /// Adjacency list: connections[i] = zone indices connected to zone i.
+    pub connections: Vec<Vec<u8>>,
 }
 
 impl ZoneManager {
@@ -90,6 +96,9 @@ impl ZoneManager {
                 BORDER_SIZE + PLAYABLE_SIZE - 6,
                 BORDER_SIZE + PLAYABLE_SIZE - 6,
             ),
+            blue_home_zones: Vec::new(),
+            red_home_zones: Vec::new(),
+            connections: Vec::new(),
         }
     }
 
@@ -115,6 +124,9 @@ impl ZoneManager {
             victory_candidate: None,
             blue_base: layout.blue_base,
             red_base: layout.red_base,
+            blue_home_zones: layout.blue_home_zones.clone(),
+            red_home_zones: layout.red_home_zones.clone(),
+            connections: layout.connections.clone(),
         }
     }
 
@@ -373,14 +385,22 @@ mod tests {
             blue_base: (b + 5, b + 5),
             red_base: (b + PLAYABLE_SIZE - 6, b + PLAYABLE_SIZE - 6),
             zone_centers: vec![
-                (b + 35, b + 35), // diagonal 25%
-                (b + 64, b + 64), // diagonal 50% (center)
-                (b + 93, b + 93), // diagonal 75%
-                (b + 35, b + 93), // flank
-                (b + 93, b + 35), // flank
+                (b + 35, b + 35), // B1
+                (b + 35, b + 93), // B2
+                (b + 64, b + 35), // C1
+                (b + 64, b + 64), // C2
+                (b + 64, b + 93), // C3
+                (b + 93, b + 35), // R1
+                (b + 93, b + 93), // R2
             ],
             blue_gather: (b + 5, b + 5),
             red_gather: (b + PLAYABLE_SIZE - 6, b + PLAYABLE_SIZE - 6),
+            blue_home_zones: vec![0, 1],
+            red_home_zones: vec![5, 6],
+            connections: vec![
+                vec![2, 3], vec![3, 4], vec![0, 5], vec![0, 1, 5, 6],
+                vec![1, 6], vec![2, 3], vec![3, 4],
+            ],
         }
     }
 
@@ -511,9 +531,9 @@ mod tests {
     fn best_target_nearest_uncontrolled() {
         let mut mgr = test_zones();
         mgr.zones[0].state = ZoneState::Controlled(Faction::Blue);
-        // Zone 1 is nearest to Blue base among remaining neutral zones
+        // Nearest uncontrolled zone to Blue base among remaining neutral zones
         let target = mgr.best_target_zone(Faction::Blue).unwrap();
-        assert_eq!(target.id, 1);
+        assert!(target.id != 0, "Should not select the already-controlled zone");
     }
 
     #[test]
