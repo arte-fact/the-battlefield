@@ -151,7 +151,9 @@ pub fn render_frame(
     // ── World-space base (terrain layer) ───────────────────────────────
 
     let mut base_sprites = SpriteBatch::new();
+    let mut grass_sprites = SpriteBatch::new();
     base_sprites.begin();
+    grass_sprites.begin();
 
     draw_water(
         &mut base_sprites,
@@ -174,13 +176,14 @@ pub fn render_frame(
     );
     draw_terrain(
         &mut base_sprites,
-        &mut PrimitiveBatch::new(),
+        &mut grass_sprites,
         game,
         assets,
         min_gx,
         min_gy,
         max_gx,
         max_gy,
+        elapsed,
     );
     draw_bushes(
         &mut base_sprites,
@@ -203,6 +206,7 @@ pub fn render_frame(
     );
 
     base_sprites.finish(gpu);
+    grass_sprites.finish(gpu);
 
     // ── Effects layer (zone circles + player aim — rendered under units) ─
 
@@ -365,8 +369,9 @@ pub fn render_frame(
             occlusion_query_set: None,
         });
 
-        // World-space draws: base terrain → effects → foreground → fog → prims
+        // World-space draws: base terrain → grass (wind shader) → effects → foreground → fog → prims
         base_sprites.render(&mut pass, gpu, &assets.textures, text_textures);
+        grass_sprites.render_with_pipeline(&mut pass, gpu, &assets.textures, text_textures, &gpu.grass_pipeline);
         effects.render(&mut pass, gpu);
         sprite_batch.render(&mut pass, gpu, &assets.textures, text_textures);
         render_fog(&mut pass, gpu, assets, &fog_vb, &fog_ib);
@@ -483,13 +488,14 @@ fn draw_foam(
 
 fn draw_terrain(
     batch: &mut SpriteBatch,
-    _prim: &mut PrimitiveBatch,
+    grass_batch: &mut SpriteBatch,
     game: &Game,
     assets: &Assets,
     min_gx: u32,
     min_gy: u32,
     max_gx: u32,
     max_gy: u32,
+    elapsed: f64,
 ) {
     let Some(tex_id) = assets.tilemap_texture else {
         return;
@@ -538,6 +544,8 @@ fn draw_terrain(
     }
 
     // Sub-pass: Flat ground (non-road, non-water)
+    // Grass tiles go to grass_batch (rendered with wind shader), others to batch.
+    let time = (elapsed % 1000.0) as f32; // wrap to avoid precision loss
     for gy in min_gy..max_gy {
         for gx in min_gx..max_gx {
             let tile = game.grid.get(gx, gy);
@@ -547,14 +555,28 @@ fn draw_terrain(
             let (col, row) = autotile::flat_ground_src(&game.grid, gx, gy);
             let (sx, sy, sw, sh) = grid::tilemap_src_rect(col, row);
             let flip = col == 1 && row == 1 && render_util::tile_flip(gx, gy);
-            batch.draw_sprite(
-                tex_id,
-                [sx as f32, sy as f32, sw as f32, sh as f32],
-                [gx as f32 * ts, gy as f32 * ts, ts, ts],
-                (tex.width, tex.height),
-                flip,
-                [1.0, 1.0, 1.0, 1.0],
-            );
+
+            let is_grass = tile == TileKind::Grass;
+            if is_grass {
+                // Grass: encode elapsed time in color_mod.r for the wind shader
+                grass_batch.draw_sprite(
+                    tex_id,
+                    [sx as f32, sy as f32, sw as f32, sh as f32],
+                    [gx as f32 * ts, gy as f32 * ts, ts, ts],
+                    (tex.width, tex.height),
+                    flip,
+                    [time, 0.0, 0.0, 1.0],
+                );
+            } else {
+                batch.draw_sprite(
+                    tex_id,
+                    [sx as f32, sy as f32, sw as f32, sh as f32],
+                    [gx as f32 * ts, gy as f32 * ts, ts, ts],
+                    (tex.width, tex.height),
+                    flip,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+            }
         }
     }
 

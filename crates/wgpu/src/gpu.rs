@@ -151,6 +151,7 @@ pub struct GpuContext {
     pub primitive_pipeline: wgpu::RenderPipeline,
     pub effects_pipeline: wgpu::RenderPipeline,
     pub fog_pipeline: wgpu::RenderPipeline,
+    pub grass_pipeline: wgpu::RenderPipeline,
 
     // Camera uniforms (bind group 0)
     pub camera_buffer: wgpu::Buffer,
@@ -534,6 +535,46 @@ impl GpuContext {
             cache: None,
         });
 
+        // ── Grass pipeline (wind-animated grass tiles) ─────────────────
+        let grass_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("grass_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/grass.wgsl").into()),
+        });
+
+        let grass_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("grass_rp"),
+            layout: Some(&sprite_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &grass_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[SpriteVertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &grass_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend_alpha),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             device,
             queue,
@@ -544,6 +585,7 @@ impl GpuContext {
             primitive_pipeline,
             effects_pipeline,
             fog_pipeline,
+            grass_pipeline,
             camera_buffer,
             camera_bind_group,
             camera_bind_group_layout,

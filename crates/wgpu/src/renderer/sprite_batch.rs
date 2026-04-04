@@ -258,6 +258,35 @@ impl SpriteBatch {
         }
     }
 
+    /// Issue all draw calls using a custom pipeline instead of the default sprite pipeline.
+    pub fn render_with_pipeline<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        gpu: &'a GpuContext,
+        textures: &'a [GpuTexture],
+        extra_textures: &'a [GpuTexture],
+        pipeline: &'a wgpu::RenderPipeline,
+    ) {
+        let (Some(vb), Some(ib)) = (&self.vertex_buffer, &self.index_buffer) else {
+            return;
+        };
+
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &gpu.camera_bind_group, &[]);
+        pass.set_vertex_buffer(0, vb.slice(..));
+        pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+
+        for dc in &self.draw_calls {
+            let tex = textures
+                .get(dc.texture_id)
+                .or_else(|| extra_textures.get(dc.texture_id.wrapping_sub(textures.len())));
+            if let Some(tex) = tex {
+                pass.set_bind_group(1, &tex.bind_group, &[]);
+                pass.draw_indexed(dc.index_start..dc.index_start + dc.index_count, 0, 0..1);
+            }
+        }
+    }
+
     /// Render assuming bind group 0 (camera) is already set by the caller.
     pub fn render_without_camera<'a>(
         &'a self,
