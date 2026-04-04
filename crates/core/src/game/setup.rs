@@ -276,6 +276,7 @@ impl Game {
         self.camera.zoom = self.camera.ideal_zoom();
 
         // Pre-compute caches
+        self.grid.recompute_caches();
         self.compute_water_adjacency();
         self.compute_fov();
     }

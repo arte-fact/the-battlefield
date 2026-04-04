@@ -53,6 +53,10 @@ pub struct Grid {
     pub decorations: Vec<Option<Decoration>>,
     /// Tiles occupied by buildings (impassable).
     building_occupied: Vec<bool>,
+    /// Precomputed: true if tile blocks line-of-sight (Forest or elevation >= 2).
+    pub vision_blocked: Vec<bool>,
+    /// Precomputed: true if tile is passable (has movement cost and not building-occupied).
+    pub passable: Vec<bool>,
     pub width: u32,
     pub height: u32,
 }
@@ -65,6 +69,8 @@ impl Grid {
             elevations: vec![0; size],
             decorations: vec![None; size],
             building_occupied: vec![false; size],
+            vision_blocked: vec![false; size],
+            passable: vec![true; size], // Grass is passable, no buildings
             width,
             height,
         }
@@ -79,12 +85,15 @@ impl Grid {
     }
 
     pub fn set(&mut self, x: u32, y: u32, kind: TileKind) {
-        self.tiles[(y * self.width + x) as usize] = kind;
+        let idx = (y * self.width + x) as usize;
+        self.tiles[idx] = kind;
+        // Keep caches in sync
+        self.passable[idx] = kind.movement_cost().is_some() && !self.building_occupied[idx];
+        self.vision_blocked[idx] = kind == TileKind::Forest || self.elevations[idx] >= 2;
     }
 
     pub fn is_passable(&self, x: u32, y: u32) -> bool {
-        self.get(x, y).movement_cost().is_some()
-            && !self.building_occupied[(y * self.width + x) as usize]
+        self.passable[(y * self.width + x) as usize]
     }
 
     /// Check if movement between two adjacent tiles is blocked by a cliff
@@ -95,7 +104,21 @@ impl Grid {
 
     /// Mark a tile as occupied by a building (impassable).
     pub fn mark_building(&mut self, x: u32, y: u32) {
-        self.building_occupied[(y * self.width + x) as usize] = true;
+        let idx = (y * self.width + x) as usize;
+        self.building_occupied[idx] = true;
+        self.passable[idx] = false;
+    }
+
+    /// Recompute `vision_blocked` and `passable` caches from tile/elevation/building data.
+    /// Call after map generation or any bulk terrain changes.
+    pub fn recompute_caches(&mut self) {
+        let size = (self.width * self.height) as usize;
+        for i in 0..size {
+            let tile = self.tiles[i];
+            let elev = self.elevations[i];
+            self.vision_blocked[i] = tile == TileKind::Forest || elev >= 2;
+            self.passable[i] = tile.movement_cost().is_some() && !self.building_occupied[i];
+        }
     }
 
     /// Check if a tile is occupied by a building.
@@ -144,7 +167,9 @@ impl Grid {
     }
 
     pub fn set_elevation(&mut self, x: u32, y: u32, elev: u8) {
-        self.elevations[(y * self.width + x) as usize] = elev;
+        let idx = (y * self.width + x) as usize;
+        self.elevations[idx] = elev;
+        self.vision_blocked[idx] = self.tiles[idx] == TileKind::Forest || elev >= 2;
     }
 
     pub fn decoration(&self, x: u32, y: u32) -> Option<Decoration> {

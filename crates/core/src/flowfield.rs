@@ -66,7 +66,10 @@ impl FlowField {
             };
         }
 
-        // Dijkstra from all seeded goals simultaneously
+        // Dijkstra from all seeded goals simultaneously.
+        // Direction is computed inline: each cell points back toward the
+        // neighbor that provided its best cost (i.e. toward the goal).
+        let passable = &grid.passable;
         while let Some(Reverse((cost, x, y))) = heap.pop() {
             if cost > integration[idx(x, y)] {
                 continue;
@@ -75,12 +78,13 @@ impl FlowField {
             for &(dx, dy, dir_cost) in &DIRS {
                 let nx = x as i32 + dx;
                 let ny = y as i32 + dy;
-                if !grid.in_bounds(nx, ny) {
+                if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
                     continue;
                 }
                 let nx = nx as u32;
                 let ny = ny as u32;
-                if !grid.is_passable(nx, ny) {
+                let ni = idx(nx, ny);
+                if !passable[ni] {
                     continue;
                 }
                 if grid.is_cliff_between(x, y, nx, ny) {
@@ -91,42 +95,12 @@ impl FlowField {
                 }
                 let tile_cost = grid.get(nx, ny).movement_cost().unwrap_or(1);
                 let new_cost = cost + tile_cost * dir_cost;
-                let ni = idx(nx, ny);
                 if new_cost < integration[ni] {
                     integration[ni] = new_cost;
+                    // Direction points back toward (x,y) which is closer to the goal
+                    directions[ni] = (-dx as i8, -dy as i8);
                     heap.push(Reverse((new_cost, nx, ny)));
                 }
-            }
-        }
-
-        // Build direction field: each cell points toward the neighbor with lowest integration cost
-        for y in 0..h {
-            for x in 0..w {
-                let ci = idx(x, y);
-                let is_goal = goals.iter().any(|&(gx, gy, _)| gx == x && gy == y);
-                if integration[ci] == u32::MAX || is_goal {
-                    continue; // unreachable or goal cell: keep (0, 0)
-                }
-                let mut best_cost = integration[ci];
-                let mut best_dir = (0i8, 0i8);
-                for &(dx, dy, _) in &DIRS {
-                    let nx = x as i32 + dx;
-                    let ny = y as i32 + dy;
-                    if !grid.in_bounds(nx, ny) {
-                        continue;
-                    }
-                    let nx = nx as u32;
-                    let ny = ny as u32;
-                    if !grid.can_move_diagonal(x, y, dx, dy) {
-                        continue;
-                    }
-                    let ni = idx(nx, ny);
-                    if integration[ni] < best_cost {
-                        best_cost = integration[ni];
-                        best_dir = (dx as i8, dy as i8);
-                    }
-                }
-                directions[ci] = best_dir;
             }
         }
 

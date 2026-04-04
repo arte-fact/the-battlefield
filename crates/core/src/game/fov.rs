@@ -12,8 +12,9 @@ impl Game {
             *v = false;
         }
 
-        // Collect grid positions of all alive friendly (Blue) units
-        let friendly_positions: Vec<(i32, i32)> = self
+        // Collect grid positions of all alive friendly (Blue) units, deduplicated.
+        // Units on the same tile produce identical FOV — skip redundant octant sweeps.
+        let mut friendly_positions: Vec<(i32, i32)> = self
             .units
             .iter()
             .filter(|u| u.alive && u.faction == Faction::Blue)
@@ -22,8 +23,10 @@ impl Game {
                 (gx as i32, gy as i32)
             })
             .collect();
+        friendly_positions.sort_unstable();
+        friendly_positions.dedup();
 
-        // Compute vision from each friendly unit
+        // Compute vision from each unique friendly position
         for (ox, oy) in &friendly_positions {
             let idx = (*oy as u32 * w + *ox as u32) as usize;
             self.visible[idx] = true;
@@ -78,15 +81,12 @@ impl Game {
 
     /// Returns true if the tile at (x, y) blocks line of sight.
     fn blocks_light(&self, x: u32, y: u32) -> bool {
-        let tile = self.grid.get(x, y);
-        match tile {
-            TileKind::Water => false,
-            TileKind::Forest => true,
-            _ => self.grid.elevation(x, y) >= 2,
-        }
+        self.grid.vision_blocked[(y * self.grid.width + x) as usize]
     }
 
     /// Recursive shadowcasting for one octant.
+    /// Uses f32 slopes — sufficient precision for radius <= 15 and avoids
+    /// f64 emulation overhead in WASM targets.
     #[allow(clippy::too_many_arguments)]
     fn cast_light(
         &mut self,
@@ -94,8 +94,8 @@ impl Game {
         oy: i32,
         radius: i32,
         row: i32,
-        mut start_slope: f64,
-        end_slope: f64,
+        mut start_slope: f32,
+        end_slope: f32,
         octant: u8,
         w: u32,
         h: u32,
@@ -104,6 +104,7 @@ impl Game {
             return;
         }
 
+        let radius_sq = radius * radius;
         let mut blocked = false;
         let mut next_start_slope = start_slope;
 
@@ -131,8 +132,8 @@ impl Game {
                     continue;
                 }
 
-                let l_slope = (dx as f64 - 0.5) / (dy as f64 + 0.5);
-                let r_slope = (dx as f64 + 0.5) / (dy as f64 - 0.5);
+                let l_slope = (dx as f32 - 0.5) / (dy as f32 + 0.5);
+                let r_slope = (dx as f32 + 0.5) / (dy as f32 - 0.5);
 
                 if start_slope < r_slope {
                     continue;
@@ -142,14 +143,13 @@ impl Game {
                 }
 
                 let dist_sq = dx * dx + dy * dy;
-                if dist_sq <= radius * radius {
+                if dist_sq <= radius_sq {
                     let idx = (map_y as u32 * w + map_x as u32) as usize;
                     self.visible[idx] = true;
                 }
 
-                let ux = map_x as u32;
-                let uy = map_y as u32;
-                let is_blocking = self.blocks_light(ux, uy);
+                let idx = (map_y as u32 * w + map_x as u32) as usize;
+                let is_blocking = self.grid.vision_blocked[idx];
 
                 if blocked {
                     if is_blocking {
