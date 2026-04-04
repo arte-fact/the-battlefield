@@ -214,13 +214,13 @@ pub(super) fn draw_hud(
 
 
 pub(super) fn draw_minimap(canvas: &mut Canvas<Window>, game: &Game, assets: &Assets) {
-    let (_canvas_w, canvas_h) = canvas.output_size().unwrap_or((960, 640));
-    let mm_size = 200_u32;
+    let (canvas_w, _canvas_h) = canvas.output_size().unwrap_or((960, 640));
+    let mm_size = 240_u32;
     let pad = 20_i32;
     let panel_size = mm_size + pad as u32 * 2;
     let panel_margin = 10_i32;
-    let panel_x = panel_margin;
-    let panel_y = canvas_h as i32 - panel_margin - panel_size as i32;
+    let panel_x = canvas_w as i32 - panel_margin - panel_size as i32;
+    let panel_y = panel_margin;
     let mm_x = panel_x + pad;
     let mm_y = panel_y + pad;
 

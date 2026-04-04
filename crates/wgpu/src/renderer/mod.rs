@@ -1179,13 +1179,13 @@ fn draw_minimap(
     prim: &mut PrimitiveBatch,
     game: &Game,
     assets: &Assets,
-    _vw: f32,
-    vh: f32,
+    vw: f32,
+    _vh: f32,
 ) {
-    let mm_size = 200.0; // Match SDL
+    let mm_size = 240.0;
     let pad = 10.0;
-    let mm_x = pad;
-    let mm_y = vh - pad - mm_size;
+    let mm_x = vw - pad - mm_size;
+    let mm_y = pad;
 
     let gw = game.grid.width as f32;
     let gh = game.grid.height as f32;
