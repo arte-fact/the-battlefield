@@ -230,6 +230,8 @@ pub struct Unit {
     pub hit_flash: f32,
     /// Active player order (None = default AI behavior).
     pub order: Option<OrderKind>,
+    /// Seconds until current order auto-expires (0.0 = no timer).
+    pub order_timer: f32,
     /// Seconds remaining for order flash indicator ("!").
     pub order_flash: f32,
     /// Seconds remaining for rejection flash indicator ("?").
@@ -276,6 +278,7 @@ impl Unit {
             ai_path_cooldown: 0.0,
             hit_flash: 0.0,
             order: None,
+            order_timer: 0.0,
             order_flash: 0.0,
             reject_flash: 0.0,
             rally_hold: false,
@@ -330,6 +333,13 @@ impl Unit {
         self.order_flash = (self.order_flash - dt).max(0.0);
         self.reject_flash = (self.reject_flash - dt).max(0.0);
         self.zone_lock_timer = (self.zone_lock_timer - dt).max(0.0);
+        if self.order.is_some() {
+            self.order_timer -= dt;
+            if self.order_timer <= 0.0 {
+                self.order = None;
+                self.order_timer = 0.0;
+            }
+        }
     }
 
     /// Pick the next attack animation, alternating for warriors.

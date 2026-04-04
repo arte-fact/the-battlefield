@@ -154,6 +154,11 @@ impl Game {
             };
 
             self.units[idx].order = Some(order);
+            self.units[idx].order_timer = match &order {
+                OrderKind::Follow => self.config.order_follow_duration,
+                OrderKind::Charge { .. } => self.config.order_charge_timeout,
+                OrderKind::Defend { .. } => self.config.order_defend_duration,
+            };
             self.units[idx].order_flash = self.config.order_flash_duration;
             self.units[idx].zone_lock_timer = 0.0;
             self.units[idx].ai_waypoints.clear();

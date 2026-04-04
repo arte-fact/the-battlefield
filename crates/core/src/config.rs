@@ -42,6 +42,9 @@ pub struct GameConfig {
     pub rep_fov_tiles: f32,
 
     // ── Orders & Formations ─────────────────────────────────────────
+    pub order_follow_duration: f32,
+    pub order_charge_timeout: f32,
+    pub order_defend_duration: f32,
     pub order_flash_duration: f32,
     pub charge_distance_tiles: f32,
     pub charge_arrival_tiles: f32,
@@ -128,6 +131,9 @@ impl Default for GameConfig {
             rep_fov_tiles: 15.0,
 
             // Orders & Formations
+            order_follow_duration: 15.0,
+            order_charge_timeout: 10.0,
+            order_defend_duration: 30.0,
             order_flash_duration: 1.0,
             charge_distance_tiles: 8.0,
             charge_arrival_tiles: 1.5,
