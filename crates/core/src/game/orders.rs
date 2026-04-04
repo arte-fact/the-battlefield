@@ -120,14 +120,15 @@ impl Game {
                 break;
             }
 
-            // Dice roll — authority_follow_chance() determines acceptance
+            // Deterministic dice roll — keyed on unit ID + authority bracket.
+            // Does NOT use position, so spamming the order button gives the
+            // same result every time at the same authority level.
             let accepts = {
-                let ux = (self.units[idx].x * 100.0) as u32;
-                let uy = (self.units[idx].y * 100.0) as u32;
-                let mut h =
-                    self.units[idx].id.wrapping_mul(2654435761) ^ ux ^ uy.wrapping_mul(40503);
+                let auth_bracket = (self.authority * 10.0) as u32; // changes every ~10 rep
+                let mut h = self.units[idx].id.wrapping_mul(2654435761) ^ auth_bracket.wrapping_mul(40503);
                 h ^= h >> 13;
                 h = h.wrapping_mul(0x5bd1e995);
+                h ^= h >> 15;
                 (h % 100) < (follow_chance * 100.0) as u32
             };
 
