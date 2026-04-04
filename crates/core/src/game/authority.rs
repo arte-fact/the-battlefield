@@ -35,14 +35,6 @@ impl Game {
         }
     }
 
-    /// Count alive recruited units.
-    pub fn follower_count(&self) -> usize {
-        self.recruited
-            .iter()
-            .filter(|id| self.units.iter().any(|u| u.alive && u.id == **id))
-            .count()
-    }
-
     /// Check if a unit is within the player's personal FOV radius.
     fn is_unit_in_fov(&self, unit_id: UnitId) -> bool {
         let Some(player) = self.player_unit() else {

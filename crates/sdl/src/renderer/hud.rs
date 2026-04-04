@@ -1,10 +1,9 @@
 #![allow(clippy::too_many_arguments)]
 
-use battlefield_core::asset_manifest;
 use battlefield_core::game::Game;
 use battlefield_core::grid::{self, TILE_SIZE};
 use battlefield_core::render_util;
-use battlefield_core::unit::{Faction, UnitKind};
+use battlefield_core::unit::Faction;
 use battlefield_core::zone::ZoneState;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
@@ -17,7 +16,7 @@ use super::{ClickableButton, GameScreen};
 
 pub(super) fn draw_hud(
     canvas: &mut Canvas<Window>,
-    tc: &TextureCreator<WindowContext>,
+    _tc: &TextureCreator<WindowContext>,
     game: &Game,
     assets: &mut Assets,
     _dpi_scale: f64,
@@ -211,102 +210,8 @@ pub(super) fn draw_hud(
         }
     }
 
-    // Follower portrait panel — top-right
-    draw_follower_panel(canvas, tc, game, assets, w);
 }
 
-fn draw_follower_panel(
-    canvas: &mut Canvas<Window>,
-    tc: &TextureCreator<WindowContext>,
-    game: &Game,
-    assets: &mut Assets,
-    screen_w: u32,
-) {
-    let counts = game.recruited_counts();
-
-    let icon_size = 48u32;
-    let pad = 12u32;
-    let gap = 6u32;
-    let header_h = 22u32;
-    let entry_w = icon_size + 4;
-
-    let all_kinds: [(UnitKind, usize); 4] = [
-        (UnitKind::Warrior, counts[0]),
-        (UnitKind::Archer, counts[1]),
-        (UnitKind::Lancer, counts[2]),
-        (UnitKind::Monk, counts[3]),
-    ];
-    let cols = 4u32;
-    let panel_w = cols * entry_w + cols.saturating_sub(1) * gap + pad * 2;
-    let panel_h = header_h + icon_size + 20 + pad * 2;
-    let panel_x = (screen_w - panel_w - 10) as i32;
-    let panel_y = 8i32;
-
-    // Paper background (9-slice or fallback)
-    if let Some((ref tex, bw, bh)) = assets.ui_special_paper {
-        draw_panel(
-            canvas,
-            tex,
-            &render_util::NINE_SLICE_SPECIAL_PAPER,
-            bw as f64,
-            bh as f64,
-            panel_x as f64,
-            panel_y as f64,
-            panel_w as f64,
-            panel_h as f64,
-        );
-    } else {
-        canvas.set_blend_mode(BlendMode::Blend);
-        canvas.set_draw_color(Color::RGBA(40, 30, 15, 220));
-        let _ = canvas.fill_rect(Rect::new(panel_x, panel_y, panel_w, panel_h));
-    }
-
-    // Header: rank + follower count
-    let rank = game.authority_rank_name();
-    let followers = game.follower_count();
-    let max_followers = game.authority_max_followers();
-    let header = format!("{rank}  {followers} of {max_followers}");
-    let hcx = panel_x + panel_w as i32 / 2;
-    let hcy = panel_y + pad as i32 + header_h as i32 / 2;
-    assets.text.draw_text_centered(
-        canvas,
-        tc,
-        &header,
-        hcx,
-        hcy,
-        28.0,
-        Color::RGBA(255, 255, 255, 240),
-    );
-
-    // Portraits + counts (all 4 types always visible)
-    let row_y = panel_y + pad as i32 + header_h as i32 + 2;
-    for (i, &(kind, count)) in all_kinds.iter().enumerate() {
-        let cx = panel_x + pad as i32 + (i as u32 * (entry_w + gap)) as i32 + entry_w as i32 / 2;
-        let ix = cx - icon_size as i32 / 2;
-
-        let avatar_idx = asset_manifest::avatar_index(kind);
-        if let Some(tex) = assets.avatar_textures.get_mut(avatar_idx) {
-            if count == 0 {
-                super::safe_set_alpha(tex, 90);
-            }
-            let dst = Rect::new(ix, row_y, icon_size, icon_size);
-            let _ = canvas.copy(tex, None, dst);
-            if count == 0 {
-                super::safe_set_alpha(tex, 255);
-            }
-        }
-
-        assets.text.draw_text_centered(
-            canvas,
-            tc,
-            &count.to_string(),
-            cx,
-            row_y + icon_size as i32 + 10,
-            26.0,
-            Color::RGBA(255, 255, 255, 240),
-        );
-    }
-}
 
 pub(super) fn draw_minimap(canvas: &mut Canvas<Window>, game: &Game, assets: &Assets) {
     let (_canvas_w, canvas_h) = canvas.output_size().unwrap_or((960, 640));

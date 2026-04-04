@@ -101,6 +101,7 @@ impl Game {
 
     /// Find the closest alive enemy unit near a world position (for arrow impact).
     /// Returns the index of the closest enemy of the opposing faction within hit radius.
+    /// Uses the per-frame spatial hash to avoid scanning all units.
     pub(super) fn find_unit_near(
         &self,
         x: f32,
@@ -108,20 +109,18 @@ impl Game {
         attacker_faction: Faction,
     ) -> Option<usize> {
         let hit_radius = TILE_SIZE * 0.75;
-        self.units
-            .iter()
-            .enumerate()
-            .filter(|(_, u)| u.alive && u.faction != attacker_faction)
-            .filter_map(|(i, u)| {
-                let dist = u.distance_to_pos(x, y);
-                if dist <= hit_radius {
-                    Some((i, dist))
-                } else {
-                    None
-                }
-            })
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
+        let mut best: Option<(usize, f32)> = None;
+        for i in self.spatial.query(x, y, hit_radius) {
+            let u = &self.units[i];
+            if u.faction == attacker_faction {
+                continue;
+            }
+            let dist = u.distance_to_pos(x, y);
+            if dist <= hit_radius && best.map_or(true, |b| dist < b.1) {
+                best = Some((i, dist));
+            }
+        }
+        best.map(|(i, _)| i)
     }
 }
 

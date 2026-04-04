@@ -284,21 +284,18 @@ impl GameLoop {
                         }
                     }
                     if player_input.order_follow {
-                        self.game.recruit_units();
                         self.game.issue_order("follow");
                         if let Some(ref mut gc) = self.active_controller {
                             let _ = gc.set_rumble(0x2000, 0x4000, 50);
                         }
                     }
                     if player_input.order_charge {
-                        self.game.recruit_units();
                         self.game.issue_order("charge");
                         if let Some(ref mut gc) = self.active_controller {
                             let _ = gc.set_rumble(0x2000, 0x4000, 50);
                         }
                     }
                     if player_input.order_defend {
-                        self.game.recruit_units();
                         self.game.issue_order("defend");
                         if let Some(ref mut gc) = self.active_controller {
                             let _ = gc.set_rumble(0x2000, 0x4000, 50);

@@ -144,35 +144,49 @@ impl Game {
     }
 
     /// Find the nearest visible enemy for a unit (Euclidean distance in world pixels).
+    /// Uses the per-frame spatial hash to limit the search to nearby cells.
     pub(super) fn find_nearest_enemy(&self, ai_idx: usize) -> Option<(f32, f32, UnitId, f32)> {
         let faction = self.units[ai_idx].faction;
         let ax = self.units[ai_idx].x;
         let ay = self.units[ai_idx].y;
         let vision_range = self.config.ai_vision_radius as f32 * TILE_SIZE;
 
-        self.units
-            .iter()
-            .filter(|u| u.alive && u.faction != faction)
-            .filter_map(|u| {
-                let dist = u.distance_to_pos(ax, ay);
-                if dist <= vision_range && self.has_line_of_sight(ax, ay, u.x, u.y) {
-                    Some((u.x, u.y, u.id, dist))
-                } else {
-                    None
+        let mut best: Option<(f32, f32, UnitId, f32)> = None;
+
+        for i in self.spatial.query(ax, ay, vision_range) {
+            let u = &self.units[i];
+            if u.faction == faction {
+                continue;
+            }
+            let dist = u.distance_to_pos(ax, ay);
+            if dist <= vision_range && self.has_line_of_sight(ax, ay, u.x, u.y) {
+                if best.map_or(true, |b| dist < b.3) {
+                    best = Some((u.x, u.y, u.id, dist));
                 }
-            })
-            .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
+            }
+        }
+
+        best
     }
 
     /// Distance from a world position to the nearest enemy of the given faction.
     /// Returns `f32::MAX` if no enemies exist.
+    /// Uses the spatial hash, searching up to vision radius first; falls back to full scan
+    /// only if no enemy is found within that range (rare).
     pub(super) fn nearest_enemy_dist(&self, x: f32, y: f32, faction: Faction) -> f32 {
-        self.units
-            .iter()
-            .filter(|u| u.alive && u.faction != faction)
-            .map(|u| u.distance_to_pos(x, y))
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap_or(f32::MAX)
+        let search_radius = self.config.ai_vision_radius as f32 * TILE_SIZE;
+        let mut best = f32::MAX;
+        for i in self.spatial.query(x, y, search_radius) {
+            let u = &self.units[i];
+            if u.faction == faction {
+                continue;
+            }
+            let d = u.distance_to_pos(x, y);
+            if d < best {
+                best = d;
+            }
+        }
+        best
     }
     /// Tick building combat: find nearest enemy, fire projectiles.
     /// Zone-linked buildings derive their faction from zone capture progress.
@@ -218,6 +232,7 @@ impl Game {
     }
 
     /// Find the nearest alive enemy of the opposing faction within range from a world position.
+    /// Uses the spatial hash to limit the search.
     fn find_nearest_enemy_from(
         &self,
         x: f32,
@@ -225,19 +240,18 @@ impl Game {
         faction: Faction,
         range: f32,
     ) -> Option<(f32, f32)> {
-        self.units
-            .iter()
-            .filter(|u| u.alive && u.faction != faction)
-            .filter_map(|u| {
-                let dist = u.distance_to_pos(x, y);
-                if dist <= range {
-                    Some((u.x, u.y, dist))
-                } else {
-                    None
-                }
-            })
-            .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(x, y, _)| (x, y))
+        let mut best: Option<(f32, f32, f32)> = None;
+        for i in self.spatial.query(x, y, range) {
+            let u = &self.units[i];
+            if u.faction == faction {
+                continue;
+            }
+            let dist = u.distance_to_pos(x, y);
+            if dist <= range && best.map_or(true, |b| dist < b.2) {
+                best = Some((u.x, u.y, dist));
+            }
+        }
+        best.map(|(bx, by, _)| (bx, by))
     }
 }
 

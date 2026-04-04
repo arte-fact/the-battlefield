@@ -275,7 +275,6 @@ pub fn render_frame(
         vw,
         vh,
     );
-    draw_follower_panel(&mut hud_prim, &mut hud_sprites, gpu, game, assets, vw);
     draw_minimap(&mut hud_bg, &mut hud_prim, game, assets, vw, vh);
     if screen == GameScreen::Playing {
         draw_touch_controls(
@@ -1295,105 +1294,6 @@ fn draw_minimap(
         [1.0, 1.0, 1.0, 0.78],
     );
     prim.draw_line(cvx, cvy + cvh, cvx, cvy, 1.0, [1.0, 1.0, 1.0, 0.78]);
-}
-
-fn draw_follower_panel(
-    prim: &mut PrimitiveBatch,
-    sprites: &mut SpriteBatch,
-    gpu: &GpuContext,
-    game: &Game,
-    assets: &mut Assets,
-    vw: f32,
-) {
-    use battlefield_core::asset_manifest;
-    use battlefield_core::unit::UnitKind;
-
-    let counts = game.recruited_counts();
-
-    let icon_size = 48.0_f32;
-    let pad = 12.0_f32;
-    let gap = 6.0_f32;
-    let header_h = 22.0;
-    let entry_w = icon_size + 4.0;
-    let cols = 4.0_f32;
-    let panel_w = cols * entry_w + (cols - 1.0) * gap + pad * 2.0;
-    let panel_h = header_h + icon_size + 20.0 + pad * 2.0;
-    let panel_x = vw - panel_w - 10.0;
-    let panel_y = 8.0;
-
-    // Background (9-slice paper or fallback)
-    if let Some((tex_id, aw, ah)) = assets.ui_special_paper {
-        draw_helpers::draw_panel(
-            sprites,
-            tex_id,
-            aw,
-            ah,
-            &render_util::NINE_SLICE_SPECIAL_PAPER,
-            panel_x,
-            panel_y,
-            panel_w,
-            panel_h,
-        );
-    } else {
-        prim.fill_rect(panel_x, panel_y, panel_w, panel_h, [0.16, 0.12, 0.06, 0.86]);
-    }
-
-    // Header
-    let rank = game.authority_rank_name();
-    let followers = game.follower_count();
-    let max_f = game.authority_max_followers();
-    let header = format!("{rank}  {followers} of {max_f}");
-    let hcx = panel_x + panel_w * 0.5;
-    let hcy = panel_y + pad + header_h * 0.5;
-    assets
-        .text
-        .draw_text_centered(sprites, gpu, &header, hcx, hcy, 22.0, 255, 255, 255, 240);
-
-    // Portraits + counts
-    let all_kinds = [
-        (UnitKind::Warrior, counts[0]),
-        (UnitKind::Archer, counts[1]),
-        (UnitKind::Lancer, counts[2]),
-        (UnitKind::Monk, counts[3]),
-    ];
-    let row_y = panel_y + pad + header_h + 2.0;
-
-    for (i, &(kind, count)) in all_kinds.iter().enumerate() {
-        let cx = panel_x + pad + i as f32 * (entry_w + gap) + entry_w * 0.5;
-        let ix = cx - icon_size * 0.5;
-
-        // Avatar sprite
-        let avatar_idx = asset_manifest::avatar_index(kind);
-        if let Some((tex_id, _, _, _)) =
-            assets.sprite_lookup(battlefield_core::rendering::SpriteKey::Avatar(avatar_idx))
-        {
-            let tex = &assets.textures[tex_id];
-            let alpha = if count == 0 { 0.35 } else { 1.0 };
-            sprites.draw_sprite(
-                tex_id,
-                [0.0, 0.0, tex.width as f32, tex.height as f32],
-                [ix, row_y, icon_size, icon_size],
-                (tex.width, tex.height),
-                false,
-                [1.0, 1.0, 1.0, alpha],
-            );
-        }
-
-        // Count
-        let count_y = row_y + icon_size + 10.0;
-        assets.text.draw_text_centered(
-            sprites,
-            gpu,
-            &count.to_string(),
-            cx,
-            count_y,
-            30.0,
-            255,
-            255,
-            255,
-            240,
-        );
-    }
 }
 
 fn draw_touch_controls(

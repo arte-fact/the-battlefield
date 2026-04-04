@@ -55,6 +55,7 @@ pub struct Assets<'a> {
     // Pawn: (texture, frame_w, frame_h, frame_count) — 5 per faction × 2 factions = 10
     pub(super) pawn_textures: Vec<(Texture<'a>, u32, u32, u32)>,
     // Unit avatar portraits (256×256): 0=Warrior, 1=Lancer, 2=Archer, 3=Monk
+    #[allow(dead_code)]
     pub(super) avatar_textures: Vec<Texture<'a>>,
     // Text rendering
     pub text: TextRenderer,

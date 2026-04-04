@@ -681,11 +681,9 @@ pub(super) fn draw_unit_overlays(
         canvas.set_draw_color(Color::RGB(hr, hg, hb));
         let _ = canvas.fill_rect(Rect::new(bar_x, bar_y, fill_w, bar_h as u32));
 
-        // Unit marker (player = green, recruited = yellow)
+        // Unit marker (player = green)
         let marker_color = if unit.is_player {
             Some(Color::RGBA(50, 220, 50, 220))
-        } else if game.recruited.contains(&unit.id) {
-            Some(Color::RGBA(255, 220, 50, 220))
         } else {
             None
         };

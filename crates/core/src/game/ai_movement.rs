@@ -558,6 +558,7 @@ impl Game {
     }
 
     /// Compute separation steering: repulsion from nearby same-faction units.
+    /// Uses the per-frame spatial hash to avoid O(n) full scan.
     pub(super) fn compute_separation(&self, ai_idx: usize) -> (f32, f32) {
         let ax = self.units[ai_idx].x;
         let ay = self.units[ai_idx].y;
@@ -568,8 +569,12 @@ impl Game {
         let mut rx = 0.0f32;
         let mut ry = 0.0f32;
 
-        for (i, u) in self.units.iter().enumerate() {
-            if i == ai_idx || !u.alive || u.faction != faction {
+        for i in self.spatial.query(ax, ay, sep_radius) {
+            if i == ai_idx {
+                continue;
+            }
+            let u = &self.units[i];
+            if u.faction != faction {
                 continue;
             }
             let dx = ax - u.x;

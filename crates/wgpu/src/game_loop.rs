@@ -300,15 +300,12 @@ impl GameLoop {
                         || player_input.order_charge
                         || player_input.order_defend;
                     if player_input.order_follow {
-                        self.game.recruit_units();
                         self.game.issue_order("follow");
                     }
                     if player_input.order_charge {
-                        self.game.recruit_units();
                         self.game.issue_order("charge");
                     }
                     if player_input.order_defend {
-                        self.game.recruit_units();
                         self.game.issue_order("defend");
                     }
                     if any_order {

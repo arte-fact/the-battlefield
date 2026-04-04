@@ -218,7 +218,7 @@ impl Default for GameConfig {
             // Zone & Game Rules
             base_capture_time: 16.0,
             max_capture_multiplier: 3.0,
-            max_units_per_faction: 50,
+            max_units_per_faction: 35,
             zone_radius: 4,
             victory_hold_time: 60.0,
         }

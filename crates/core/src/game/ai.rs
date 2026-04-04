@@ -5,6 +5,9 @@ impl Game {
         // Reset per-tick A* budget
         self.astar_budget = self.config.astar_budget_per_tick;
 
+        // Rebuild spatial hash for O(1) neighbour queries (separation, enemy search)
+        self.rebuild_spatial();
+
         // Rebuild flat occupied grid once per frame (L1-friendly array lookup in A*)
         self.ai_occupied_grid.fill(false);
         let gw = self.grid.width as usize;

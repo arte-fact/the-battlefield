@@ -83,20 +83,23 @@ impl Game {
         true
     }
 
-    // ── Recruitment ────────────────────────────────────────────────────
+    // ── Order issuance ───────────────────────────────────────────────────
 
-    /// Recruit nearby friendly units into the persistent follower list.
-    /// Returns the number of newly recruited units.
-    pub fn recruit_units(&mut self) -> usize {
+    /// Issue a direct order to nearby allied units within command radius.
+    /// Each unit rolls authority_follow_chance() — success = accepts, failure = "?" flash.
+    /// Follow is additionally capped at authority_max_followers().
+    pub fn issue_order(&mut self, order_type: &str) -> usize {
         let (player_x, player_y, player_faction) = match self.player_unit() {
             Some(p) => (p.x, p.y, p.faction),
             None => return 0,
         };
 
-        let recruit_radius = self.authority_command_radius();
+        let command_radius = self.authority_command_radius();
         let follow_chance = self.authority_follow_chance();
+        let max_followers = self.authority_max_followers();
+        let is_follow = order_type == "follow";
 
-        // Collect eligible unit indices (not already recruited)
+        // Collect eligible unit indices: alive, non-player, same faction, in radius
         let eligible: Vec<usize> = self
             .units
             .iter()
@@ -105,19 +108,19 @@ impl Game {
                 u.alive
                     && !u.is_player
                     && u.faction == player_faction
-                    && !self.recruited.contains(&u.id)
-                    && u.distance_to_pos(player_x, player_y) <= recruit_radius
+                    && u.distance_to_pos(player_x, player_y) <= command_radius
             })
             .map(|(i, _)| i)
             .collect();
 
-        let mut count = 0usize;
+        let mut acknowledged = 0usize;
         for idx in eligible {
-            if self.follower_count() >= self.authority_max_followers() {
+            // Follow cap
+            if is_follow && acknowledged >= max_followers {
                 break;
             }
 
-            // Probabilistic acceptance based on authority
+            // Dice roll — authority_follow_chance() determines acceptance
             let accepts = {
                 let ux = (self.units[idx].x * 100.0) as u32;
                 let uy = (self.units[idx].y * 100.0) as u32;
@@ -133,43 +136,6 @@ impl Game {
                 continue;
             }
 
-            let slot = self.recruited.len() as u32;
-            self.recruited.insert(self.units[idx].id);
-            self.units[idx].follow_slot = slot;
-            // Newly recruited units default to Follow
-            self.units[idx].order = Some(OrderKind::Follow);
-            self.units[idx].order_flash = self.config.order_flash_duration;
-            self.units[idx].zone_lock_timer = 0.0;
-            self.units[idx].ai_waypoints.clear();
-            self.units[idx].ai_waypoint_idx = 0;
-            self.units[idx].ai_path_cooldown = 0.0;
-            count += 1;
-        }
-        count
-    }
-
-    // ── Order issuance ───────────────────────────────────────────────────
-
-    /// Issue an order to all recruited units.
-    /// Returns the number of units that received the order.
-    pub fn issue_order(&mut self, order_type: &str) -> usize {
-        let player_x = match self.player_unit() {
-            Some(p) => p.x,
-            None => return 0,
-        };
-        let player_y = self.player_unit().map(|p| p.y).unwrap_or(0.0);
-
-        // Collect indices of alive recruited units
-        let recruited_indices: Vec<usize> = self
-            .units
-            .iter()
-            .enumerate()
-            .filter(|(_, u)| u.alive && self.recruited.contains(&u.id))
-            .map(|(i, _)| i)
-            .collect();
-
-        let mut acknowledged = 0usize;
-        for idx in recruited_indices {
             let order = match order_type {
                 "follow" => OrderKind::Follow,
                 "charge" => {
@@ -220,7 +186,7 @@ impl Game {
         if dist < self.config.follow_distance_tiles * TILE_SIZE {
             self.units[ai_idx].set_anim(UnitAnim::Idle);
         } else {
-            let slot = self.units[ai_idx].follow_slot as f32;
+            let slot = self.units[ai_idx].id as f32;
             let angle = slot * 2.39996; // golden angle for even spacing
             let offset_x = angle.cos() * self.config.follow_distance_tiles * TILE_SIZE * 0.7;
             let offset_y = angle.sin() * self.config.follow_distance_tiles * TILE_SIZE * 0.7;
@@ -263,7 +229,8 @@ impl Game {
         // Move toward charge target
         let dist = self.units[ai_idx].distance_to_pos(target_x, target_y);
         if dist < self.config.charge_arrival_tiles * TILE_SIZE {
-            self.units[ai_idx].order = Some(OrderKind::Follow);
+            // Charge complete — return to normal AI
+            self.units[ai_idx].order = None;
             self.units[ai_idx].ai_waypoints.clear();
             self.units[ai_idx].ai_waypoint_idx = 0;
         } else {

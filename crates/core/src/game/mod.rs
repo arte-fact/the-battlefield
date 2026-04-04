@@ -24,12 +24,58 @@ use crate::unit::{
     Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS,
 };
 use crate::zone::{ZoneManager, ZoneState};
-use std::collections::HashSet;
 
 pub use player::ATTACK_CONE_HALF_ANGLE;
 
 /// Duration for floating authority text.
 pub const FLOATING_TEXT_DURATION: f32 = 1.2;
+
+/// Cell size for the per-frame spatial hash (pixels). 128px ≈ 2 tiles.
+const SPATIAL_CELL: f32 = 128.0;
+
+/// Lightweight spatial hash rebuilt each tick for O(1)-amortised neighbour queries.
+/// Stores unit indices grouped by grid cell.
+pub(crate) struct UnitSpatialGrid {
+    cells: std::collections::HashMap<(i32, i32), Vec<usize>>,
+}
+
+impl UnitSpatialGrid {
+    fn new() -> Self {
+        Self {
+            cells: std::collections::HashMap::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        for v in self.cells.values_mut() {
+            v.clear();
+        }
+    }
+
+    fn insert(&mut self, idx: usize, x: f32, y: f32) {
+        let cx = (x / SPATIAL_CELL) as i32;
+        let cy = (y / SPATIAL_CELL) as i32;
+        self.cells.entry((cx, cy)).or_default().push(idx);
+    }
+
+    /// Return an iterator over unit indices within `radius` of `(x, y)`.
+    /// Checks the minimal set of cells that could contain matches.
+    fn query(&self, x: f32, y: f32, radius: f32) -> impl Iterator<Item = usize> + '_ {
+        let r_cells = (radius / SPATIAL_CELL).ceil() as i32;
+        let cx = (x / SPATIAL_CELL) as i32;
+        let cy = (y / SPATIAL_CELL) as i32;
+        (cy - r_cells..=cy + r_cells).flat_map(move |row| {
+            (cx - r_cells..=cx + r_cells).flat_map(move |col| {
+                self.cells
+                    .get(&(col, row))
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[])
+                    .iter()
+                    .copied()
+            })
+        })
+    }
+}
 
 /// A floating "+X" / "-X" authority indicator at a world position.
 pub struct FloatingText {
@@ -101,10 +147,12 @@ pub struct Game {
     pub authority: f32,
     /// Runtime-tweakable AI configuration.
     pub config: GameConfig,
-    /// Persistently recruited unit IDs. Orders apply only to these units.
-    pub recruited: HashSet<UnitId>,
     /// Floating authority change indicators.
     pub floating_texts: Vec<FloatingText>,
+    /// Per-frame spatial hash of alive units (rebuilt in tick / update).
+    pub(crate) spatial: UnitSpatialGrid,
+    /// Frame counter for throttling expensive per-frame operations (e.g. FOV).
+    fov_frame_counter: u8,
 }
 
 impl Game {
@@ -150,26 +198,10 @@ impl Game {
             astar_budget: 0,
             authority: 0.0,
             config: GameConfig::default(),
-            recruited: HashSet::new(),
             floating_texts: Vec::new(),
+            spatial: UnitSpatialGrid::new(),
+            fov_frame_counter: 0,
         }
-    }
-
-    /// Count recruited alive units by kind: [warriors, archers, lancers, monks].
-    pub fn recruited_counts(&self) -> [usize; 4] {
-        let mut counts = [0usize; 4];
-        for u in &self.units {
-            if u.alive && self.recruited.contains(&u.id) {
-                let idx = match u.kind {
-                    UnitKind::Warrior => 0,
-                    UnitKind::Archer => 1,
-                    UnitKind::Lancer => 2,
-                    UnitKind::Monk => 3,
-                };
-                counts[idx] += 1;
-            }
-        }
-        counts
     }
 
     /// Tick all alive units' cooldowns by dt seconds.
@@ -193,8 +225,21 @@ impl Game {
         }
     }
 
+    /// Rebuild the spatial hash from all alive units. Call once per tick or update.
+    pub(crate) fn rebuild_spatial(&mut self) {
+        self.spatial.clear();
+        for (i, u) in self.units.iter().enumerate() {
+            if u.alive {
+                self.spatial.insert(i, u.x, u.y);
+            }
+        }
+    }
+
     /// Update animations, particles, projectiles, death fades, and camera following.
     pub fn update(&mut self, dt: f64) {
+        // Rebuild spatial hash for projectile impact queries
+        self.rebuild_spatial();
+
         for unit in &mut self.units {
             if unit.alive {
                 unit.animation.update(dt);
@@ -204,12 +249,20 @@ impl Game {
             }
         }
 
+        // Build position lookup for follow-tracking (avoids O(n) scan per particle)
+        let unit_positions: std::collections::HashMap<UnitId, (f32, f32)> = self
+            .units
+            .iter()
+            .filter(|u| u.alive)
+            .map(|u| (u.id, (u.x, u.y)))
+            .collect();
+
         for particle in &mut self.particles {
             // Track following particles to their target unit
             if let Some(uid) = particle.follow_unit {
-                if let Some(u) = self.units.iter().find(|u| u.id == uid && u.alive) {
-                    particle.world_x = u.x;
-                    particle.world_y = u.y;
+                if let Some(&(ux, uy)) = unit_positions.get(&uid) {
+                    particle.world_x = ux;
+                    particle.world_y = uy;
                 } else {
                     particle.finished = true;
                 }
@@ -261,8 +314,12 @@ impl Game {
         let world_size = GRID_SIZE as f32 * TILE_SIZE;
         self.camera.clamp_to_world(world_size, world_size);
 
-        // Recompute FOV every frame (friendly units move continuously)
-        self.compute_fov();
+        // Throttle FOV: recompute every 3rd frame (units don't move fast enough
+        // for per-frame updates to matter visually, saves ~7k ops on other frames).
+        self.fov_frame_counter = self.fov_frame_counter.wrapping_add(1);
+        if self.fov_frame_counter % 3 == 0 {
+            self.compute_fov();
+        }
     }
 
     /// Run one simulation tick: process player input, AI, combat, physics, zones.
@@ -309,10 +366,6 @@ impl Game {
         self.tick_sheep(dt);
         self.tick_pawns(dt);
 
-        // Remove dead units from the recruited set
-        let units = &self.units;
-        self.recruited
-            .retain(|id| units.iter().any(|u| u.alive && u.id == *id));
     }
 
     fn tick_sheep(&mut self, dt: f32) {
