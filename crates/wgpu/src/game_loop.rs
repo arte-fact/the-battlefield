@@ -100,7 +100,10 @@ impl GameLoop {
             }
         };
 
+        #[cfg(not(target_arch = "wasm32"))]
         let mut input_state = InputState::new();
+        #[cfg(target_arch = "wasm32")]
+        let input_state = InputState::new();
         #[cfg(not(target_arch = "wasm32"))]
         {
             input_state.gamepad_connected = gamepad_connected;
