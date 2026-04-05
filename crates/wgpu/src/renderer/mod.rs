@@ -15,7 +15,7 @@ use battlefield_core::grid::{self, Decoration, TileKind, TILE_SIZE};
 use battlefield_core::render_util;
 use battlefield_core::rendering::{DrawBackend, SpriteInfo, SpriteKey};
 use battlefield_core::ui::GameScreen;
-use battlefield_core::unit::Faction;
+use battlefield_core::unit::{Faction, OrderKind};
 use effects_batch::EffectsBatch;
 use primitive_batch::PrimitiveBatch;
 use sprite_batch::SpriteBatch;
@@ -922,6 +922,57 @@ fn draw_unit_overlays(
             bar_h,
             [hr as f32 / 255.0, hg as f32 / 255.0, hb as f32 / 255.0, 1.0],
         );
+
+        // Order progress bar — shows active order type + remaining time
+        if let Some(ref order) = u.order {
+            let max_dur = match order {
+                OrderKind::Follow => game.config.order_follow_duration,
+                OrderKind::Charge { .. } => game.config.order_charge_timeout,
+                OrderKind::Defend { .. } => game.config.order_defend_duration,
+            };
+            let remaining = (u.order_timer / max_dur).clamp(0.0, 1.0);
+
+            let ob_w = 36.0_f32;
+            let ob_h = 3.0_f32;
+            let ob_x = u.x - ob_w * 0.5;
+            let ob_y = u.y - ts * 0.7 - bar_h - 2.0; // just above HP bar
+
+            // Background
+            prim.fill_rect(ob_x, ob_y, ob_w, ob_h, [0.1, 0.1, 0.1, 0.7]);
+
+            // Fill — color coded by order type
+            let color = match order {
+                OrderKind::Follow => [0.25, 0.55, 1.0, 0.9],
+                OrderKind::Charge { .. } => [1.0, 0.75, 0.15, 0.9],
+                OrderKind::Defend { .. } => [0.5, 0.85, 0.5, 0.9],
+            };
+            prim.fill_rect(ob_x, ob_y, ob_w * remaining, ob_h, color);
+
+            // Order label above the bar
+            let label = match order {
+                OrderKind::Follow => "F",
+                OrderKind::Charge { .. } => "C",
+                OrderKind::Defend { .. } => "D",
+            };
+            let lbl_size = 14.0_f32;
+            let lbl_y = ob_y - lbl_size * 0.5 - 1.0;
+            let (lr, lg, lb) = match order {
+                OrderKind::Follow => (100, 170, 255),
+                OrderKind::Charge { .. } => (255, 200, 60),
+                OrderKind::Defend { .. } => (140, 220, 140),
+            };
+            // Shadow
+            assets.text.draw_text_centered(
+                sprites, gpu, label,
+                u.x + 1.0, lbl_y + 1.0, lbl_size,
+                0, 0, 0, 200,
+            );
+            assets.text.draw_text_centered(
+                sprites, gpu, label,
+                u.x, lbl_y, lbl_size,
+                lr, lg, lb, 230,
+            );
+        }
 
         // Order acknowledgement "!" (shadowed text, no ribbon)
         if u.order_flash > 0.0 && u.order.is_some() {

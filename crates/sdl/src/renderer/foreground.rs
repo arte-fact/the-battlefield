@@ -7,7 +7,7 @@ use battlefield_core::grid::{Decoration, TileKind, TILE_SIZE};
 use battlefield_core::render_util;
 use battlefield_core::sheep::SHEEP_FRAME_SIZE;
 use battlefield_core::sprite::SpriteSheet;
-use battlefield_core::unit::{Facing, Faction, UnitAnim, UnitKind};
+use battlefield_core::unit::{Facing, Faction, OrderKind, UnitAnim, UnitKind};
 use battlefield_core::zone::ZoneState;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
@@ -680,6 +680,48 @@ pub(super) fn draw_unit_overlays(
         let (hr, hg, hb) = render_util::hp_bar_color(ratio as f64);
         canvas.set_draw_color(Color::RGB(hr, hg, hb));
         let _ = canvas.fill_rect(Rect::new(bar_x, bar_y, fill_w, bar_h as u32));
+
+        // Order progress bar — shows active order type + remaining time
+        if let Some(ref order) = unit.order {
+            let max_dur = match order {
+                OrderKind::Follow => game.config.order_follow_duration,
+                OrderKind::Charge { .. } => game.config.order_charge_timeout,
+                OrderKind::Defend { .. } => game.config.order_defend_duration,
+            };
+            let remaining = (unit.order_timer / max_dur).clamp(0.0, 1.0);
+
+            let ob_h = (3.0 * zoom).max(1.0) as i32;
+            let ob_y = bar_y - ob_h - (1.0 * zoom) as i32;
+
+            // Background
+            canvas.set_draw_color(Color::RGBA(25, 25, 25, 180));
+            let _ = canvas.fill_rect(Rect::new(bar_x, ob_y, bar_w as u32, ob_h as u32));
+
+            // Fill — color coded by order type
+            let fill_color = match order {
+                OrderKind::Follow => Color::RGBA(64, 140, 255, 230),
+                OrderKind::Charge { .. } => Color::RGBA(255, 190, 40, 230),
+                OrderKind::Defend { .. } => Color::RGBA(128, 218, 128, 230),
+            };
+            let fill_w = (bar_w as f32 * remaining) as u32;
+            canvas.set_draw_color(fill_color);
+            let _ = canvas.fill_rect(Rect::new(bar_x, ob_y, fill_w, ob_h as u32));
+
+            // Order label above bar
+            let label = match order {
+                OrderKind::Follow => "F",
+                OrderKind::Charge { .. } => "C",
+                OrderKind::Defend { .. } => "D",
+            };
+            let lbl_size = (12.0 * dpi_scale as f32) * zoom;
+            let lbl_y = ob_y - (lbl_size * 0.8) as i32;
+            let lbl_color = match order {
+                OrderKind::Follow => Color::RGBA(100, 170, 255, 230),
+                OrderKind::Charge { .. } => Color::RGBA(255, 200, 60, 230),
+                OrderKind::Defend { .. } => Color::RGBA(140, 220, 140, 230),
+            };
+            assets.text.draw_text_centered(canvas, tc, label, sx, lbl_y, lbl_size, lbl_color);
+        }
 
         // Unit marker (player = green)
         let marker_color = if unit.is_player {
