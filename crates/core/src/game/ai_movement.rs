@@ -327,12 +327,26 @@ impl Game {
 
                     if owned.is_empty() {
                         // Fallback: send all to first objective
-                        if let Some(zi) = self.zone_manager.zones.iter().position(|z| {
+                        let fallback_zi = self.zone_manager.zones.iter().position(|z| {
                             let (wx, wy) = (z.center_wx, z.center_wy);
                             objectives
                                 .iter()
                                 .any(|(ox, oy, _)| (ox - wx).abs() < 1.0 && (oy - wy).abs() < 1.0)
-                        }) {
+                        }).or_else(|| {
+                            // No objective match — pick nearest non-owned zone to push toward
+                            let sample_idx = available[0];
+                            let ux = self.units[sample_idx].x;
+                            let uy = self.units[sample_idx].y;
+                            self.zone_manager.zones.iter().enumerate()
+                                .filter(|(_, z)| z.state != ZoneState::Controlled(faction))
+                                .min_by(|(_, a), (_, b)| {
+                                    let da = (ux - a.center_wx).powi(2) + (uy - a.center_wy).powi(2);
+                                    let db = (ux - b.center_wx).powi(2) + (uy - b.center_wy).powi(2);
+                                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                                .map(|(i, _)| i)
+                        });
+                        if let Some(zi) = fallback_zi {
                             for &ui in &available {
                                 self.units[ui].assigned_zone = Some(zi as u8);
                                 self.units[ui].zone_lock_timer = lock_dur;

@@ -268,8 +268,10 @@ impl Game {
         // Move toward charge target
         let dist = self.units[ai_idx].distance_to_pos(target_x, target_y);
         if dist < self.config.charge_arrival_tiles * TILE_SIZE {
-            // Charge complete — return to normal AI
-            self.units[ai_idx].order = None;
+            // Charge complete — transition to Follow so the group stays cohesive
+            self.units[ai_idx].order = Some(OrderKind::Follow);
+            self.units[ai_idx].order_timer = self.config.order_follow_duration;
+            self.units[ai_idx].follow_arrived = false;
             self.units[ai_idx].ai_waypoints.clear();
             self.units[ai_idx].ai_waypoint_idx = 0;
         } else {
