@@ -132,16 +132,19 @@ impl GameLoop {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.gpu.resize(width, height); // proportionally clamped inside
-                                        // Camera and input use raw device pixel dimensions, matching
-                                        // winit touch/cursor coordinates.  The GPU surface renders at
-                                        // lower resolution but same aspect ratio — no distortion.
         if width > 0 && height > 0 {
-            self.game.camera.resize(width as f32, height as f32);
+            // Use GPU surface dimensions (possibly clamped) for all coordinate
+            // spaces: camera, input layout, and HUD rendering all match.
+            let sw = self.gpu.surface_config.width as f32;
+            let sh = self.gpu.surface_config.height as f32;
+            self.game.camera.resize(sw, sh);
             self.game.camera.zoom = self.game.camera.ideal_zoom_for_dpi(self.touch_dpr);
-            self.input_state
-                .set_canvas_size(width as f32, height as f32);
-            self.input_state
-                .update_layout(width as f32, height as f32, self.touch_dpr);
+            self.input_state.set_canvas_size(sw, sh);
+            self.input_state.update_layout(sw, sh, self.touch_dpr);
+            // Scale touch/mouse coords from raw device pixels to surface pixels
+            let sx = sw / width as f32;
+            let sy = sh / height as f32;
+            self.input_state.set_coordinate_scale(sx, sy);
         }
     }
 
@@ -243,15 +246,10 @@ impl GameLoop {
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_gamepad();
 
-        // Use camera viewport (raw device pixels) — matches winit
-        // touch/cursor coordinates, not the clamped GPU surface.
-        let vw = self.game.camera.viewport_w as u32;
-        let vh = self.game.camera.viewport_h as u32;
-
-        // Update touch layout
-        self.input_state.set_canvas_size(vw as f32, vh as f32);
-        self.input_state
-            .update_layout(vw as f32, vh as f32, self.touch_dpr);
+        // Use GPU surface dimensions — all coordinate spaces (HUD, camera,
+        // touch input) are unified to surface-config pixels.
+        let vw = self.gpu.surface_config.width;
+        let vh = self.gpu.surface_config.height;
 
         // ── Screen transition logic ──────────────────────────────────────
         match self.screen {

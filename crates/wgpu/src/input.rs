@@ -75,6 +75,10 @@ pub struct InputState {
     active_fingers: HashMap<u64, (f32, f32)>,
     canvas_w: f32,
     canvas_h: f32,
+    // Scale factor from raw device pixels → GPU surface pixels.
+    // Needed when the GPU surface is clamped below the raw viewport.
+    coord_scale_x: f32,
+    coord_scale_y: f32,
 }
 
 impl Default for InputState {
@@ -125,6 +129,8 @@ impl InputState {
             active_fingers: HashMap::new(),
             canvas_w: 960.0,
             canvas_h: 640.0,
+            coord_scale_x: 1.0,
+            coord_scale_y: 1.0,
         }
     }
 
@@ -138,6 +144,11 @@ impl InputState {
     pub fn set_canvas_size(&mut self, w: f32, h: f32) {
         self.canvas_w = w;
         self.canvas_h = h;
+    }
+
+    pub fn set_coordinate_scale(&mut self, sx: f32, sy: f32) {
+        self.coord_scale_x = sx;
+        self.coord_scale_y = sy;
     }
 
     pub fn pressed_this_frame(&self, key: Key) -> bool {
@@ -209,8 +220,8 @@ impl InputState {
                 self.mouse_clicked = true;
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.mouse_x = position.x as i32;
-                self.mouse_y = position.y as i32;
+                self.mouse_x = (position.x as f32 * self.coord_scale_x) as i32;
+                self.mouse_y = (position.y as f32 * self.coord_scale_y) as i32;
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let dy = match delta {
@@ -225,8 +236,8 @@ impl InputState {
                 id,
                 ..
             }) => {
-                let px = location.x as f32;
-                let py = location.y as f32;
+                let px = location.x as f32 * self.coord_scale_x;
+                let py = location.y as f32 * self.coord_scale_y;
                 match phase {
                     TouchPhase::Started => {
                         self.is_touch_device = true;

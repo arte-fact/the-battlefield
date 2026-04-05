@@ -617,6 +617,7 @@
             isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
             resizeCanvas();
             setTimeout(resizeCanvas, 100);
+            setTimeout(resizeCanvas, 300);
         }
         document.addEventListener('fullscreenchange', onFullscreenChange);
         document.addEventListener('webkitfullscreenchange', onFullscreenChange);

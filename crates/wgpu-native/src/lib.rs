@@ -4,6 +4,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 static GAME_LOOP_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static LAST_VP_W: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static LAST_VP_H: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// Read the browser viewport size in device pixels every frame, matching
 /// SDL's `emscripten::viewport_size_device_pixels()` approach.  Winit's
@@ -115,6 +117,8 @@ pub fn web_main() {
                 // inner_size may not reflect the true viewport yet).
                 let (vp_w, vp_h, dpr) = viewport_size_device_pixels();
                 if vp_w > 1 && vp_h > 1 {
+                    LAST_VP_W.store(vp_w, std::sync::atomic::Ordering::Relaxed);
+                    LAST_VP_H.store(vp_h, std::sync::atomic::Ordering::Relaxed);
                     game_loop.resize(vp_w, vp_h);
                     game_loop.set_dpi(dpr);
                 }
@@ -143,22 +147,27 @@ pub fn web_main() {
                     return;
                 }
                 WindowEvent::Resized(size) => {
+                    LAST_VP_W.store(size.width, std::sync::atomic::Ordering::Relaxed);
+                    LAST_VP_H.store(size.height, std::sync::atomic::Ordering::Relaxed);
                     game_loop.resize(size.width, size.height);
                 }
                 WindowEvent::ScaleFactorChanged { .. } => {
                     let (vp_w, vp_h, dpr) = viewport_size_device_pixels();
+                    LAST_VP_W.store(vp_w, std::sync::atomic::Ordering::Relaxed);
+                    LAST_VP_H.store(vp_h, std::sync::atomic::Ordering::Relaxed);
                     game_loop.set_dpi(dpr);
                     game_loop.resize(vp_w, vp_h);
                 }
                 WindowEvent::RedrawRequested => {
-                    // Poll actual viewport size from JS every frame (like
-                    // SDL's emscripten::viewport_size_device_pixels).
-                    // Winit's inner_size() returns a cached value that can
-                    // be stale during orientation changes on mobile.
+                    // Poll actual viewport size from JS every frame.
+                    // Compare against last raw viewport (not clamped surface
+                    // config) to avoid resize thrashing on high-DPI devices.
                     let (vp_w, vp_h, dpr) = viewport_size_device_pixels();
-                    let cur_w = game_loop.gpu.surface_config.width;
-                    let cur_h = game_loop.gpu.surface_config.height;
-                    if vp_w != cur_w || vp_h != cur_h {
+                    let prev_w = LAST_VP_W.load(std::sync::atomic::Ordering::Relaxed);
+                    let prev_h = LAST_VP_H.load(std::sync::atomic::Ordering::Relaxed);
+                    if vp_w != prev_w || vp_h != prev_h {
+                        LAST_VP_W.store(vp_w, std::sync::atomic::Ordering::Relaxed);
+                        LAST_VP_H.store(vp_h, std::sync::atomic::Ordering::Relaxed);
                         game_loop.resize(vp_w, vp_h);
                     }
                     if (dpr - game_loop.dpi_scale).abs() > 0.01 {
