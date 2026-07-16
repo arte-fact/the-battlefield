@@ -16,7 +16,7 @@ use super::{ClickableButton, GameScreen};
 
 pub(super) fn draw_hud(
     canvas: &mut Canvas<Window>,
-    _tc: &TextureCreator<WindowContext>,
+    tc: &TextureCreator<WindowContext>,
     game: &Game,
     assets: &mut Assets,
     _dpi_scale: f64,
@@ -207,6 +207,28 @@ pub(super) fn draw_hud(
             // Ring
             canvas.set_draw_color(Color::RGBA(cr, cg, cb, alpha.saturating_sub(40)));
             stroke_circle(canvas, cx, cy, pip_r);
+        }
+
+        // Manpower counters flanking the zone panel (Blue left, Red right).
+        // Amber while the pool is bleeding from enemy zone majority.
+        let counter_y = zone_panel_y + zone_panel_h as i32 / 2;
+        let counter_size = 26.0;
+        for (faction, x) in [
+            (Faction::Blue, zone_panel_x - 46),
+            (Faction::Red, zone_panel_x + zone_panel_w as i32 + 46),
+        ] {
+            let fi = if faction == Faction::Blue { 0 } else { 1 };
+            let color = if game.manpower_bleeding(faction) {
+                Color::RGBA(255, 170, 50, 255)
+            } else if faction == Faction::Blue {
+                Color::RGBA(60, 130, 255, 255)
+            } else {
+                Color::RGBA(255, 60, 60, 255)
+            };
+            let label = format!("{}", game.manpower[fi] as u32);
+            assets
+                .text
+                .draw_text_centered(canvas, tc, &label, x, counter_y, counter_size, color);
         }
     }
 }

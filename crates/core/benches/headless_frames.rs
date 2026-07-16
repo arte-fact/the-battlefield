@@ -17,6 +17,19 @@ fn main() {
     println!("Frames: {frames}, Seed: {seed}");
 
     let mut game = Game::new(960.0, 640.0);
+    // Optional balance-tuning overrides for run-to-end probes
+    if let Some(mp) = std::env::var("BENCH_MANPOWER")
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        game.config.manpower_start = mp;
+    }
+    if let Some(bleed) = std::env::var("BENCH_BLEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        game.config.bleed_per_extra_zone = bleed;
+    }
     game.setup_demo_battle_with_seed(seed);
 
     let input = PlayerInput {
@@ -26,6 +39,11 @@ fn main() {
     };
     let dt = 1.0 / 60.0_f32;
 
+    // With BENCH_RUN_TO_END=1, stop as soon as a faction wins (battle-length
+    // probe for the manpower/conquest rules) instead of always running the
+    // full frame count.
+    let run_to_end = std::env::var("BENCH_RUN_TO_END").is_ok_and(|v| v == "1");
+
     let start = Instant::now();
     let mut frame_times = Vec::with_capacity(frames);
 
@@ -34,10 +52,31 @@ fn main() {
         game.tick(&input, dt);
         game.update(dt as f64);
         frame_times.push(frame_start.elapsed());
+        if run_to_end && game.winner.is_some() {
+            break;
+        }
     }
 
     let total = start.elapsed();
+    let frames = frame_times.len();
     let avg_us = total.as_micros() as f64 / frames as f64;
+
+    let alive = |f| {
+        game.units
+            .iter()
+            .filter(|u| u.alive && u.faction == f)
+            .count()
+    };
+    println!();
+    println!(
+        "Battle state after {:.0}s simulated: winner={:?}, manpower=[{:.0}, {:.0}], alive=[{}, {}]",
+        frames as f32 * dt,
+        game.winner,
+        game.manpower[0],
+        game.manpower[1],
+        alive(battlefield_core::unit::Faction::Blue),
+        alive(battlefield_core::unit::Faction::Red),
+    );
 
     let mut sorted_us: Vec<u128> = frame_times.iter().map(|d| d.as_micros()).collect();
     sorted_us.sort();

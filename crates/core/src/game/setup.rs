@@ -131,6 +131,67 @@ impl Game {
                 self.winner = Some(faction);
             }
         }
+
+        self.tick_manpower_bleed(dt);
+        self.check_annihilation();
+    }
+
+    /// Conquest bleed: controlling a majority of zones drains the enemy pool,
+    /// scaling with each zone at or above the threshold.
+    fn tick_manpower_bleed(&mut self, dt: f32) {
+        let threshold = self.config.bleed_zone_threshold;
+        if threshold == 0 {
+            return;
+        }
+        for (fi, faction) in [(0usize, Faction::Blue), (1, Faction::Red)] {
+            let controlled = self
+                .zone_manager
+                .zones
+                .iter()
+                .filter(|z| z.state == ZoneState::Controlled(faction))
+                .count();
+            if controlled >= threshold {
+                let extra_zones = (controlled - threshold + 1) as f32;
+                let drain = extra_zones * self.config.bleed_per_extra_zone * dt;
+                let enemy = 1 - fi;
+                self.manpower[enemy] = (self.manpower[enemy] - drain).max(0.0);
+            }
+        }
+    }
+
+    /// True while `faction`'s pool is actively draining from enemy zone
+    /// majority (for HUD warning tint).
+    pub fn manpower_bleeding(&self, faction: Faction) -> bool {
+        let threshold = self.config.bleed_zone_threshold;
+        if threshold == 0 {
+            return false;
+        }
+        let fi = if faction == Faction::Blue { 0 } else { 1 };
+        if self.manpower[fi] <= 0.0 {
+            return false;
+        }
+        self.zone_manager
+            .zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(faction.enemy()))
+            .count()
+            >= threshold
+    }
+
+    /// Annihilation defeat: a faction with no manpower left and no living
+    /// units loses the battle.
+    fn check_annihilation(&mut self) {
+        if self.winner.is_some() {
+            return;
+        }
+        for (fi, faction) in [(0usize, Faction::Blue), (1, Faction::Red)] {
+            if self.manpower[fi] <= 0.0
+                && !self.units.iter().any(|u| u.alive && u.faction == faction)
+            {
+                self.winner = Some(faction.enemy());
+                return;
+            }
+        }
     }
 
     /// Spawn units one-by-one from the queue at the rally point (base center).
@@ -164,7 +225,7 @@ impl Game {
                     } else {
                         Self::WAVE.len() * 2
                     };
-                    let wave_size = slots.min(max_wave);
+                    let wave_size = slots.min(max_wave).min(self.manpower[fi] as usize);
                     // Build wave by cycling through WAVE pattern
                     let mut queue = Vec::with_capacity(wave_size);
                     for i in 0..wave_size {
@@ -186,7 +247,20 @@ impl Game {
             if self.spawn_timer[fi] >= interval {
                 self.spawn_timer[fi] -= interval;
 
+                // Bleed can drain the pool mid-wave — cut the wave short and
+                // release any rallying units so a partial wave still marches.
+                if self.manpower[fi] < 1.0 {
+                    self.spawn_queue[fi].clear();
+                    for u in &mut self.units {
+                        if u.alive && u.faction == faction && u.rally_hold {
+                            u.rally_hold = false;
+                        }
+                    }
+                    continue;
+                }
+
                 let kind = self.spawn_queue[fi].remove(0);
+                self.manpower[fi] -= 1.0;
                 // Spawn at the production building that trains this unit kind
                 let (sx, sy) = self
                     .buildings
@@ -221,6 +295,9 @@ impl Game {
     pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
         let (gen_grid, layout) = mapgen::generate_battlefield(seed);
         self.grid = gen_grid;
+
+        // Fresh manpower pools (config may have been live-tuned since Game::new)
+        self.manpower = [self.config.manpower_start; 2];
 
         let (blue_cx, blue_cy) = layout.blue_base;
         let (red_cx, red_cy) = layout.red_base;
@@ -429,5 +506,176 @@ mod tests {
             blue_units > 1,
             "Should have spawned reinforcement wave, got {blue_units}"
         );
+    }
+
+    fn count_alive(game: &Game, faction: Faction) -> usize {
+        game.units
+            .iter()
+            .filter(|u| u.alive && u.faction == faction)
+            .count()
+    }
+
+    #[test]
+    fn reinforcement_spawns_cost_manpower() {
+        let mut game = Game::new(960.0, 640.0);
+        let start = game.manpower[0];
+        for _ in 0..250 {
+            game.tick_production(0.1);
+        }
+        let spawned = count_alive(&game, Faction::Blue);
+        assert!(spawned > 0, "Expected reinforcements to spawn");
+        assert_eq!(
+            game.manpower[0],
+            start - spawned as f32,
+            "Each reinforcement should cost 1 manpower"
+        );
+    }
+
+    #[test]
+    fn production_stops_when_manpower_exhausted() {
+        let mut game = Game::new(960.0, 640.0);
+        game.manpower[0] = 0.0;
+        for _ in 0..250 {
+            game.tick_production(0.1);
+        }
+        assert_eq!(
+            count_alive(&game, Faction::Blue),
+            0,
+            "No reinforcements should spawn with an empty pool"
+        );
+    }
+
+    #[test]
+    fn wave_capped_by_remaining_manpower() {
+        let mut game = Game::new(960.0, 640.0);
+        game.manpower[0] = 3.0;
+        for _ in 0..1000 {
+            game.tick_production(0.1);
+        }
+        assert_eq!(
+            count_alive(&game, Faction::Blue),
+            3,
+            "Only 3 reinforcements should spawn with 3 manpower"
+        );
+        assert_eq!(game.manpower[0], 0.0);
+    }
+
+    #[test]
+    fn partial_wave_releases_rally_hold() {
+        let mut game = Game::new(960.0, 640.0);
+        game.manpower[0] = 3.0;
+        for _ in 0..1000 {
+            game.tick_production(0.1);
+        }
+        assert!(
+            game.units
+                .iter()
+                .filter(|u| u.alive && u.faction == Faction::Blue)
+                .all(|u| !u.rally_hold),
+            "A wave cut short by manpower must still release its rally hold"
+        );
+    }
+
+    /// Game with a 3-zone layout and a bleed threshold of 2 (majority of 3).
+    fn game_with_three_zones() -> Game {
+        let mut game = Game::new(960.0, 640.0);
+        game.config.bleed_zone_threshold = 2;
+        game.config.bleed_per_extra_zone = 1.0;
+        let layout = crate::mapgen::MapLayout {
+            blue_base: (20, 20),
+            red_base: (139, 139),
+            zone_centers: vec![(50, 50), (80, 80), (110, 110)],
+            blue_gather: (21, 21),
+            red_gather: (138, 138),
+            blue_home_zones: vec![0],
+            red_home_zones: vec![2],
+            connections: vec![vec![1], vec![0, 2], vec![1]],
+        };
+        game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
+        game
+    }
+
+    #[test]
+    fn zone_majority_bleeds_enemy_manpower() {
+        let mut game = game_with_three_zones();
+        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
+        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
+        game.manpower = [50.0, 50.0];
+        game.tick_zones(2.0);
+        // 2 zones at threshold 2 → 1 "extra" zone → 1.0/s drain on Red for 2s
+        assert_eq!(game.manpower[1], 48.0, "Red pool should bleed");
+        assert_eq!(game.manpower[0], 50.0, "Blue pool should be untouched");
+    }
+
+    #[test]
+    fn bleed_scales_with_zones_above_threshold() {
+        let mut game = game_with_three_zones();
+        for z in &mut game.zone_manager.zones {
+            z.state = ZoneState::Controlled(Faction::Red);
+        }
+        game.manpower = [50.0, 50.0];
+        game.tick_zones(1.0);
+        // 3 zones at threshold 2 → 2 extra zones → 2.0/s drain on Blue
+        assert_eq!(game.manpower[0], 48.0);
+    }
+
+    #[test]
+    fn no_bleed_below_majority() {
+        let mut game = game_with_three_zones();
+        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
+        game.manpower = [50.0, 50.0];
+        game.tick_zones(2.0);
+        assert_eq!(game.manpower, [50.0, 50.0]);
+    }
+
+    #[test]
+    fn bleed_clamps_at_zero() {
+        let mut game = game_with_three_zones();
+        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
+        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
+        game.manpower = [50.0, 0.5];
+        game.tick_zones(2.0);
+        assert_eq!(game.manpower[1], 0.0);
+    }
+
+    #[test]
+    fn annihilation_defeats_faction_with_no_pool_and_no_army() {
+        let mut game = game_with_three_zones();
+        game.manpower = [50.0, 0.0];
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        // No Red units at all
+        game.tick_zones(0.1);
+        assert_eq!(game.winner, Some(Faction::Blue));
+    }
+
+    #[test]
+    fn no_annihilation_while_army_lives_or_pool_remains() {
+        let mut game = game_with_three_zones();
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+
+        // Pool empty but army alive → no winner
+        game.manpower = [50.0, 0.0];
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 100, 100, false);
+        game.tick_zones(0.1);
+        assert_eq!(game.winner, None);
+
+        // Army dead but pool remains → no winner
+        game.manpower = [50.0, 10.0];
+        for u in &mut game.units {
+            if u.faction == Faction::Red {
+                u.alive = false;
+            }
+        }
+        game.tick_zones(0.1);
+        assert_eq!(game.winner, None);
+    }
+
+    #[test]
+    fn battle_setup_resets_manpower_from_config() {
+        let mut game = Game::new(960.0, 640.0);
+        game.manpower = [1.0, 2.0];
+        game.config.manpower_start = 77.0;
+        game.setup_demo_battle_with_seed(42);
+        assert_eq!(game.manpower, [77.0, 77.0]);
     }
 }

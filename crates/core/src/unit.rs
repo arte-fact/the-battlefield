@@ -14,6 +14,13 @@ pub enum Faction {
 }
 
 impl Faction {
+    pub fn enemy(self) -> Faction {
+        match self {
+            Faction::Blue => Faction::Red,
+            Faction::Red => Faction::Blue,
+        }
+    }
+
     pub fn asset_folder(self) -> &'static str {
         match self {
             Faction::Blue => "Blue Units",

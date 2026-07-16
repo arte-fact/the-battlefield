@@ -124,6 +124,8 @@ pub struct Game {
     pub zone_manager: ZoneManager,
     /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
     pub winner: Option<Faction>,
+    /// Remaining reinforcement manpower per faction [Blue, Red].
+    pub manpower: [f32; 2],
     /// Spawn queue per faction [Blue, Red] — units to spawn one-by-one.
     spawn_queue: [Vec<UnitKind>; 2],
     /// Timer between individual unit spawns per faction [Blue, Red].
@@ -163,6 +165,7 @@ impl Game {
         camera.y = center;
 
         let size = (GRID_SIZE * GRID_SIZE) as usize;
+        let config = GameConfig::default();
         Self {
             grid,
             units: Vec::new(),
@@ -186,6 +189,7 @@ impl Game {
             pawns: Vec::new(),
             zone_manager: ZoneManager::empty(),
             winner: None,
+            manpower: [config.manpower_start; 2],
             spawn_queue: [Vec::new(), Vec::new()],
             spawn_timer: [0.0; 2],
             skip_rally: [false; 2],
@@ -196,7 +200,7 @@ impl Game {
             flow_field_turn: false,
             astar_budget: 0,
             authority: 0.0,
-            config: GameConfig::default(),
+            config,
             floating_texts: Vec::new(),
             spatial: UnitSpatialGrid::new(),
             fov_frame_counter: 0,

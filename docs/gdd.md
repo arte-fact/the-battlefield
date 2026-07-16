@@ -37,7 +37,7 @@ You start unknown. Kills, assists, and zone captures witnessed by nearby allies 
 1. **Battle generation** -- A seeded, deterministic map is generated: terrain, two bases at opposing corners, and seven capture zones.
 2. **Deployment** -- You spawn as a Blue Warrior at your base, alongside your army's starting force. The Red army spawns at the opposite corner.
 3. **Battle** -- Real-time gameplay. Fight, capture zones, issue orders to allies who respect you.
-4. **Resolution** -- The run ends when you die (permadeath) or one faction wins by holding all seven zones for 60 continuous seconds.
+4. **Resolution** -- The run ends when you die (permadeath) or one faction wins: by **domination** (holding all seven zones for 60 continuous seconds) or by **annihilation** (the enemy has no manpower left and no living units).
 5. **New run** -- Retry from the death/victory/defeat screen; a new seed produces a new battlefield.
 
 ### Screens
@@ -81,7 +81,9 @@ Seven named capture zones are arranged in a diamond layout across the battlefiel
 
 Zone states: **Neutral → Contested → Capturing(faction) → Controlled(faction)**.
 
-**Victory:** a faction that controls all seven zones simultaneously starts a 60-second victory timer. If it holds them all for the full duration, it wins the battle. Losing any zone resets the timer.
+**Victory:** a faction that controls all seven zones simultaneously starts a 60-second victory timer. If it holds them all for the full duration, it wins by domination. Losing any zone resets the timer.
+
+**Manpower and bleed (Conquest attrition):** each faction starts with a finite manpower pool (default 300) -- the reinforcements it can still field. Every reinforcement spawn costs 1; the starting armies are free. Controlling a majority of zones (4+ of 7) bleeds the enemy pool over time, scaling with each zone at or above the threshold. A faction whose pool is empty and whose army is destroyed loses by annihilation -- so any sustained advantage ends the battle eventually, and every kill is a manpower point the enemy must spend to replace.
 
 ## Units
 
@@ -149,7 +151,7 @@ Each faction periodically scores all seven zones with a 3-tier objective system 
 
 ### Reinforcements
 
-Bases produce units in waves (roughly every 20 seconds). Newly produced units rally at the base until the wave is complete, then march together. A faction holding zero zones produces double-size waves to fuel its comeback.
+Bases produce units in waves, drawing from the faction's manpower pool. Newly produced units rally at the base until the wave is complete, then march together (a wave cut short by an empty pool still marches). A faction holding zero zones produces double-size waves to fuel its comeback -- burning its pool twice as fast, an all-in gamble.
 
 ## Ambient Life
 
@@ -169,7 +171,7 @@ Touch is the primary input; keyboard/mouse and gamepad are supported.
 
 ## User Interface
 
-- **HUD** -- player health, authority rank, zone ownership summary.
+- **HUD** -- player health, authority rank, zone ownership summary, and per-faction manpower counters (tinted amber while a pool is bleeding).
 - **Minimap** -- top-right corner (240px), showing terrain, zones, and unit positions in faction colors.
 - **Order markers** -- floating marker with progress bar above units currently under your command.
 - **Floating text** -- authority gains/losses pop above the player.

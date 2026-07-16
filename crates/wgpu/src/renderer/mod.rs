@@ -1276,6 +1276,27 @@ fn draw_hud(
             prim.fill_circle(cx, pip_y, inner_r, [cr, cg, cb, ca]);
             prim.stroke_circle(cx, pip_y, pip_r, 1.5, [cr, cg, cb, ca * 0.6]);
         }
+
+        // Manpower counters flanking the zone panel (Blue left, Red right).
+        // Amber while the pool is bleeding from enemy zone majority.
+        let counter_y = panel_y_pos + panel_h * 0.5;
+        for (faction, x) in [
+            (Faction::Blue, panel_x - 30.0),
+            (Faction::Red, panel_x + panel_w + 30.0),
+        ] {
+            let fi = if faction == Faction::Blue { 0 } else { 1 };
+            let (r, g, b) = if game.manpower_bleeding(faction) {
+                (255u8, 170u8, 50u8)
+            } else if faction == Faction::Blue {
+                (61, 130, 255)
+            } else {
+                (255, 61, 61)
+            };
+            let label = format!("{}", game.manpower[fi] as u32);
+            assets
+                .text
+                .draw_text_centered(sprites, _gpu, &label, x, counter_y, 20.0, r, g, b, 255);
+        }
     }
 }
 

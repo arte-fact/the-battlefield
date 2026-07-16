@@ -95,6 +95,29 @@ pub struct GameConfig {
     pub max_units_per_faction: usize,
     pub zone_radius: u32,
     pub victory_hold_time: f32,
+
+    // ── Manpower / Conquest ─────────────────────────────────────────
+    /// Reinforcements each faction can field over the battle (spawns cost 1).
+    #[serde(default = "default_manpower_start")]
+    pub manpower_start: f32,
+    /// Zones a faction must control before the enemy pool starts bleeding.
+    #[serde(default = "default_bleed_zone_threshold")]
+    pub bleed_zone_threshold: usize,
+    /// Enemy manpower drained per second per zone at or above the threshold.
+    #[serde(default = "default_bleed_per_extra_zone")]
+    pub bleed_per_extra_zone: f32,
+}
+
+fn default_manpower_start() -> f32 {
+    300.0
+}
+
+fn default_bleed_zone_threshold() -> usize {
+    4
+}
+
+fn default_bleed_per_extra_zone() -> f32 {
+    0.25
 }
 
 impl Default for GameConfig {
@@ -191,6 +214,11 @@ impl Default for GameConfig {
             max_units_per_faction: 35,
             zone_radius: 6,
             victory_hold_time: 60.0,
+
+            // Manpower / Conquest
+            manpower_start: default_manpower_start(),
+            bleed_zone_threshold: default_bleed_zone_threshold(),
+            bleed_per_extra_zone: default_bleed_per_extra_zone(),
         }
     }
 }
