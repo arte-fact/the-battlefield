@@ -1,26 +1,26 @@
 # The Battlefield
 
-A roguelike, turn-based tactics game set on a medieval battlefield. You are one soldier in a massive battle between two armies. Survive. Fight. Turn the tide.
+A real-time battle game set on a medieval battlefield. You are one soldier in a massive battle between two armies. Survive. Fight. Earn authority. Turn the tide.
 
-Built with Rust, WebAssembly, and SDL2. Runs natively (desktop/ARM) and on the web via Emscripten (WebGL). Mobile-first, playable offline as a PWA.
+Built with Rust and WebAssembly, with two renderer backends: wgpu (native + web, the deployed target) and SDL2 (desktop/ARM + Emscripten web). Mobile-first, playable offline as a PWA.
 
 ## About
 
-The Battlefield is a permadeath roguelike where each run places you as a single soldier in a procedurally generated battle between two organized medieval armies. You don't control the army -- you follow orders, fight nearby enemies, and try to survive while contributing to your side's victory.
+The Battlefield is a permadeath game where each run places you as a single soldier in a procedurally generated real-time battle between two armies. You don't control the army -- both sides fight autonomously, capturing zones and sending reinforcement waves. By fighting well you earn authority, and allied soldiers who respect you will follow your orders (Follow, Charge, Defend).
 
-Every battle is different: terrain, faction pairings, army composition, and commander strategies are all procedurally generated. When you die, you start over in a new battle with new conditions.
+A faction wins by holding all seven capture zones for 60 continuous seconds. When you die, the run ends -- start over on a freshly generated battlefield.
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Language | Rust |
-| Web target | WebAssembly via Emscripten |
-| Native target | SDL2 (Linux, ARM/Raspberry Pi) |
-| Rendering | SDL2 → WebGL (web) / GPU-accelerated (native) |
+| Language | Rust (workspace: headless core + thin platform crates) |
+| Web target (deployed) | wgpu + winit → WebAssembly via wasm-bindgen (WebGL) |
+| Web target (alternative) | SDL2 → WebAssembly via Emscripten |
+| Native target | wgpu (desktop) and SDL2 (desktop, ARM/Raspberry Pi) |
 | Input | Touch (joystick, buttons, pinch) + keyboard/mouse + gamepad |
-| Offline support | PWA with service worker |
-| Deployment | GitHub Pages via GitHub Actions |
+| Offline support | PWA with service worker (cache-busted by wasm hash) |
+| Deployment | GitHub Pages via GitHub Actions (wgpu web build) |
 | Art | [Tiny Swords](https://pixelfrog-assets.itch.io/tiny-swords) by Pixel Frog (itch.io) |
 
 ## Getting Started
@@ -28,16 +28,33 @@ Every battle is different: terrain, faction pairings, army composition, and comm
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (latest stable)
-- [cmake](https://cmake.org/) (required by the SDL2 bundled build)
+- For the SDL2 bundled build: `cmake` and X11/audio dev headers on Linux
+- For the wgpu native build: `libudev` dev package (gamepad support via gilrs)
 - Any modern browser (Chrome, Firefox, Safari, Edge)
 
-### Build and Run (Native SDL2)
+### Build and Run (Native)
 
 ```bash
+# wgpu renderer (same backend as the deployed web version)
+cargo run -p battlefield-wgpu-native
+
+# SDL2 renderer (desktop / Raspberry Pi)
 cargo run -p battlefield-sdl
 ```
 
-### Build and Run (Web via Emscripten)
+### Build and Run (Web, wgpu -- deployed target)
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.117
+
+./build-wgpu-web.sh
+
+# Serve locally
+python3 -m http.server -d web-wgpu 8080
+```
+
+### Build and Run (Web, SDL via Emscripten)
 
 ```bash
 # One-time setup: install Emscripten SDK
@@ -55,9 +72,7 @@ source ~/emsdk/emsdk_env.sh
 python3 -m http.server -d web-sdl/dist 8080
 ```
 
-The build script compiles the SDL crate to WebAssembly via Emscripten, bundles
-game assets into a `.data` file, applies service worker cache-busting, and
-copies PWA files into `web-sdl/dist/`.
+Both web build scripts bundle game assets, apply service worker cache-busting, and copy PWA files into their output directory.
 
 ### Tests
 
@@ -81,84 +96,25 @@ cargo fmt --check
 - **Idiomatic Rust** -- Follow Rust conventions. Zero clippy warnings. Use `cargo fmt`.
 - **No anticipation** -- Don't code for hypothetical future needs (YAGNI). Build what's needed now.
 
-## Roadmap
+## Current State
 
-### Phase 1: Foundation
+Implemented:
 
-- [x] Rust project setup with `Cargo.toml` and WASM target
-- [x] HTML Canvas 2D rendering pipeline (initialize canvas, basic draw)
-- [x] Canvas setup and game loop (fixed timestep)
-- [ ] GitHub Actions CI/CD pipeline (build, test, clippy, fmt)
-- [ ] GitHub Pages deployment
-- [x] Sprite sheet loader (parse horizontal strip PNGs into frames)
-- [x] Render a single animated unit (Warrior idle) on screen
+- Real-time simulation with hundreds of units (flow fields, budgeted A*, spatial hashing)
+- Four unit types (Warrior, Archer, Lancer, Monk) with distinct combat behaviors
+- Seven capture zones with a faction-level AI planner and zone-control victory
+- Bases with producing buildings and reinforcement waves
+- Authority system: earn reputation, command allies with Follow / Charge / Defend orders
+- Procedural battlefields (seeded BSP + simplex terrain, auto-tiling, decorations)
+- Fog of war, minimap, touch/keyboard/gamepad input, PWA offline play
+- CI (fmt, clippy, tests, web builds) and automated GitHub Pages deployment
 
-### Phase 2: Core Gameplay
+Not yet implemented (see [Future Directions](docs/gdd.md#future-directions)):
 
-- [x] 64x64 square grid map with tilemap rendering (Tiny Swords tilesets)
-- [x] Camera controls (pan, zoom, smooth follow)
-- [x] Turn system (auto-turn: player acts, then AI acts, turn advances)
-- [x] Unit placement and movement on the grid (with dust particle FX)
-- [x] Sprite facing (horizontal flip for left-facing units)
-- [x] Basic melee combat (Warrior attack animation + explosion FX on hit)
-- [x] Ranged combat (Archer shoot animation + arrow projectile)
-- [x] Health system with HP bars
-- [x] Unit death (explosion FX + fade out)
-- [x] Touch input: swipe-anywhere movement & attack (short swipe = 1 tile, long swipe = A* pathfinding auto-move)
-- [x] Touch input: pinch-to-zoom, two-finger-pan
-- [x] Responsive canvas (fill viewport on mobile, DPR scaling)
-- [x] Keyboard: arrow keys = movement, WASD = camera pan, mouse wheel = zoom
-
-### Phase 3: Battlefield and Armies
-
-- [x] Procedural terrain generation (grass, elevation, water, forest, rock)
-- [x] 4-bit cardinal bitmask auto-tiling (flat ground + elevated ground)
-- [x] Water rendering with animated foam edges
-- [x] Elevation rendering with shadows and cliff faces
-- [x] All 5 unit types functional (Warrior, Archer, Lancer, Pawn, Monk)
-- [ ] Building placement (castles, towers, houses, barracks, monastery)
-- [ ] Two-faction army generation (select from 5 faction colors)
-- [ ] Lancer: larger sprite (320x320), directional attack/defence, charge ability
-- [ ] Monk: heal animation + heal effect overlay on target
-- [ ] Pawn: tool variant animations as melee attack
-- [ ] Army hierarchy (army, divisions, squads)
-- [ ] AI commanders with portraits (25 avatars) issuing orders
-- [ ] Squad-level AI (units following orders, engaging enemies)
-- [ ] Player receives and responds to orders
-- [ ] Morale system (units break and flee, Monks rally)
-
-### Phase 4: Roguelike Loop
-
-- [ ] Permadeath (run ends on player death, death screen with avatar)
-- [ ] Battle end conditions (victory, defeat, rout)
-- [ ] Run summary screen (stats on RegularPaper background, Swords decoration)
-- [ ] Procedural variety (faction pairing, terrain layout, army composition, tilemap color variant)
-- [ ] New run setup (battle generation with new conditions)
-- [ ] Meta-progression system (TBD -- unlockable roles, scenarios)
-
-### Phase 5: Polish
-
-- [ ] PWA manifest and service worker (offline play)
-- [ ] Full UI with asset pack components (buttons, banners, ribbons, cursors, papers, wood table)
-- [ ] Main menu (Banner title, WoodTable background, Blue/Red buttons)
-- [ ] In-battle HUD (health bar, morale bar, orders ribbon, action icons, minimap)
-- [ ] Battle overview toggle (zoomed-out army positions)
-- [ ] Cloud shadows drifting across battlefield
-- [ ] Animated decorations (swaying trees, bushes, water rocks)
-- [ ] Sound effects (combat, movement, orders, ambient)
-- [ ] Music
-- [ ] Mobile-optimized HUD layout (bottom action bar)
-- [ ] Haptic feedback on attack/damage (Vibration API)
-- [ ] Touch target sizing validation (44px minimum)
-
-### Phase 6: Content and Balance
-
-- [ ] Unit ability balancing (Guard, Volley, Charge, Brace, Heal)
-- [ ] Terrain and building defense bonus tuning
-- [ ] Commander AI personality variety and balancing
-- [ ] Army composition templates (infantry-heavy, cavalry-heavy, balanced, skirmish)
-- [ ] Battle scenario variety
-- [ ] Playtesting and tuning
+- Sound and music
+- Morale / rout mechanics
+- Meta-progression and run summary screen
+- Additional faction pairings and commander personalities
 
 ## Documentation
 

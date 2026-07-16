@@ -1,561 +1,231 @@
 # The Battlefield -- Game Design Document
 
+> This document describes the game as currently implemented. Ideas that were
+> part of earlier designs but are not (or no longer) in the game are collected
+> in [Future Directions](#future-directions) at the end.
+
 ## Game Overview
 
 **Title:** The Battlefield
-**Genre:** Roguelike, turn-based tactics
-**Platform:** Web (PWA, mobile-first, playable offline)
+**Genre:** Real-time action / battle sim with a roguelike run structure
+**Platform:** Web (PWA, mobile-first, playable offline), desktop Linux, Raspberry Pi
 **Perspective:** Top-down, square grid
 **Art:** Tiny Swords asset pack (Pixel Frog) -- chibi pixel art, 64x64 tile grid
 
-**Elevator pitch:** You are one soldier in a massive medieval battle between two armies. Survive. Fight. Turn the tide. Die. Try again.
+**Elevator pitch:** You are one soldier in a massive medieval battle between two armies. Survive. Fight. Earn authority. Turn the tide. Die. Try again.
 
-**Core fantasy:** You're not the general. You're not the hero. You're a soldier in the ranks, following orders, fighting for your life in a battle much larger than yourself. The army clashes around you whether you act brilliantly or not -- but your choices still matter.
+**Core fantasy:** You're not the general. You're not the hero -- at least not at first. You're a soldier in the ranks, fighting for your life in a real-time battle much larger than yourself. The armies clash around you whether you act brilliantly or not -- but by fighting well you build a reputation, and soldiers who have seen your deeds will follow your orders.
 
 ## Core Pillars
 
 ### 1. One Soldier, One Life
 
-Every run is one soldier's experience of one battle. Permadeath means every decision carries weight. There are no saves, no checkpoints. When you fall, the battle continues without you.
+Every run is one soldier's experience of one battle. Permadeath means every decision carries weight. When you fall, the battle continues without you.
 
 ### 2. The Battle Is Bigger Than You
 
-The two armies fight according to their commanders' strategies. Squads advance, hold positions, and retreat based on orders from above. You are part of this machine -- you receive orders, you see the battle unfold around you, but you don't control it. Your actions can influence your local area and sometimes tip the balance, but the outcome depends on the whole army.
+Both armies fight autonomously: a faction-level AI planner picks objectives, reinforcement waves march from the bases, and capture zones change hands with or without you. Your actions influence your local area -- and through the authority system, increasingly more than that.
 
-### 3. Every Battle Is Different
+### 3. Authority Is Earned
 
-No two runs are the same. Armies are procedurally generated with different compositions, strengths, and commanders. Terrain varies. Faction pairings change. The battle you fight today is not the battle you'll fight tomorrow.
+You start unknown. Kills, assists, and zone captures witnessed by nearby allies raise your authority; allied deaths near you lower it. The higher your authority, the more soldiers will accept your orders, and the farther your command reaches.
 
 ## Game Loop
 
 ### Run Structure
 
-1. **Battle generation** -- The game generates two opposing armies (selecting factions, composition, commanders), a battlefield (terrain layout, objectives), and battle conditions.
-2. **Deployment** -- The player is placed in their squad's starting position within the army formation.
-3. **Battle** -- Turn-by-turn gameplay. Each turn, the player receives orders, decides their actions, and the battle progresses.
-4. **Resolution** -- The run ends when the player dies (permadeath) or the battle concludes (victory, defeat, or rout of either side).
-5. **Summary** -- A post-battle screen shows the player's performance: turns survived, enemies defeated, orders followed, contribution to the battle outcome.
-6. **New run** -- Return to battle generation with new procedural conditions.
+1. **Battle generation** -- A seeded, deterministic map is generated: terrain, two bases at opposing corners, and seven capture zones.
+2. **Deployment** -- You spawn as a Blue Warrior at your base, alongside your army's starting force. The Red army spawns at the opposite corner.
+3. **Battle** -- Real-time gameplay. Fight, capture zones, issue orders to allies who respect you.
+4. **Resolution** -- The run ends when you die (permadeath) or one faction wins by holding all seven zones for 60 continuous seconds.
+5. **New run** -- Retry from the death/victory/defeat screen; a new seed produces a new battlefield.
 
-### Turn Structure
+### Screens
 
-Each turn allows **one action** (move 1 tile OR attack), then auto-advances:
-
-1. **Player action** -- The player swipes (or presses an arrow key / clicks) to move 1 tile in that direction, or attack an adjacent enemy in that direction. Attack takes priority over movement.
-2. **AI action** -- All non-player units act: each attacks an adjacent enemy if possible, otherwise moves 1 tile toward the nearest enemy.
-3. **Turn advance** -- The turn counter increments and all living units reset for the next turn.
-
-There is no End Turn button -- the turn auto-advances after every player action. This creates a fast, fluid rhythm inspired by classic roguelikes.
-
-**Auto-move:** The player can long-swipe (>60px) to set a pathfinding destination. The game computes an A* path and auto-plays turns step by step (one move per ~8 frames), with the camera following smoothly. Auto-move stops if an enemy blocks the path ahead, and attacks the enemy if it is the destination. Any manual input cancels the auto-move.
+`MainMenu → Playing → PlayerDeath | GameWon | GameLost → (retry / new game)`
 
 ## Map and Battlefield
 
 ### Grid
 
-The battlefield uses a **64x64 pixel square grid**. Each cell can contain terrain features and at most one unit. Units render in 192x192 frames (3x3 tiles), visually centered on their tile. The Lancer renders in 320x320 frames (5x5 tiles) due to its mount.
+The world is a 160x160 tile grid at 64px per tile: a 128x128 playable area surrounded by a 16-tile impassable border. Positions are continuous (floating point); the grid governs terrain, passability, pathfinding, and auto-tiling. Units render in 192x192 frames (the mounted Lancer in 320x320), Y-sorted for correct overlap.
 
-### Terrain Tiles
+### Terrain
 
-The Tiny Swords tileset provides 5 color variants of ground tiles (grass + stone elevation) plus water tiles. Each tilemap is 576x384 (9x6 tiles at 64x64) and includes auto-tiling pieces (edges, corners, fills) for:
+Seeded procedural generation (BSP layout + simplex noise) produces:
 
-- **Grass** -- Open ground, standard terrain. Auto-tiled using 4-bit cardinal bitmask (N/E/S/W neighbors) mapping to a 4x4 composed block in the tilemap (3x3 border pieces + V-strip col 3 + H-strip row 3 + isolated tile at (3,3)).
-- **Elevated ground** -- Raised terrain with cliff faces (functions as hills). Same auto-tiling system, offset to cols 5-8 in the tilemap. Rendered with shadow pass underneath + cliff face tiles below elevated edges. Uses Tilemap_color2 for visual distinction.
-- **Water** -- Animated water background with foam edges (16-frame animation, per-tile phase offset for organic look). Foam rendered on land tiles adjacent to water.
+- **Grass** -- open ground, auto-tiled with a 4-bit cardinal bitmask.
+- **Elevated ground** -- raised terrain with cliff faces and shadows.
+- **Water** -- impassable, animated foam edges.
+- **Forest** -- tree decorations; pawns chop trees for ambience.
+- **Rocks** -- impassable decorations.
 
-| Terrain | Asset | Movement cost | Defense bonus | Notes |
-|---------|-------|:---:|:---:|-------|
-| Open field | Grass tiles | 1 | 0 | Default terrain |
-| Hill | Elevation tiles | 2 | +1 | Height advantage for ranged attacks |
-| Forest | Tree decorations on grass | 2 | +1 | Blocks line of sight. 4 tree variants + stumps. |
-| Water | Water tiles + foam | Impassable | -- | Must cross at bridges |
-| Bridge | Custom tile or building piece | 1 | 0 | Crossing point over water |
-| Rocks | Rock decorations | Impassable | -- | Blocking terrain. 4 variants. |
-| Village | House buildings on grass | 1 | +1 | Houses provide partial cover |
-| Fortification | Tower / Castle buildings | 1 | +2 | Defensive structures |
+The same seed always generates the same battlefield; different seeds differ.
 
-### Decorations
+### Bases
 
-Available map decorations from the asset pack:
+Each faction owns a base in its corner of the map, laid out by BSP partitioning and connected by dirt roads:
 
-- **Trees** (4 variants, animated swaying, 8 frames each) -- forest areas
-- **Tree stumps** (4 variants, static) -- cleared forest, battlefield debris
-- **Bushes** (4 variants, animated) -- light cover, visual variety
-- **Rocks** (4 variants, 64x64 static) -- impassable terrain obstacles
-- **Water rocks** (4 variants, animated) -- decorations in water tiles
-- **Clouds** (8 variants) -- shadow overlays drifting across the battlefield
-- **Gold stones** (6 variants) -- decorative battlefield props
-- **Sheep** (animated: idle, move, graze) -- ambient livestock in village areas
+| Building | Role |
+|----------|------|
+| Castle | Defensive anchor -- fires arrows like 4 archers |
+| Defense Tower | Defensive -- fires like 2 archers |
+| Barracks | Produces Warriors and Lancers |
+| Archery Range | Produces Archers |
+| Monastery | Produces Monks |
+| Houses | Decorative; pawns and sheep live around them |
 
-### Buildings as Battlefield Structures
+### Capture Zones
 
-Buildings serve as key terrain features and objectives:
+Seven named capture zones are arranged in a diamond layout across the battlefield, linked by a symmetric adjacency graph that the AI uses for planning. Each zone tracks the units inside it and moves a capture progress value between fully Red (-1) and fully Blue (+1).
 
-| Building | Grid footprint | Role on battlefield |
-|----------|:---:|-----|
-| Castle (320x256) | ~5x4 | Army HQ / primary objective. Capturing or defending wins battles. |
-| Tower (128x256) | ~2x4 | Defensive position. Archers inside get range and defense bonus. |
-| Barracks (192x256) | ~3x4 | Strategic objective. Reinforcement point. |
-| Archery range (192x256) | ~3x4 | Strategic objective. |
-| Monastery (192x320) | ~3x5 | Healing point. Monks can rally broken units here. |
-| House 1-3 (128x192) | ~2x3 | Village terrain. Provides cover. |
+Zone states: **Neutral → Contested → Capturing(faction) → Controlled(faction)**.
 
-All buildings come in 5 faction colors, making occupied buildings visually indicate control.
+**Victory:** a faction that controls all seven zones simultaneously starts a 60-second victory timer. If it holds them all for the full duration, it wins the battle. Losing any zone resets the timer.
 
-### Battlefield Zones
+## Units
 
-The battlefield is conceptually divided into zones that inform army AI behavior:
+Two factions -- **Blue** (the player's side) and **Red** -- field the same four unit types:
 
-- **Frontline** -- Where the two armies meet. Most combat happens here.
-- **Flanks** -- The sides of the engagement. Flanking maneuvers target these.
-- **Rear** -- Behind the front. Commanders, reserves, and archers.
-- **Objectives** -- Key buildings and positions (castles, towers, bridges, hilltops) that commanders order units to capture or defend.
+| Unit | Role | HP | ATK | DEF | Range (tiles) |
+|------|------|:---:|:---:|:---:|:---:|
+| Warrior | Frontline melee, balanced attack and defense | 10 | 3 | 3 | 1 |
+| Archer | Ranged attacker, fragile up close, kites melee | 6 | 2 | 1 | 7 |
+| Lancer | Fast cavalry, hits hard, backs off after striking | 10 | 4 | 1 | 2 |
+| Monk | Healer -- avoids combat, flees enemies, heals nearby allies | 5 | 1 | 1 | 2 |
 
-### Procedural Battlefield Generation
+Stats live in `GameConfig` and can be rebalanced at runtime. Damage is `max(1, ATK - DEF)`. Dead units explode into particles and fade out; the player's corpse stays on the field.
 
-Terrain is generated procedurally using a seeded deterministic algorithm (BSP + WFC planned, currently simplex noise):
+## The Player
 
-**Current implementation:**
-- Seeded noise-based generation producing grass, water bodies, forest patches, rock outcrops, and elevated terrain
-- Elevation level 2 tiles placed on existing land, avoiding adjacency to water
-- Blue army spawns in the west third, Red army spawns in the east third
-- Both spawn areas guaranteed to be passable land
-- Different seeds produce different battlefields; same seed is deterministic
+You play a Blue Warrior in real time:
 
-**Design goals (not yet implemented):**
-- A mostly open center where the main engagement happens
-- Terrain features distributed to create tactical variety (flanking routes through forests, defensible hills, water crossings as chokepoints)
-- Objectives (buildings) placed at strategically interesting locations
-- Both sides have a castle or equivalent HQ in their deployment zone
-- Towers and other structures placed at contested positions
-- Village clusters near the center or on flanks
+- **Movement** -- continuous 360° movement via virtual joystick (touch), WASD/arrows (keyboard), or gamepad stick.
+- **Attack** -- an explicit attack action (button / Space / gamepad) that hits all enemies in a 180° cone in your facing direction. No auto-attack.
+- **Fog of war** -- you see a personal field-of-view radius; the rest of the map is fogged (FOV recomputed every third frame for performance).
 
-## Factions
+### Authority
 
-The asset pack provides **5 distinct factions** identified by color: Blue, Red, Purple, Yellow, and Black. Each faction has identical unit types and buildings but with distinct color palettes.
+Authority is a 0-100 reputation score, displayed as a rank:
 
-Each battle selects **two factions** as the opposing armies. The player is assigned to one.
+| Authority | Rank |
+|:---:|------|
+| 0+ | Unknown |
+| 20+ | Known |
+| 40+ | Veteran |
+| 60+ | Hero |
+| 80+ | Legend |
 
-| Pairing | Contrast | Feel |
-|---------|----------|------|
-| Blue vs Red | High | Classic, default matchup |
-| Purple vs Yellow | High | Alternative vibrant matchup |
-| Black vs Blue | High | Dark invaders vs defenders |
-| Black vs Red | High | Dark army vs crimson army |
-| Red vs Purple | Medium | Civil war / rival kingdoms |
+It changes in response to events **witnessed within your reputation FOV** -- kills and assists you land, zones captured while you're present (positive); allied deaths nearby, zones lost (negative). Authority determines three things, each scaling linearly with the score:
 
-The faction pairing is part of procedural generation -- different each run.
-
-## Units and Roles
-
-### Player Character
-
-The player starts each run as a soldier. The starting role determines their stats, animations, and available actions.
-
-**Starting role (default):** Warrior
-
-Additional roles may be unlocked through the meta-progression system (TBD).
-
-### Unit Types
-
-The asset pack provides 5 unit types per faction. Each maps to a distinct battlefield role:
-
-| Unit | Sprite | HP | ATK | DEF | MOV | Range | Role |
-|------|--------|:---:|:---:|:---:|:---:|:---:|------|
-| Warrior | Sword & shield knight | 10 | 3 | 3 | 3 | 1 | Frontline melee. Balanced attack and defense. Can guard. |
-| Archer | Hooded bowman | 6 | 2 | 1 | 3 | 5 | Ranged attacker. Fragile in melee. Arrow projectile. |
-| Lancer | Mounted knight | 10 | 4 | 1 | 5 | 1 | Cavalry. Fast, powerful charge. Directional attacks. |
-| Pawn | Light worker/militia | 7 | 2 | 1 | 4 | 1 | Conscript / light infantry. Cheap, numerous. |
-| Monk | Robed healer | 5 | 1 | 1 | 3 | 2 | Support. Heals adjacent allies. Rallies broken units. |
-
-*Values are initial design targets. Final balancing through playtesting.*
-
-### Unit Animations
-
-Each unit has specific animations available from the asset pack:
-
-| Unit | Idle | Run | Attack | Special |
-|------|:---:|:---:|:---:|---------|
-| Warrior | 8f | 6f | 4f (x2 variants) | Guard (6f) |
-| Archer | 6f | 4f | Shoot (8f) | Arrow projectile |
-| Lancer | 12f | 6f | 3f (5 directions) | Defence (6f, 5 directions) |
-| Pawn | 8f | 6f | -- | Tool variants (axe, knife, hammer, pickaxe) |
-| Monk | 6f | 4f | -- | Heal (11f) + Heal Effect (11f) |
-
-**Facing:** Units face right by default. Horizontally mirror sprites for left-facing. The Lancer is unique in having explicit directional attack/defence sprites (Up, UpRight, Right, DownRight, Down), mirrored for the remaining directions.
-
-**Missing animations (design workarounds):**
-- **Death** -- Play explosion particle FX (8-10 frames) at unit position, then remove the unit. Optionally fade out over 0.3s.
-- **Hit reaction** -- Flash the sprite white or red for 2 frames. Play small explosion FX at impact point.
-- **Pawn attack** -- Use tool variant animations (axe swing = `Pawn_Interact Axe`) as melee attack.
-
-### Unit Stats
-
-- **HP (Hit Points)** -- Damage a unit can take before death. Does not regenerate (except via Monk heal).
-- **ATK (Attack)** -- Base damage dealt in combat.
-- **DEF (Defense)** -- Reduces incoming damage. Damage taken = max(1, attacker ATK - defender DEF + modifiers).
-- **MOV (Movement)** -- Number of movement points per turn. Terrain costs deducted per cell.
-- **Range** -- Maximum attack distance in cells. 1 = melee only.
-- **Morale** -- Hidden stat tracked per unit. Affected by casualties, leadership, and battle state. When morale breaks, the unit flees.
-
-### Unit Abilities
-
-| Unit | Ability | Description |
-|------|---------|-------------|
-| Warrior | Guard | Enter defensive stance. +2 DEF until next turn. Uses Guard animation. |
-| Archer | Volley | Shoot over obstacles (ignores line of sight). Reduced accuracy. |
-| Lancer | Charge | Move in a straight line, attack first enemy hit. +1 ATK per cell traveled. Uses directional attack sprites. |
-| Pawn | Brace | Hold position. +1 DEF. Cheap unit's survival tool. |
-| Monk | Heal | Restore HP to an adjacent ally (heal amount TBD). Uses Heal animation + effect overlay on target. |
-
-## Army System
-
-### Organization
-
-Each army follows a hierarchy:
-
-```
-Army (Faction Color)
-├── Division A (e.g., Infantry Vanguard)
-│   ├── Squad 1: 4 Warriors, 1 Monk
-│   ├── Squad 2: 3 Warriors, 2 Pawns
-│   └── Squad 3: 3 Pawns, 2 Archers
-├── Division B (e.g., Cavalry Wing)
-│   ├── Squad 4: 3 Lancers
-│   └── Squad 5: 2 Lancers, 2 Archers
-├── Division C (e.g., Ranged Support)
-│   ├── Squad 6: 4 Archers, 1 Monk
-│   └── Squad 7: 4 Archers
-└── Reserve
-    └── Squad 8: 2 Warriors, 2 Pawns, 1 Monk
-```
-
-The player belongs to one squad within one division. Squad composition varies per run.
-
-### Procedural Army Generation
-
-Each army is generated with:
-
-- **Faction** -- One of the 5 color factions (determines visual identity)
-- **Size** -- Total soldier count (varies per battle)
-- **Composition** -- Mix of unit types (e.g., heavy infantry army = more Warriors, skirmish army = more Archers and Pawns)
-- **Quality** -- Average stats modifier (well-trained veterans vs. raw conscripts)
-- **Commander personality** -- Affects strategic decisions (see AI Commanders below)
-
-The two armies are generated independently, creating asymmetric matchups. One army might be a small, elite force of Warriors and Lancers facing a large conscript army of Pawns and Archers.
-
-### AI Commanders
-
-Each army has a commander AI (represented by an avatar from the 25 available portraits) that issues orders to divisions. Commanders have personality traits that influence their strategy:
-
-| Personality | Behavior |
-|------------|----------|
-| Aggressive | Pushes forward quickly, commits reserves early |
-| Defensive | Holds strong positions, waits for the enemy to attack |
-| Cautious | Probes with skirmishers, commits slowly, preserves forces |
-| Flanker | Sends divisions around the sides, tries to surround |
-
-Commanders react to the battle state: if the center is collapsing, they may commit reserves; if a flank is open, they may exploit it.
+1. **Follow chance** -- the probability an allied unit accepts your order.
+2. **Command radius** -- how far around you orders reach.
+3. **Max followers** -- how many units can be under your command at once.
 
 ### Orders
 
-Divisions and squads receive orders from their commander:
+You can issue three orders to allied units within your command radius:
 
-| Order | Meaning |
-|-------|---------|
-| Advance | Move toward the objective or enemy |
-| Hold | Maintain current position, engage enemies in range |
-| Flank | Move around the enemy's side |
-| Retreat | Fall back to a safer position |
-| Charge | Rush the enemy (melee units, morale bonus) |
-| Support | Move to reinforce another division |
+| Order | Key | Effect | Expires |
+|-------|:---:|--------|---------|
+| Follow | J | Units escort you at close distance | after a timer |
+| Charge | L | Units rush a point ahead of you, then transition to Follow | on arrival or timeout |
+| Defend | K | Units form a layered line behind an anchor (Warriors front, Lancers, Archers, Monks behind) | after a timer |
 
-The player sees their squad's current order displayed on the HUD. Following orders may provide morale bonuses to nearby squad members. Disobeying has no direct penalty but your squad fights without you, and isolated soldiers are vulnerable.
+Each unit rolls a deterministic per-unit acceptance check against your follow chance -- the same unit always makes the same decision at the same authority level, so spamming the button doesn't reroll. Ordered units show a marker with a progress bar indicating time remaining. Units on orders keep fighting enemies within a leash distance of their assignment, and always defend themselves in melee.
 
-## Combat
+## Army AI
 
-### Basic Combat
+### Faction planner
 
-- **Melee** -- Attack an adjacent enemy. Damage = max(1, ATK - target DEF + modifiers). Plays Warrior Attack, Lancer directional Attack, or Pawn tool Interact animation.
-- **Ranged** -- Attack an enemy within range and line of sight. Arrow projectile sprite travels from archer to target. Accuracy decreases with distance. Blocked by forest and units.
-- **Charge** -- Lancer-specific. Move in a straight line and attack the first enemy hit. Bonus damage based on distance traveled. Uses directional attack sprite matching charge direction.
-- **Heal** -- Monk-specific. Restore HP to an adjacent ally. Plays Heal animation on the Monk and Heal_Effect overlay on the target.
+Each faction periodically scores all seven zones with a 3-tier objective system and assigns its units across the top targets (scoring is staggered between factions to spread the cost across frames). A faction holding zero zones focuses its entire force on a single zone -- a desperation push -- rather than spreading thin.
 
-### Combat Visual Feedback
+### Unit behavior
 
-Using available particle effects:
+- **Flow fields** -- each faction maintains flow fields toward its objectives; units steer by blending flow direction with local separation to avoid clumping.
+- **A\* pathfinding** -- used for individual paths with a per-tick budget and repath cooldowns so hundreds of units stay cheap.
+- **Combat** -- units engage any visible enemy: melee units close in, archers kite with hysteresis, lancers strike and back off, monks flee and heal. Target commitment timers prevent flip-flopping between targets.
+- **Spatial hash** -- a per-tick spatial grid provides amortised O(1) neighbour queries for separation and enemy searches.
 
-| Event | Visual | Asset |
-|-------|--------|-------|
-| Melee hit | Small explosion at target | `Explosion_01.png` (8f) |
-| Ranged hit | Small explosion at target | `Explosion_01.png` (8f) |
-| Charge impact | Large explosion at target | `Explosion_02.png` (10f) |
-| Unit death | Large explosion, unit fades | `Explosion_02.png` (10f) |
-| Movement | Dust puff at feet | `Dust_01.png` (8f) or `Dust_02.png` (10f) |
-| Cavalry gallop | Dust trail | `Dust_02.png` (10f) |
-| Building on fire | Flame overlay | `Fire_01/02/03.png` |
-| Water crossing | Splash | `Water Splash.png` (9f) |
-| Heal | Heal effect overlay on target | `Heal_Effect.png` (11f) |
+### Reinforcements
 
-### Modifiers
+Bases produce units in waves (roughly every 20 seconds). Newly produced units rally at the base until the wave is complete, then march together. A faction holding zero zones produces double-size waves to fuel its comeback.
 
-| Modifier | Effect |
-|----------|--------|
-| Flanking | +2 ATK when attacking from the side |
-| Rear attack | +3 ATK when attacking from behind |
-| High ground | +1 ATK for melee, +1 range for ranged |
-| Fortified | +2 DEF when in tower/castle |
-| In cover | +1 DEF when in village building or forest |
-| Surrounded | -1 DEF per adjacent enemy beyond the first |
-| Charge momentum | +1 ATK per cell of charge distance (Lancer) |
-| Spear brace | Pawn with Brace: bonus damage to charging Lancers |
+## Ambient Life
 
-### Morale
+Villages have wandering **pawns** that walk to trees, chop them down, and idle -- and **sheep** grazing in rear pastures. Purely atmospheric.
 
-Morale is tracked per unit as a hidden value (0-100). It is affected by:
+## Controls
 
-- **Positive:** Nearby allied units, winning local engagements, following orders, commander nearby, holding fortifications, Monk nearby
-- **Negative:** Taking damage, nearby allies dying, outnumbered locally, squad leader killed, army losing overall
+Touch is the primary input; keyboard/mouse and gamepad are supported.
 
-When morale hits 0, the unit **breaks** and begins fleeing toward the nearest map edge (uses Run animation). Broken units can be **rallied** by adjacent Monks (morale restored to 30, plays Heal animation). If a critical mass of an army breaks, a **rout** occurs and the battle ends.
-
-### Death
-
-When a unit reaches 0 HP, it dies: an explosion effect plays at its position, the sprite fades out, and the unit is removed from the battlefield. If the player dies, the run ends immediately. A brief death screen shows the player's avatar (from the 25 available portraits), then transitions to the run summary.
-
-## Procedural Generation Details
-
-### What Changes Each Run
-
-| Element | Variation |
-|---------|-----------|
-| Faction pairing | 10 possible pairings from 5 factions |
-| Terrain layout | Different maps with varied terrain distribution |
-| Building placement | Different castles, towers, villages, monastery positions |
-| Army A composition | Different size, unit mix, quality |
-| Army B composition | Different size, unit mix, quality |
-| Commander A | Random portrait + personality |
-| Commander B | Random portrait + personality |
-| Objectives | Different key buildings/positions on the map |
-| Player's army | Randomly assigned to one faction |
-| Player's squad and role | Different position in the formation, different unit type |
-
-### Generation Constraints
-
-- Both armies should be roughly comparable in total power (within a range, not identical)
-- Terrain should not overwhelmingly favor one side's deployment zone
-- At least one clear path between the two armies (no impassable walls of water/rocks)
-- Each side gets a castle in their deployment zone
-- Objectives (towers, monasteries, village clusters) placed in contested areas
-- Tilemap color variant selected per run for visual variety (5 options)
-
-## Progression
-
-### Within a Run
-
-There is no leveling or stat growth within a single battle. What you start with is what you have. The only progression within a run is positional: advancing through the battlefield, completing objectives, and surviving. Monks can heal, but HP cannot exceed starting maximum.
-
-### Between Runs (Meta-Progression) -- TBD
-
-The meta-progression system is to be designed. Possible directions include:
-
-- **Unlockable roles** -- Start as Archer, Lancer, Pawn, or Monk instead of Warrior
-- **Battle scenarios** -- Unlock specific battle setups (siege, river crossing, ambush)
-- **Starting conditions** -- Choose faction, deployment position
-- **Cosmetic unlocks** -- Faction preference
-
-The design should preserve the roguelike principle that player skill matters more than accumulated power. No persistent stat upgrades.
+| Input | Touch | Keyboard / Mouse | Gamepad |
+|-------|-------|------------------|---------|
+| Move | Virtual joystick | WASD / arrows | Left stick |
+| Attack | Attack button | Space | Face button |
+| Orders | Follow / Charge / Defend buttons | J / L / K | Buttons |
+| Zoom | Pinch | Mouse wheel | -- |
+| Camera | Follows player | Follows player | Follows player |
 
 ## User Interface
 
-The asset pack provides a complete medieval-themed UI kit.
+- **HUD** -- player health, authority rank, zone ownership summary.
+- **Minimap** -- top-right corner (240px), showing terrain, zones, and unit positions in faction colors.
+- **Order markers** -- floating marker with progress bar above units currently under your command.
+- **Floating text** -- authority gains/losses pop above the player.
+- **Menus** -- main menu, death, victory, and defeat screens built from the Tiny Swords UI kit.
+- Mobile-first: fullscreen toggle, DPR-aware canvas scaling, touch targets sized for thumbs.
 
-### In-Battle HUD
+## Visual Style
 
-- **Health bar** -- `BigBar_Base.png` + `BigBar_Fill.png` (stretchable fill, tinted by HP percentage)
-- **Morale indicator** -- `SmallBar_Base.png` + `SmallBar_Fill.png` (steady=green, shaken=yellow, breaking=red)
-- **Current orders** -- Displayed on a `SmallRibbons.png` banner element
-- **Action buttons** -- `SmallBlueSquareButton` (regular/pressed states) with `Icon` overlays for move, attack, wait, ability
-- **Minimap** -- Custom rendered overview using faction colors
-- **Turn counter** -- Number displayed on `BigRibbons.png`
-- **Commander portrait** -- One of 25 `Avatars` showing the current commander issuing orders
-
-### Battle Overview (Toggle)
-
-A zoomed-out view of the entire battlefield showing:
-
-- Both armies' positions in faction colors
-- Front line indicator
-- Division-level morale bars (`SmallBar`)
-- Objective control status (building faction color)
-- Commander order indicators
-
-### Menus
-
-Built using the asset pack UI components:
-
-- **Main menu** -- `Banner.png` as title, `BigBlueButton` for New Battle, `BigRedButton` for Settings. `WoodTable.png` as background panel.
-- **Pause menu** -- `RegularPaper.png` as dialog background. Resume, Settings, Abandon Run buttons.
-- **Settings** -- `SpecialPaper.png` background. Audio volume, controls, display options.
-- **Run summary** -- `Banner.png` header with `Swords.png` decoration. Stats on `RegularPaper.png`. Player avatar displayed.
-
-### Cursors
-
-4 cursor variants available (`Cursor_01` through `Cursor_04`). Use different cursors for:
-- Default / navigation
-- Target selection (attack)
-- Move destination
-- Invalid action
-
-### Responsive Layout
-
-- **Mobile:** Canvas fills the viewport; UI elements scale to screen size
-- **Desktop:** Fixed canvas size with optional fullscreen toggle
-- Action buttons must meet minimum touch target size (44x44px per Apple HIG)
-- HUD repositioned for mobile: bottom-of-screen action bar instead of top-left overlay
-- End Turn button always visible on screen (replaces space bar as primary interaction)
-
-## Input & Controls
-
-Touch is the **primary input method**; mouse and keyboard are supported as secondary/fallback for desktop users.
-
-### Touch Controls (Primary)
-
-| Input | Action | Details |
-|-------|--------|---------|
-| Short swipe (30-60px) | Move 1 tile or attack | 8-directional; attacks adjacent enemy if one exists, otherwise moves 1 tile |
-| Long swipe (>60px) | Auto-move pathfinding | Swipe vector applied from player position to compute A* destination; game auto-plays turns along the path |
-| Pinch (two fingers) | Zoom camera | |
-| Two-finger drag | Pan camera | |
-
-### Swipe-Anywhere Movement & Attack
-
-**Key design principle:** The player swipes from **anywhere** on screen, and the swipe direction/distance determines the action. The swipe vector is applied from the player's position, not from the finger's position -- this prevents the finger from hiding the destination area.
-
-#### Short Swipe (Single Step)
-
-1. `touchstart` records the starting point (single-touch only; two-finger gestures are reserved for camera).
-2. During the gesture, a live preview path is shown (white overlay tiles).
-3. `touchend` computes the delta vector.
-4. If the distance is 30-60px, the direction is classified into 8 possibilities: **N, NE, E, SE, S, SW, W, NW** (45-degree sectors).
-5. **Attack check:** If an enemy occupies the adjacent tile in that direction, the player attacks it.
-6. **Movement:** Otherwise, the player moves 1 tile in that direction (if passable and unoccupied).
-7. The turn auto-advances (AI acts, turn counter increments).
-
-#### Long Swipe (Auto-Move with Pathfinding)
-
-1. If the swipe distance exceeds 60px, the swipe delta is converted to a world-space offset from the player's grid position.
-2. An A* path is computed from the player to the destination tile (up to 30 tiles, 4-directional, respects terrain passability).
-3. The path is stored as an auto-move queue. Every ~8 frames, one step is executed (player moves, AI acts, turn advances).
-4. The remaining path is shown as a blue tile overlay during execution.
-5. **Enemy encounter:** If an enemy blocks the next tile mid-path, auto-move stops. If the enemy is the final destination, the player attacks it.
-6. **Cancellation:** Any manual input (arrow key, short swipe, click) cancels the auto-move immediately.
-7. The camera smoothly follows the player during auto-move (lerp-based tracking).
-
-### Keyboard & Mouse Controls (Secondary)
-
-| Input | Action |
-|-------|--------|
-| Arrow keys | Move 1 tile / attack adjacent enemy |
-| WASD | Pan camera |
-| Mouse wheel | Zoom camera |
-| Click tile | Move 1 tile toward clicked tile / attack enemy on tile |
-
-### Visual Style
-
-Top-down chibi pixel art from the Tiny Swords pack. The style is colorful, readable, and charming rather than gritty. Unit identification is clear at a glance thanks to distinct silhouettes per type and strong faction color coding.
-
-**Draw order** (bottom to top):
-1. Water background tiles
-2. Ground tiles (grass, elevation)
-3. Water foam animation
-4. Decorations (rocks, bushes, stumps)
-5. Building bases
-6. Units (Y-sorted: lower units drawn on top)
-7. Trees and building tops (units walk behind these)
-8. Particle effects (dust, explosions, fire)
-9. Projectiles (arrows)
-10. UI overlay (HUD, bars, buttons)
-
-## Audio
-
-### Sound Effects
-
-- Sword clashes and weapon impacts (Warrior attacks)
-- Arrow release and impact (Archer shoot)
-- Lance thrust (Lancer charge)
-- Footsteps / movement
-- Horse gallop (Lancer movement)
-- Healing chime (Monk heal)
-- Horns and drums (commander orders changing)
-- Ambient crowd noise (distant battle sounds)
-- Explosion / impact sounds (matching particle FX)
-- Death sounds
-- Morale break (panicked shouts)
-- Fire crackling (burning buildings)
-
-### Music
-
-- **Main menu** -- Somber, anticipatory medieval theme
-- **Battle** -- Dynamic intensity based on proximity to combat. Quiet when in the rear, intense at the front line.
-- **Victory/defeat** -- Distinct musical stings for battle outcome
-- **Death** -- Brief, impactful musical moment
+Top-down chibi pixel art from the Tiny Swords pack -- colorful, readable, charming rather than gritty. Strong faction color coding (Blue vs Red). Draw order: water, ground, foam, decorations, building bases, Y-sorted units, trees/building tops, particles, projectiles, UI.
 
 ## Technical Architecture
 
-### Stack
+### Workspace layout
 
-- **Language:** Rust
-- **Compilation:** WebAssembly (wasm-pack)
-- **Rendering:** HTML Canvas 2D (wasm-bindgen)
-- **Offline:** PWA with service worker
-- **Deployment:** GitHub Pages via GitHub Actions
-- **Touch input:** web-sys TouchEvent, TouchList APIs
-- **Mobile scaling:** `<meta name="viewport">` tag for proper mobile rendering
-- **Assets:** Tiny Swords (Free Pack) by Pixel Frog
+| Crate | Responsibility |
+|-------|---------------|
+| `battlefield-core` | All game logic -- simulation, AI, mapgen, zones, input abstraction. Headless, fully testable, no graphics dependencies. |
+| `battlefield-assets` | Asset manifest and loading support. |
+| `battlefield-sdl` + `battlefield-native` | SDL2 renderer and desktop/ARM entry point. |
+| `battlefield-emscripten` | SDL web build (WebGL via Emscripten). |
+| `battlefield-wgpu` + `battlefield-wgpu-native` | wgpu/winit renderer -- native and web (wasm-bindgen). **This is the deployed web target.** |
 
-### Sprite Sheet System
-
-All unit animations are horizontal strip sprite sheets. The rendering system:
-
-1. Loads PNG sprite sheets as `HtmlImageElement` via async fetch, cached by URL
-2. Extracts frames by index: `source_rect = (frame_index * frame_width, 0, frame_width, frame_height)`
-3. Tracks animation state per unit (current animation, current frame, frame timer)
-4. Handles horizontal flipping for left-facing units (canvas scale -1 + translate)
-5. Handles Lancer's larger frame size (320x320 vs 192x192 for other units)
-6. Renders particle effects as overlay animations at world positions
-7. Units Y-sorted for correct visual layering
-
-### Architecture
-
-The codebase is organized into focused Rust modules:
+### Core modules
 
 | Module | Responsibility |
 |--------|---------------|
-| `grid.rs` | Tile grid (64x64), terrain types, passability, A* pathfinding |
-| `autotile.rs` | 4-bit cardinal bitmask auto-tiling for flat/elevated ground and cliffs |
-| `game.rs` | Game state (units, grid, camera, particles), player actions, auto-turn, auto-move queue |
-| `game_loop.rs` | Main loop: input processing, rendering, texture loading, HUD updates |
-| `input.rs` | Keyboard, mouse, and touch input (swipe detection, pinch-zoom, two-finger pan) |
-| `unit.rs` | Unit types, stats, factions, animation state |
-| `combat.rs` | Melee and ranged damage calculation |
-| `camera.rs` | Camera with pan, zoom, viewport, screen-to-world conversion |
-| `mapgen/` | Procedural terrain generation (seeded, deterministic) |
-| `renderer.rs` | Canvas 2D drawing helpers, texture management |
-| `sprite.rs` | Sprite sheet frame extraction |
-| `particle.rs` | Particle effects (dust, explosions) and arrow projectiles |
-| `lib.rs` | WASM entry point, canvas/DPR setup, game initialization |
+| `game/` | Tick loop, faction AI, orders, authority, combat, FOV, player control, setup |
+| `mapgen/` | Seeded BSP + simplex terrain generation, 7-zone layout |
+| `zone.rs` | Capture zones, adjacency, scoring, victory timer |
+| `flowfield.rs` | Per-faction flow fields |
+| `grid.rs` | Tile grid, passability, A* pathfinding |
+| `autotile.rs` | 4-bit cardinal bitmask auto-tiling |
+| `unit.rs` / `combat.rs` | Unit types, stats, damage |
+| `building.rs` / `pawn.rs` / `sheep.rs` | Bases, production, ambient life |
+| `touch_input.rs` / `player_input.rs` | Platform-agnostic input primitives |
+| `camera.rs` / `particle.rs` / `animation.rs` / `rendering/` | Presentation support shared by both renderers |
 
-### Performance Targets
+### Performance
 
-- 60 FPS rendering on mid-range hardware
-- Turn resolution under 100ms (including all AI actions)
-- Initial load under 5MB (WASM + assets)
-- Offline-capable after first load
+- Real-time simulation with hundreds of units at 60 FPS on mid-range mobile hardware.
+- Per-tick A* budget, repath cooldowns, staggered AI scheduling, spatial hashing, throttled FOV.
+- Criterion benchmarks (`game_tick`) and a headless frame benchmark binary track regressions.
 
-### Asset Loading
+### Delivery
 
-The Tiny Swords pack totals ~410 PNG files. Strategy:
-- Bundle sprite sheets into texture atlases at build time to reduce draw calls
-- Load faction assets on demand (only load the 2 factions used in current battle)
-- Cache in service worker for offline play
+- PWA with a service worker (cache-busted by wasm hash) for offline play.
+- GitHub Actions: CI (fmt, clippy, tests, web builds) and automated GitHub Pages deployment of the wgpu web build.
+
+## Future Directions
+
+Ideas from earlier designs and open threads, not currently implemented:
+
+- **Sound and music** -- combat SFX, ambient battle noise, dynamic intensity music.
+- **Morale** -- units breaking and fleeing, rallying, routs as an alternate battle end.
+- **Meta-progression** -- unlockable starting roles (Archer, Lancer, Monk), scenarios, or starting conditions. Should preserve the principle that skill matters more than accumulated power.
+- **Run summary** -- post-battle stats screen (kills, zones captured, peak authority).
+- **More factions** -- the asset pack provides 5 faction colors; battles currently use Blue vs Red.
+- **Commander personalities** -- varied strategic profiles for the enemy faction planner.
+- **Battle overview** -- a zoomed-out tactical view beyond the minimap.
