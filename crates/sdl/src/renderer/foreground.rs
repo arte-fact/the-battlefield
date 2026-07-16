@@ -720,7 +720,9 @@ pub(super) fn draw_unit_overlays(
                 OrderKind::Charge { .. } => Color::RGBA(255, 200, 60, 230),
                 OrderKind::Defend { .. } => Color::RGBA(140, 220, 140, 230),
             };
-            assets.text.draw_text_centered(canvas, tc, label, sx, lbl_y, lbl_size, lbl_color);
+            assets
+                .text
+                .draw_text_centered(canvas, tc, label, sx, lbl_y, lbl_size, lbl_color);
         }
 
         // Unit marker (player = green)

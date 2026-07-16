@@ -116,7 +116,7 @@ impl Game {
                 continue;
             }
             let dist = u.distance_to_pos(x, y);
-            if dist <= hit_radius && best.map_or(true, |b| dist < b.1) {
+            if dist <= hit_radius && best.is_none_or(|b| dist < b.1) {
                 best = Some((i, dist));
             }
         }

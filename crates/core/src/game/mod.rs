@@ -327,7 +327,7 @@ impl Game {
         // Throttle FOV: recompute every 3rd frame (units don't move fast enough
         // for per-frame updates to matter visually, saves ~7k ops on other frames).
         self.fov_frame_counter = self.fov_frame_counter.wrapping_add(1);
-        if self.fov_frame_counter % 3 == 0 {
+        if self.fov_frame_counter.is_multiple_of(3) {
             self.compute_fov();
         }
     }

@@ -112,10 +112,8 @@ impl Game {
                     defender_id,
                     killed: false,
                     ..
-                } => {
-                    if *attacker_id == player_id {
-                        deltas.push((self.config.rep_hit, *defender_id));
-                    }
+                } if *attacker_id == player_id => {
+                    deltas.push((self.config.rep_hit, *defender_id));
                 }
                 _ => {}
             }

@@ -170,10 +170,11 @@ impl Game {
                 continue;
             }
             let dist = u.distance_to_pos(ax, ay);
-            if dist <= vision_range && self.has_line_of_sight(ax, ay, u.x, u.y) {
-                if best.map_or(true, |b| dist < b.3) {
-                    best = Some((u.x, u.y, u.id, dist));
-                }
+            if dist <= vision_range
+                && self.has_line_of_sight(ax, ay, u.x, u.y)
+                && best.is_none_or(|b| dist < b.3)
+            {
+                best = Some((u.x, u.y, u.id, dist));
             }
         }
 
@@ -249,7 +250,7 @@ impl Game {
             let dist = u.distance_to_pos(x, y);
             if dist <= range
                 && self.has_line_of_sight(x, y, u.x, u.y)
-                && best.map_or(true, |b| dist < b.2)
+                && best.is_none_or(|b| dist < b.2)
             {
                 best = Some((u.x, u.y, dist));
             }

@@ -963,15 +963,20 @@ fn draw_unit_overlays(
             };
             // Shadow
             assets.text.draw_text_centered(
-                sprites, gpu, label,
-                u.x + 1.0, lbl_y + 1.0, lbl_size,
-                0, 0, 0, 200,
+                sprites,
+                gpu,
+                label,
+                u.x + 1.0,
+                lbl_y + 1.0,
+                lbl_size,
+                0,
+                0,
+                0,
+                200,
             );
-            assets.text.draw_text_centered(
-                sprites, gpu, label,
-                u.x, lbl_y, lbl_size,
-                lr, lg, lb, 230,
-            );
+            assets
+                .text
+                .draw_text_centered(sprites, gpu, label, u.x, lbl_y, lbl_size, lr, lg, lb, 230);
         }
 
         // Order acknowledgement "!" (shadowed text, no ribbon)
