@@ -79,6 +79,8 @@ Each faction owns a base in its corner of the map, laid out by BSP partitioning 
 
 Seven named capture zones are arranged in a diamond layout across the battlefield, linked by a symmetric adjacency graph that the AI uses for planning. Each zone tracks the units inside it and moves a capture progress value between fully Red (-1) and fully Blue (+1).
 
+**Majority capture:** progress moves at the rate of the *strength difference* between the factions inside (√|blue − red|). Equal forces freeze the zone; a minority garrison slows an assault but cannot hold forever — overwhelming force completes the capture even with defenders still alive. Attacking a defended point is a readable numbers race, not a binary stall.
+
 Zone states: **Neutral → Contested → Capturing(faction) → Controlled(faction)**.
 
 **Victory:** a faction that controls all seven zones simultaneously starts a 60-second victory timer. If it holds them all for the full duration, it wins by domination. Losing any zone resets the timer. **Sudden death:** once both manpower pools are exhausted, a strict zone majority held for the same duration wins instead.

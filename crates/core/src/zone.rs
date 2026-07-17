@@ -159,20 +159,23 @@ impl ZoneManager {
         for zone in &mut self.zones {
             let (blue, red) = (zone.blue_count, zone.red_count);
 
-            if blue > 0 && red > 0 {
-                zone.state = ZoneState::Contested;
-                continue;
-            }
-
             if blue == 0 && red == 0 {
                 // No units present — state persists, no progress change
                 continue;
             }
 
-            let (count, direction) = if blue > 0 {
-                (blue, 1.0_f32)
+            // Majority capture: progress moves at the strength-difference
+            // rate. Equal contested forces freeze; a minority garrison only
+            // slows an assault, it cannot hold indefinitely.
+            let diff = blue as i32 - red as i32;
+            if diff == 0 {
+                zone.state = ZoneState::Contested;
+                continue;
+            }
+            let (count, direction) = if diff > 0 {
+                (diff as u32, 1.0_f32)
             } else {
-                (red, -1.0_f32)
+                (diff.unsigned_abs(), -1.0_f32)
             };
 
             let rate = ((count as f32).sqrt() * rate_per_unit).min(max_rate);
@@ -182,6 +185,8 @@ impl ZoneManager {
                 zone.state = ZoneState::Controlled(Faction::Blue);
             } else if zone.progress <= -1.0 {
                 zone.state = ZoneState::Controlled(Faction::Red);
+            } else if blue > 0 && red > 0 {
+                zone.state = ZoneState::Contested;
             } else {
                 let faction = if direction > 0.0 {
                     Faction::Blue
@@ -501,14 +506,57 @@ mod tests {
     }
 
     #[test]
-    fn contested_zone_freezes_progress() {
+    fn equal_contest_freezes_progress() {
         let mut mgr = test_zones();
         mgr.zones[1].progress = 0.5;
         mgr.zones[1].blue_count = 3;
-        mgr.zones[1].red_count = 1;
+        mgr.zones[1].red_count = 3;
         mgr.tick_capture(1.0, 8.0, 3.0);
         assert!((mgr.zones[1].progress - 0.5).abs() < f32::EPSILON);
         assert_eq!(mgr.zones[1].state, ZoneState::Contested);
+    }
+
+    #[test]
+    fn majority_progresses_contested_capture() {
+        let mut mgr = test_zones();
+        mgr.zones[1].progress = 0.0;
+        mgr.zones[1].blue_count = 5;
+        mgr.zones[1].red_count = 2;
+        mgr.tick_capture(1.0, 8.0, 3.0);
+        assert!(
+            mgr.zones[1].progress > 0.0,
+            "attacker majority must advance capture"
+        );
+        assert_eq!(mgr.zones[1].state, ZoneState::Contested);
+
+        // Same margin, same rate: 5v2 progresses like 3v0
+        let mut solo = test_zones();
+        solo.zones[1].blue_count = 3;
+        solo.tick_capture(1.0, 8.0, 3.0);
+        assert!((mgr.zones[1].progress - solo.zones[1].progress).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn overwhelm_completes_capture_despite_defenders() {
+        let mut mgr = test_zones();
+        mgr.zones[1].progress = 0.95;
+        mgr.zones[1].blue_count = 8;
+        mgr.zones[1].red_count = 2;
+        mgr.tick_capture(1.0, 8.0, 3.0);
+        assert_eq!(mgr.zones[1].state, ZoneState::Controlled(Faction::Blue));
+    }
+
+    #[test]
+    fn minority_defenders_cannot_hold_forever() {
+        let mut mgr = test_zones();
+        mgr.zones[1].progress = -1.0;
+        mgr.zones[1].state = ZoneState::Controlled(Faction::Red);
+        mgr.zones[1].blue_count = 6;
+        mgr.zones[1].red_count = 1;
+        for _ in 0..600 {
+            mgr.tick_capture(0.1, 8.0, 3.0);
+        }
+        assert_eq!(mgr.zones[1].state, ZoneState::Controlled(Faction::Blue));
     }
 
     #[test]
