@@ -808,6 +808,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn all_zones_reachable_from_bases() {
+        for seed in [1, 5, 7, 21, 42, 99, 777, 1234, 31337] {
+            let (grid, layout) = generate_battlefield(seed);
+
+            // Flood fill from the blue base with unit collision clearance:
+            // tile-wide gaps that block a UNIT_RADIUS circle don't count.
+            let clear = |x: u32, y: u32| {
+                let (wx, wy) = crate::grid::grid_to_world(x, y);
+                grid.is_circle_passable(wx, wy, crate::unit::UNIT_RADIUS)
+            };
+            let mut visited = vec![false; (grid.width * grid.height) as usize];
+            let idx = |x: u32, y: u32| (y * grid.width + x) as usize;
+            let mut stack = vec![layout.blue_base];
+            visited[idx(layout.blue_base.0, layout.blue_base.1)] = true;
+            while let Some((x, y)) = stack.pop() {
+                for (dx, dy) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+                    let nx = x as i32 + dx;
+                    let ny = y as i32 + dy;
+                    if grid.in_bounds(nx, ny)
+                        && clear(nx as u32, ny as u32)
+                        && !visited[idx(nx as u32, ny as u32)]
+                    {
+                        visited[idx(nx as u32, ny as u32)] = true;
+                        stack.push((nx as u32, ny as u32));
+                    }
+                }
+            }
+
+            assert!(
+                visited[idx(layout.red_base.0, layout.red_base.1)],
+                "seed {seed}: red base unreachable from blue base"
+            );
+            for (i, &(zx, zy)) in layout.zone_centers.iter().enumerate() {
+                assert!(
+                    visited[idx(zx, zy)],
+                    "seed {seed}: zone {i} at ({zx},{zy}) unreachable from blue base"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn deterministic_generation() {
         let (g1, l1) = generate_battlefield(42);
         let (g2, l2) = generate_battlefield(42);
