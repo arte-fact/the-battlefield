@@ -230,14 +230,17 @@ bench prints composition + zone standing for future probes.
   attack targets one zone at a time and both factions perpetually rank
   other zones higher. Frames also run ~3.2ms vs ~0.3ms (10x) on this seed — needs a
   profiling pass.
-- **Root cause shared by remaining stalls**: a Contested zone makes no
-  capture progress while even one defender lives, so a reinforcement
-  trickle freezes an army indefinitely, and at unit cap assaults never
-  convert. **Design proposal (needs a ruling): majority-based capture** —
-  progress advances proportional to the attacker/defender difference
-  instead of hard-blocking on Contested. Would mechanically break
-  garrison standoffs; changes a core rule, so not implemented
-  unilaterally.
+- **Majority capture shipped** (79cad84) and resolved the
+  garrison-standoff class: all fast seeds end 307–1921s, seed 5 improved
+  from sudden-death grind to decisive annihilation.
+- **Seed 777 is a different bug**: with majority capture it stalls with
+  a byte-identical standing (`BBRRnRR`, pools [0, 284], 35v35) — the
+  armies *never make contact*, so no capture rule can matter. Together
+  with the 10x frame cost (~3.3ms), the likely story is one bug with two
+  symptoms: units assigned to a zone their flow field cannot actually
+  route them to, burning A* fallbacks forever without arriving. Next
+  session: instrument which zone units are assigned to vs where they
+  are, and inspect `FactionFlowState` coverage on this map.
 
 ## Decisions taken
 
