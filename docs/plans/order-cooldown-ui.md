@@ -222,12 +222,22 @@ bench prints composition + zone standing for future probes.
 
 ## Follow-up
 
-- **Seed 777 performance pathology**: healthy battle state but ~3.2ms
-  avg frame vs ~0.3ms on other seeds (10x). Within 60fps budget on
-  desktop but borderline on Pi-class hardware. Likely terrain-driven
-  (map has a zone that stays neutral at 300s — suspect failed-path A*
-  churn or flow-field recompute on awkward topology). Needs its own
-  profiling pass (`BENCH_SEED=777`, criterion `game_tick`).
+- **Seed 777 stall + performance** (investigated 2026-07-17): full 2h
+  probe stalls at `[BBRRnRR]` with Red holding 4 zones and a 284 pool,
+  Blue bled to 0 but alive at cap. Mapgen is exonerated — a
+  clearance-aware reachability test (committed) passes on all probed
+  seeds; the perpetually-neutral zone is *planner behavior*: all-in
+  attack targets one zone at a time and both factions perpetually rank
+  other zones higher. Frames also run ~3.2ms vs ~0.3ms (10x) on this seed — needs a
+  profiling pass.
+- **Root cause shared by remaining stalls**: a Contested zone makes no
+  capture progress while even one defender lives, so a reinforcement
+  trickle freezes an army indefinitely, and at unit cap assaults never
+  convert. **Design proposal (needs a ruling): majority-based capture** —
+  progress advances proportional to the attacker/defender difference
+  instead of hard-blocking on Contested. Would mechanically break
+  garrison standoffs; changes a core rule, so not implemented
+  unilaterally.
 
 ## Decisions taken
 
