@@ -276,6 +276,7 @@ pub fn render_frame(
         vh,
     );
     draw_minimap(&mut hud_bg, &mut hud_prim, game, assets, vw, vh);
+    draw_victory_progress(&mut hud_sprites, &mut hud_prim, game, assets, vw);
     if screen == GameScreen::Playing {
         draw_touch_controls(
             &mut hud_prim,
@@ -738,6 +739,7 @@ fn draw_zones(
     assets: &mut Assets,
     _cam: &battlefield_core::camera::Camera,
 ) {
+    use battlefield_core::zone::ZoneState;
     let ts = TILE_SIZE;
 
     for zone in &game.zone_manager.zones {
@@ -745,33 +747,41 @@ fn draw_zones(
 
         // Zone circles are rendered by the effects shader (under units).
 
-        // Zone name label (above circle) — shadowed text, no ribbon
-        let name_font = 21.0;
-        let (_tw, th) = assets.text.measure_text(zone.name, name_font);
-        let label_h = th as f32 + 4.0;
-        let label_cy = zone.center_wy - r - label_h * 0.5 - 8.0;
-        let off = 1.5_f32;
+        // Zone name plate (SmallRibbons) above the circle
+        let name_font = 24.0;
+        let (tw, _th) = assets.text.measure_text(zone.name, name_font);
+        let ribbon_h = 54.0;
+        let bar_w = 160.0;
+        let bar_h = 46.0;
+        let total_h = ribbon_h + 2.0 + bar_h;
+        let top_y = zone.center_wy - r - total_h - 2.0;
+        let name_cy = top_y + ribbon_h * 0.5;
 
-        // Shadow
-        assets.text.draw_text_centered(
-            sprites,
-            gpu,
-            zone.name,
-            zone.center_wx + off,
-            label_cy + off,
-            name_font,
-            0,
-            0,
-            0,
-            180,
-        );
-        // Foreground
+        let ribbon_row = match zone.state {
+            ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => 1,
+            ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => 3,
+            _ => 9,
+        };
+        if let Some(tex_id) = assets.ui_small_ribbons {
+            let tex = &assets.textures[tex_id];
+            let tex_size = (tex.width, tex.height);
+            let quads = render_util::small_ribbon_quads(
+                ribbon_row,
+                zone.center_wx as f64,
+                name_cy as f64,
+                tw as f64 + 4.0,
+                1.0,
+            );
+            for q in &quads {
+                draw_helpers::blit(sprites, tex_id, tex_size, q);
+            }
+        }
         assets.text.draw_text_centered(
             sprites,
             gpu,
             zone.name,
             zone.center_wx,
-            label_cy,
+            name_cy,
             name_font,
             255,
             255,
@@ -779,40 +789,52 @@ fn draw_zones(
             220,
         );
 
-        // Capture progress bar below name
-        let bar_w = 80.0;
-        let bar_h = 6.0;
+        // Capture progress bar (3-slice frame + signed center-split fill)
         let bar_x = zone.center_wx - bar_w * 0.5;
-        let bar_y = label_cy + label_h * 0.5 + 2.0;
-
-        // Bar background
-        prim.fill_rect(bar_x, bar_y, bar_w, bar_h, [0.0, 0.0, 0.0, 0.4]);
-
-        // Progress fill
-        let progress = zone.progress as f64;
-        if progress.abs() > 0.01 {
-            let (cr, cg, cb) = if progress > 0.0 {
-                (0.24_f32, 0.47, 1.0) // Blue
-            } else {
-                (1.0, 0.24, 0.24) // Red
-            };
-            let fill_w = bar_w * 0.5 * progress.abs() as f32;
-            let fill_x = if progress > 0.0 {
-                bar_x + bar_w * 0.5
-            } else {
-                bar_x + bar_w * 0.5 - fill_w
-            };
-            prim.fill_rect(fill_x, bar_y, fill_w, bar_h, [cr, cg, cb, 0.78]);
+        let bar_y = top_y + ribbon_h + 2.0;
+        if let Some((tex_id, bw, bh)) = assets.ui_bar_base {
+            draw_helpers::draw_bar_3slice(
+                sprites, tex_id, bw, bh, bar_x, bar_y, bar_w, bar_h, 24.0,
+            );
+        } else {
+            prim.fill_rect(bar_x, bar_y, bar_w, bar_h, [0.0, 0.0, 0.0, 0.4]);
         }
 
-        // Center line
-        prim.fill_rect(
-            zone.center_wx - 0.5,
-            bar_y,
-            1.0,
-            bar_h,
-            [1.0, 1.0, 1.0, 0.3],
-        );
+        let progress = zone.progress;
+        if progress.abs() > 0.01 {
+            let inset_x = render_util::BAR_FILL_INSET_X as f32;
+            let inset_y = render_util::BAR_FILL_INSET_Y as f32;
+            let inner_w = bar_w - inset_x * 2.0;
+            let fill_h = (bar_h - inset_y * 2.0).max(1.0);
+            let fill_w = (inner_w * 0.5 * progress.abs()).max(0.0);
+            let fill_x = if progress > 0.0 {
+                bar_x + inset_x + inner_w * 0.5
+            } else {
+                bar_x + inset_x + inner_w * 0.5 - fill_w
+            };
+            let tint = if progress > 0.0 {
+                [60.0 / 255.0, 120.0 / 255.0, 1.0, 1.0]
+            } else {
+                [1.0, 60.0 / 255.0, 60.0 / 255.0, 1.0]
+            };
+            if let Some(fill_id) = assets.ui_bar_fill {
+                let tex = &assets.textures[fill_id];
+                let (sx, sy, sw, sh) = render_util::BAR_FILL_SRC;
+                let q = render_util::SrcDst {
+                    sx,
+                    sy,
+                    sw,
+                    sh,
+                    dx: fill_x as f64,
+                    dy: (bar_y + inset_y) as f64,
+                    dw: fill_w as f64,
+                    dh: fill_h as f64,
+                };
+                draw_helpers::blit_tinted(sprites, fill_id, (tex.width, tex.height), &q, tint);
+            } else {
+                prim.fill_rect(fill_x, bar_y + inset_y, fill_w, fill_h, tint);
+            }
+        }
     }
 }
 
@@ -982,31 +1004,40 @@ fn draw_unit_overlays(
                 .draw_text_centered(sprites, gpu, label, u.x, lbl_y, lbl_size, lr, lg, lb, 230);
         }
 
-        // Order acknowledgement "!" (shadowed text, no ribbon)
+        // Order acknowledgement: SmallRibbons plate + order label, fading
         if u.order_flash > 0.0 && u.order.is_some() {
-            let alpha = (u.order_flash / game.config.order_flash_duration).min(1.0);
-            let font_size = 33.0_f32;
-            let cx = u.x;
-            let cy = u.y - ts;
-            let a = (alpha * 255.0) as u8;
-            // Shadow
-            let off = 1.5_f32;
-            assets.text.draw_text_centered(
-                sprites,
-                gpu,
-                "!",
-                cx + off,
-                cy + off,
-                font_size,
-                0,
-                0,
-                0,
-                a,
-            );
-            // Foreground (white)
-            assets
-                .text
-                .draw_text_centered(sprites, gpu, "!", cx, cy, font_size, 255, 255, 255, a);
+            if let Some(label) = render_util::order_label(u.order.as_ref()) {
+                let alpha = (u.order_flash / game.config.order_flash_duration).min(1.0);
+                let a = (alpha * 255.0) as u8;
+                let font_size = 24.0_f32;
+                let ribbon_h = 54.0;
+                let label_cy = u.y - ts - ribbon_h * 0.5;
+
+                if let Some(tex_id) = assets.ui_small_ribbons {
+                    let tex = &assets.textures[tex_id];
+                    let tex_size = (tex.width, tex.height);
+                    let (tw, _th) = assets.text.measure_text(label, font_size);
+                    let quads = render_util::small_ribbon_quads(
+                        5,
+                        u.x as f64,
+                        label_cy as f64,
+                        tw as f64 + 4.0,
+                        1.0,
+                    );
+                    for q in &quads {
+                        draw_helpers::blit_tinted(
+                            sprites,
+                            tex_id,
+                            tex_size,
+                            q,
+                            [1.0, 1.0, 1.0, alpha],
+                        );
+                    }
+                }
+                assets.text.draw_text_centered(
+                    sprites, gpu, label, u.x, label_cy, font_size, 255, 215, 0, a,
+                );
+            }
         }
     }
 }
@@ -1216,22 +1247,20 @@ fn draw_hud(
     // Zone control pips at top-center
     let zone_count = game.zone_manager.zones.len();
     if zone_count > 0 {
-        let pip_r = 10.0;
-        let pip_gap = 28.0;
-        let total_w = zone_count as f32 * pip_gap - pip_gap + pip_r * 2.0;
-        // 9-slice SpecialPaper scaled down so borders stay compact
-        let scale = 0.2;
-        let border_h = (44.0 + 43.0) * scale;
-        let border_w = 54.0 * 2.0 * scale;
-        let content_pad = 4.0;
-        let panel_w = total_w + content_pad * 2.0 + border_w;
-        let panel_h = pip_r * 2.0 + content_pad * 2.0 + border_h;
+        let pip_r = 14.0;
+        let pip_gap = 12.0;
+        let pip_d = pip_r * 2.0;
+        let pad = 18.0;
+        let n = zone_count as f32;
+        let total_w = n * pip_d + (n - 1.0) * pip_gap;
+        let panel_w = total_w + pad * 2.0;
+        let panel_h = pip_d + pad * 2.0;
         let panel_x = vw * 0.5 - panel_w * 0.5;
-        let panel_y_pos = 4.0;
+        let panel_y_pos = 10.0;
         let pip_y = panel_y_pos + panel_h * 0.5;
-        let start_x = vw * 0.5 - total_w * 0.5 + pip_r;
+        let start_x = panel_x + pad + pip_r;
         if let Some((tex_id, aw, ah)) = assets.ui_special_paper {
-            draw_helpers::draw_panel_scaled(
+            draw_helpers::draw_panel(
                 bg,
                 tex_id,
                 aw,
@@ -1241,7 +1270,6 @@ fn draw_hud(
                 panel_y_pos,
                 panel_w,
                 panel_h,
-                scale,
             );
         } else {
             prim.fill_rect(
@@ -1254,7 +1282,7 @@ fn draw_hud(
         }
 
         for (i, zone) in game.zone_manager.zones.iter().enumerate() {
-            let cx = start_x + i as f32 * pip_gap;
+            let cx = start_x + i as f32 * (pip_d + pip_gap);
             let progress = zone.progress.abs();
 
             // Background circle
@@ -1293,6 +1321,55 @@ fn draw_hud(
             assets
                 .text
                 .draw_text_centered(sprites, gpu, &label, x, counter_y, 20.0, r, g, b, 255);
+        }
+    }
+}
+
+fn draw_victory_progress(
+    sprites: &mut SpriteBatch,
+    prim: &mut PrimitiveBatch,
+    game: &Game,
+    assets: &mut Assets,
+    vw: f32,
+) {
+    let progress = game
+        .zone_manager
+        .victory_progress(game.config.victory_hold_time);
+    if progress < f32::EPSILON || game.winner.is_some() {
+        return;
+    }
+    let Some(faction) = game.zone_manager.victory_candidate else {
+        return;
+    };
+
+    let bar_w = 300.0;
+    let bar_h = 46.0;
+    let bar_x = vw * 0.5 - bar_w * 0.5;
+    let bar_y = 46.0;
+
+    if let Some((tex_id, bw, bh)) = assets.ui_bar_base {
+        draw_helpers::draw_bar_3slice(sprites, tex_id, bw, bh, bar_x, bar_y, bar_w, bar_h, 24.0);
+    } else {
+        prim.fill_rect(bar_x, bar_y, bar_w, bar_h, [0.0, 0.0, 0.0, 0.5]);
+    }
+
+    let tint = match faction {
+        Faction::Blue => [70.0 / 255.0, 130.0 / 255.0, 230.0 / 255.0, 1.0],
+        Faction::Red => [220.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0, 1.0],
+    };
+    if let Some(q) = render_util::bar_fill_quad(
+        bar_x as f64,
+        bar_y as f64,
+        bar_w as f64,
+        bar_h as f64,
+        progress as f64,
+        1.0,
+    ) {
+        if let Some(fill_id) = assets.ui_bar_fill {
+            let tex = &assets.textures[fill_id];
+            draw_helpers::blit_tinted(sprites, fill_id, (tex.width, tex.height), &q, tint);
+        } else {
+            prim.fill_rect(q.dx as f32, q.dy as f32, q.dw as f32, q.dh as f32, tint);
         }
     }
 }
@@ -1506,92 +1583,115 @@ fn draw_touch_controls(
 
     // Attack button
     let atk = &touch.attack;
-    let atk_alpha = if atk.pressed { 0.6 } else { 0.35 };
-    prim.fill_circle(
-        atk.center_x,
-        atk.center_y,
-        atk.radius + 2.0,
-        [0.0, 0.0, 0.0, atk_alpha * 0.6],
-    );
-    prim.fill_circle(
+    draw_round_button(
+        prim,
+        sprites,
+        gpu,
+        assets,
         atk.center_x,
         atk.center_y,
         atk.radius,
-        [0.86, 0.2, 0.2, atk_alpha],
+        atk.pressed,
+        true,
+        0,
+        "ATK",
+        dpr,
     );
-    prim.stroke_circle(
-        atk.center_x,
-        atk.center_y,
-        atk.radius,
-        1.5,
-        [1.0, 1.0, 1.0, atk_alpha * 0.7],
-    );
-    let btn_font = (atk.radius * 0.75).max(15.0 * dpr);
+
+    let order_btns = [
+        (&touch.charge, OrderRequest::Charge, 2usize),
+        (&touch.defend, OrderRequest::Defend, 1),
+        (&touch.dismiss, OrderRequest::Dismiss, 3),
+    ];
+    for (btn, req, icon) in order_btns {
+        draw_round_button(
+            prim,
+            sprites,
+            gpu,
+            assets,
+            btn.center_x,
+            btn.center_y,
+            btn.radius,
+            btn.pressed,
+            false,
+            icon,
+            req.short_label(),
+            dpr,
+        );
+        if req == OrderRequest::Dismiss && btn.pressed {
+            let frac = touch.dismiss_hold_frac();
+            prim.stroke_circle(
+                btn.center_x,
+                btn.center_y,
+                btn.radius * 1.02,
+                3.0,
+                [1.0, 1.0, 1.0, 0.35 + 0.55 * frac],
+            );
+            prim.fill_circle(
+                btn.center_x,
+                btn.center_y,
+                btn.radius * frac * 0.4,
+                [1.0, 1.0, 1.0, 0.45],
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_round_button(
+    prim: &mut PrimitiveBatch,
+    sprites: &mut SpriteBatch,
+    gpu: &GpuContext,
+    assets: &mut Assets,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    pressed: bool,
+    red: bool,
+    icon: usize,
+    fallback_label: &str,
+    dpr: f32,
+) {
+    let base_id = match (red, pressed) {
+        (true, false) => assets.ui_round_red,
+        (true, true) => assets.ui_round_red_pressed.or(assets.ui_round_red),
+        (false, false) => assets.ui_round_blue,
+        (false, true) => assets.ui_round_blue_pressed.or(assets.ui_round_blue),
+    };
+    let (base_q, icon_q) =
+        render_util::round_button_quads(cx as f64, cy as f64, radius as f64, pressed);
+    if let Some(base_id) = base_id {
+        let tex = &assets.textures[base_id];
+        draw_helpers::blit(sprites, base_id, (tex.width, tex.height), &base_q);
+        if let Some(icon_id) = assets.ui_icons[icon] {
+            let itex = &assets.textures[icon_id];
+            draw_helpers::blit(sprites, icon_id, (itex.width, itex.height), &icon_q);
+        }
+        return;
+    }
+
+    // Fallback: flat circle + label
+    let a = if pressed { 0.6 } else { 0.35 };
+    let rgb = if red {
+        [0.86, 0.2, 0.2]
+    } else {
+        [0.2, 0.35, 0.6]
+    };
+    prim.fill_circle(cx, cy, radius, [rgb[0], rgb[1], rgb[2], a]);
+    prim.stroke_circle(cx, cy, radius, 1.5, [1.0, 1.0, 1.0, a * 0.7]);
+    let btn_font = (radius * 0.75).max(15.0 * dpr);
     assets.text.draw_text_centered(
         sprites,
         gpu,
-        "ATK",
-        atk.center_x,
-        atk.center_y,
+        fallback_label,
+        cx,
+        cy,
         btn_font,
         255,
         255,
         255,
         242,
     );
-
-    // Order buttons
-    let order_btns = [
-        (&touch.charge, OrderRequest::Charge),
-        (&touch.defend, OrderRequest::Defend),
-        (&touch.dismiss, OrderRequest::Dismiss),
-    ];
-    for (btn, req) in order_btns {
-        let (r, g, b) = req.color();
-        let rgb = [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0];
-        let a = if btn.pressed { 0.6 } else { 0.35 };
-        prim.fill_circle(
-            btn.center_x,
-            btn.center_y,
-            btn.radius + 2.0,
-            [0.0, 0.0, 0.0, a * 0.5],
-        );
-        prim.fill_circle(
-            btn.center_x,
-            btn.center_y,
-            btn.radius,
-            [rgb[0], rgb[1], rgb[2], a],
-        );
-        if req == OrderRequest::Dismiss && btn.pressed {
-            let frac = touch.dismiss_hold_frac();
-            prim.fill_circle(
-                btn.center_x,
-                btn.center_y,
-                btn.radius * frac,
-                [1.0, 1.0, 1.0, 0.45],
-            );
-        }
-        prim.stroke_circle(
-            btn.center_x,
-            btn.center_y,
-            btn.radius,
-            1.0,
-            [1.0, 1.0, 1.0, a * 0.6],
-        );
-        let btn_font = (btn.radius * 0.75).max(15.0 * dpr);
-        assets.text.draw_text_centered(
-            sprites,
-            gpu,
-            req.short_label(),
-            btn.center_x,
-            btn.center_y,
-            btn_font,
-            255,
-            255,
-            255,
-            242,
-        );
-    }
 }
 
 fn draw_screen_overlay(

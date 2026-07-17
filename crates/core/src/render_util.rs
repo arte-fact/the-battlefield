@@ -617,3 +617,305 @@ pub fn faction_ribbon_row(faction: Faction) -> u32 {
         Faction::Red => 1,
     }
 }
+
+// ── Shared UI assembly ──────────────────────────────────────────────────
+
+/// BigBar_Fill source rect within the fill texture.
+pub const BAR_FILL_SRC: (f64, f64, f64, f64) = (0.0, 20.0, 64.0, 24.0);
+/// Fill insets from the 3-slice bar frame edges (at scale 1.0).
+pub const BAR_FILL_INSET_X: f64 = 10.0;
+pub const BAR_FILL_INSET_Y: f64 = 12.0;
+
+impl NineSlice {
+    /// `compute` with border sizes scaled by `scale` on the destination side.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_scaled(
+        &self,
+        img_w: f64,
+        img_h: f64,
+        dx: f64,
+        dy: f64,
+        dw: f64,
+        dh: f64,
+        scale: f64,
+    ) -> [SrcDst; 9] {
+        let scaled = NineSlice {
+            left: self.left * scale,
+            top: self.top * scale,
+            right: self.right * scale,
+            bottom: self.bottom * scale,
+        };
+        let mut parts = scaled.compute(img_w, img_h, dx, dy, dw, dh);
+        // Source rects must stay unscaled — recompute them from self
+        let src = self.compute(img_w, img_h, dx, dy, dw, dh);
+        for (p, s) in parts.iter_mut().zip(src.iter()) {
+            p.sx = s.sx;
+            p.sy = s.sy;
+            p.sw = s.sw;
+            p.sh = s.sh;
+        }
+        parts
+    }
+}
+
+/// 3-part BigRibbons banner: left cap, stretched center, right cap.
+pub fn big_ribbon_quads(
+    color_row: u32,
+    dx: f64,
+    dy: f64,
+    dw: f64,
+    dh: f64,
+    cap_w: f64,
+) -> [SrcDst; 3] {
+    let cap = cap_w.min(dw / 2.0);
+    let mid_w = (dw - cap * 2.0).max(0.0);
+    let row_y = color_row as f64 * RIBBON_CELL_H;
+    let (lsx, lsy, lsw, lsh) = RIBBON_LEFT;
+    let (csx, csy, csw, csh) = RIBBON_CENTER;
+    let (rsx, rsy, rsw, rsh) = RIBBON_RIGHT;
+    [
+        SrcDst {
+            sx: lsx,
+            sy: row_y + lsy,
+            sw: lsw,
+            sh: lsh,
+            dx,
+            dy,
+            dw: cap,
+            dh,
+        },
+        SrcDst {
+            sx: csx,
+            sy: row_y + csy,
+            sw: csw,
+            sh: csh,
+            dx: dx + cap,
+            dy,
+            dw: mid_w,
+            dh,
+        },
+        SrcDst {
+            sx: rsx,
+            sy: row_y + rsy,
+            sw: rsw,
+            sh: rsh,
+            dx: dx + cap + mid_w,
+            dy,
+            dw: cap,
+            dh,
+        },
+    ]
+}
+
+/// SmallRibbons name plate centered at (cx, cy); caps at native scale,
+/// center stretched to `center_w`.
+pub fn small_ribbon_quads(
+    color_row: u32,
+    cx: f64,
+    cy: f64,
+    center_w: f64,
+    scale: f64,
+) -> [SrcDst; 3] {
+    let row_y = color_row as f64 * SMALL_RIBBON_CELL_H;
+    let (lsx, lsy, lsw, lsh) = SMALL_RIBBON_LEFT;
+    let (csx, csy, csw, csh) = SMALL_RIBBON_CENTER;
+    let (rsx, rsy, rsw, rsh) = SMALL_RIBBON_RIGHT;
+    let cap_lw = (lsw * scale).ceil();
+    let cap_rw = (rsw * scale).ceil();
+    let h = (lsh * scale).ceil();
+    let cw = center_w.ceil().max(0.0);
+    let total_w = cap_lw + cw + cap_rw;
+    let dx = (cx - total_w / 2.0).floor();
+    let dy = (cy - h / 2.0).floor();
+    [
+        SrcDst {
+            sx: lsx,
+            sy: row_y + lsy,
+            sw: lsw,
+            sh: lsh,
+            dx,
+            dy,
+            dw: cap_lw,
+            dh: h,
+        },
+        SrcDst {
+            sx: csx,
+            sy: row_y + csy,
+            sw: csw,
+            sh: csh,
+            dx: dx + cap_lw,
+            dy,
+            dw: cw,
+            dh: h,
+        },
+        SrcDst {
+            sx: rsx,
+            sy: row_y + rsy,
+            sw: rsw,
+            sh: rsh,
+            dx: dx + cap_lw + cw,
+            dy,
+            dw: cap_rw,
+            dh: h,
+        },
+    ]
+}
+
+/// Tinted fill strip inside a 3-slice bar frame. `ratio` is clamped to 0..1;
+/// returns None when the fill would be invisible.
+pub fn bar_fill_quad(dx: f64, dy: f64, dw: f64, dh: f64, ratio: f64, scale: f64) -> Option<SrcDst> {
+    let ratio = ratio.clamp(0.0, 1.0);
+    let ix = BAR_FILL_INSET_X * scale;
+    let iy = BAR_FILL_INSET_Y * scale;
+    let inner_w = dw - ix * 2.0;
+    let fill_w = inner_w * ratio;
+    if fill_w < 0.5 {
+        return None;
+    }
+    let (sx, sy, sw, sh) = BAR_FILL_SRC;
+    Some(SrcDst {
+        sx,
+        sy,
+        sw,
+        sh,
+        dx: dx + ix,
+        dy: dy + iy,
+        dw: fill_w,
+        dh: (dh - iy * 2.0).max(1.0),
+    })
+}
+
+/// Round asset button (128×128 base, 64×64 icon overlay).
+/// Returns (base, icon) quads; the pressed art is squashed so the icon
+/// shifts down slightly when pressed.
+pub fn round_button_quads(cx: f64, cy: f64, radius: f64, pressed: bool) -> (SrcDst, SrcDst) {
+    let side = radius * 2.0;
+    let base = SrcDst {
+        sx: 0.0,
+        sy: 0.0,
+        sw: 128.0,
+        sh: 128.0,
+        dx: cx - radius,
+        dy: cy - radius,
+        dw: side,
+        dh: side,
+    };
+    let icon_side = radius * 1.1;
+    let icon_dy = if pressed { radius * 0.10 } else { 0.0 };
+    let icon = SrcDst {
+        sx: 0.0,
+        sy: 0.0,
+        sw: 64.0,
+        sh: 64.0,
+        dx: cx - icon_side / 2.0,
+        dy: cy - icon_side / 2.0 + icon_dy,
+        dw: icon_side,
+        dh: icon_side,
+    };
+    (base, icon)
+}
+
+#[cfg(test)]
+mod ui_assembly_tests {
+    use super::*;
+
+    #[test]
+    fn compute_scaled_at_one_matches_compute() {
+        let ns = NINE_SLICE_SPECIAL_PAPER;
+        let a = ns.compute(162.0, 151.0, 10.0, 20.0, 300.0, 200.0);
+        let b = ns.compute_scaled(162.0, 151.0, 10.0, 20.0, 300.0, 200.0, 1.0);
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(format!("{x:?}"), format!("{y:?}"));
+        }
+    }
+
+    #[test]
+    fn compute_scaled_shrinks_borders_not_sources() {
+        let ns = NINE_SLICE_SPECIAL_PAPER;
+        let parts = ns.compute_scaled(162.0, 151.0, 0.0, 0.0, 100.0, 40.0, 0.2);
+        assert_eq!(parts[0].sw, 54.0);
+        assert!((parts[0].dw - (54.0_f64 * 0.2).round()).abs() <= 1.0);
+    }
+
+    #[test]
+    fn small_ribbon_is_centered() {
+        let q = small_ribbon_quads(1, 200.0, 100.0, 40.0, 1.0);
+        let total_w = q[0].dw + q[1].dw + q[2].dw;
+        let left = q[0].dx;
+        assert!((left + total_w / 2.0 - 200.0).abs() <= 1.0);
+        assert_eq!(q[1].dw, 40.0);
+    }
+
+    #[test]
+    fn big_ribbon_spans_destination() {
+        let q = big_ribbon_quads(2, 10.0, 5.0, 300.0, 60.0, 50.0);
+        assert_eq!(q[0].dx, 10.0);
+        assert_eq!(q[2].dx + q[2].dw, 310.0);
+        assert_eq!(q[0].sy, 2.0 * RIBBON_CELL_H + RIBBON_LEFT.1);
+    }
+
+    #[test]
+    fn bar_fill_clamps_and_hides() {
+        assert!(bar_fill_quad(0.0, 0.0, 100.0, 46.0, 0.0, 1.0).is_none());
+        let full = bar_fill_quad(0.0, 0.0, 100.0, 46.0, 2.0, 1.0).unwrap();
+        assert!((full.dw - 80.0).abs() < 0.01);
+        assert_eq!(full.dx, BAR_FILL_INSET_X);
+    }
+
+    #[test]
+    fn round_button_pressed_nudges_icon() {
+        let (base, icon_up) = round_button_quads(100.0, 100.0, 40.0, false);
+        let (_, icon_dn) = round_button_quads(100.0, 100.0, 40.0, true);
+        assert_eq!(base.dw, 80.0);
+        assert!(icon_dn.dy > icon_up.dy);
+        assert_eq!(icon_up.sw, 64.0);
+    }
+}
+
+/// 3-slice bar frame quads for the pre-processed BigBar atlas
+/// (left cap | stretchable center | right cap; caps are `BAR_LEFT.2` px).
+pub fn bar_base_quads(
+    atlas_w: f64,
+    atlas_h: f64,
+    dx: f64,
+    dy: f64,
+    dw: f64,
+    dh: f64,
+    cap_w: f64,
+) -> [SrcDst; 3] {
+    let src_cap = BAR_LEFT.2;
+    let cap = cap_w.min(dw / 2.0);
+    let mid_w = (dw - cap * 2.0).max(0.0);
+    [
+        SrcDst {
+            sx: 0.0,
+            sy: 0.0,
+            sw: src_cap,
+            sh: atlas_h,
+            dx,
+            dy,
+            dw: cap,
+            dh,
+        },
+        SrcDst {
+            sx: src_cap,
+            sy: 0.0,
+            sw: atlas_w - src_cap * 2.0,
+            sh: atlas_h,
+            dx: dx + cap,
+            dy,
+            dw: mid_w,
+            dh,
+        },
+        SrcDst {
+            sx: atlas_w - src_cap,
+            sy: 0.0,
+            sw: src_cap,
+            sh: atlas_h,
+            dx: dx + cap + mid_w,
+            dy,
+            dw: cap,
+            dh,
+        },
+    ]
+}

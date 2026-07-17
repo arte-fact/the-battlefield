@@ -190,7 +190,7 @@ pub fn render_frame(
 
     // 16. Touch controls (during gameplay)
     if screen == GameScreen::Playing {
-        touch::draw_touch_controls(canvas, tc, input_state, &assets.text, touch_dpr);
+        touch::draw_touch_controls(canvas, tc, input_state, assets, touch_dpr);
     }
 
     // 17. Screen overlays (menu, death, result)

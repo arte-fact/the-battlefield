@@ -44,6 +44,12 @@ pub struct Assets<'a> {
     // Ribbons
     pub(super) ui_big_ribbons: Option<Texture<'a>>,
     pub(super) ui_small_ribbons: Option<Texture<'a>>,
+    pub(super) ui_round_blue: Option<Texture<'a>>,
+    pub(super) ui_round_blue_pressed: Option<Texture<'a>>,
+    pub(super) ui_round_red: Option<Texture<'a>>,
+    pub(super) ui_round_red_pressed: Option<Texture<'a>>,
+    /// Icon overlays: [sword, shield, arrow, cross].
+    pub(super) ui_icons: [Option<Texture<'a>>; 4],
     // Swords
     pub(super) _ui_swords: Option<Texture<'a>>,
     // Wood table frame for minimap
@@ -468,6 +474,17 @@ impl<'a> Assets<'a> {
         let ui_big_ribbons = load_png_texture(tc, &format!("{ui_base}/Ribbons/BigRibbons.png"));
         let ui_small_ribbons = load_png_texture(tc, &format!("{ui_base}/Ribbons/SmallRibbons.png"));
 
+        let btns = format!("{ui_base}/Buttons");
+        let ui_round_blue =
+            load_png_texture(tc, &format!("{btns}/SmallBlueRoundButton_Regular.png"));
+        let ui_round_blue_pressed =
+            load_png_texture(tc, &format!("{btns}/SmallBlueRoundButton_Pressed.png"));
+        let ui_round_red = load_png_texture(tc, &format!("{btns}/SmallRedRoundButton_Regular.png"));
+        let ui_round_red_pressed =
+            load_png_texture(tc, &format!("{btns}/SmallRedRoundButton_Pressed.png"));
+        let ui_icons = [5, 6, 8, 9]
+            .map(|num| load_png_texture(tc, &format!("{ui_base}/Icons/Icon_{num:02}.png")));
+
         // Swords
         let ui_swords = load_png_texture(tc, &format!("{ui_base}/Swords/Swords.png"));
 
@@ -533,6 +550,11 @@ impl<'a> Assets<'a> {
             ui_bar_fill,
             ui_big_ribbons,
             ui_small_ribbons,
+            ui_round_blue,
+            ui_round_blue_pressed,
+            ui_round_red,
+            ui_round_red_pressed,
+            ui_icons,
             _ui_swords: ui_swords,
             _ui_wood_table: ui_wood_table,
             sheep_textures,

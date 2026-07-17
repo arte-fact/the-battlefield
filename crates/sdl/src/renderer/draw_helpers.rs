@@ -90,49 +90,18 @@ pub(super) fn draw_bar_3slice(
     canvas: &mut Canvas<Window>,
     tex: &Texture,
     img_w: f64,
-    _img_h: f64,
+    img_h: f64,
     dx: f64,
     dy: f64,
     dw: f64,
     dh: f64,
     cap_w: f64,
 ) {
-    let cap = cap_w.min(dw / 2.0);
-    let sl = cap_w;
-    let sr = cap_w;
-    let sc = img_w - sl - sr;
-
-    let x0 = dx.round();
-    let x1 = (dx + cap).round();
-    let x2 = (dx + dw - cap).round();
-    let x3 = (dx + dw).round();
-    let y0 = dy.round();
-    let y3 = (dy + dh).round();
-
-    // Left cap
-    let _ = canvas.copy(
-        tex,
-        Rect::new(0, 0, sl as u32, dh.ceil() as u32),
-        Rect::new(x0 as i32, y0 as i32, (x1 - x0) as u32, (y3 - y0) as u32),
-    );
-    // Center stretch
-    let mid = x2 - x1;
-    if mid > 0.0 {
-        let _ = canvas.copy(
-            tex,
-            Rect::new(sl as i32, 0, sc.ceil() as u32, dh.ceil() as u32),
-            Rect::new(x1 as i32, y0 as i32, mid as u32, (y3 - y0) as u32),
-        );
+    for q in render_util::bar_base_quads(img_w, img_h, dx, dy, dw, dh, cap_w) {
+        blit(canvas, tex, &q);
     }
-    // Right cap
-    let _ = canvas.copy(
-        tex,
-        Rect::new((sl + sc) as i32, 0, sr as u32, dh.ceil() as u32),
-        Rect::new(x2 as i32, y0 as i32, (x3 - x2) as u32, (y3 - y0) as u32),
-    );
 }
 
-/// Draw a horizontal 3-part ribbon from a ribbon sprite sheet.
 pub(super) fn draw_ribbon(
     canvas: &mut Canvas<Window>,
     tex: &Texture,
@@ -143,64 +112,9 @@ pub(super) fn draw_ribbon(
     dh: f64,
     cap_w: f64,
 ) {
-    let cap = cap_w.min(dw / 2.0);
-    let mid_w = (dw - cap * 2.0).max(0.0);
-    let row_y = color_row as f64 * render_util::RIBBON_CELL_H;
-
-    let (lsx, lsy, lsw, lsh) = render_util::RIBBON_LEFT;
-    let (csx, csy, csw, csh) = render_util::RIBBON_CENTER;
-    let (rsx, rsy, rsw, rsh) = render_util::RIBBON_RIGHT;
-
-    // Left end
-    let _ = canvas.copy(
-        tex,
-        Rect::new(
-            lsx as i32,
-            (row_y + lsy) as i32,
-            lsw.ceil() as u32,
-            lsh.ceil() as u32,
-        ),
-        Rect::new(
-            dx.floor() as i32,
-            dy.floor() as i32,
-            cap.ceil() as u32,
-            dh.ceil() as u32,
-        ),
-    );
-    // Center (stretch)
-    if mid_w > 0.0 {
-        let _ = canvas.copy(
-            tex,
-            Rect::new(
-                csx as i32,
-                (row_y + csy) as i32,
-                csw.ceil() as u32,
-                csh.ceil() as u32,
-            ),
-            Rect::new(
-                (dx + cap).floor() as i32,
-                dy.floor() as i32,
-                mid_w.ceil() as u32,
-                dh.ceil() as u32,
-            ),
-        );
+    for q in render_util::big_ribbon_quads(color_row, dx, dy, dw, dh, cap_w) {
+        blit(canvas, tex, &q);
     }
-    // Right end
-    let _ = canvas.copy(
-        tex,
-        Rect::new(
-            rsx as i32,
-            (row_y + rsy) as i32,
-            rsw.ceil() as u32,
-            rsh.ceil() as u32,
-        ),
-        Rect::new(
-            (dx + cap + mid_w).floor() as i32,
-            dy.floor() as i32,
-            cap.ceil() as u32,
-            dh.ceil() as u32,
-        ),
-    );
 }
 
 /// Draw a SmallRibbon centered at (cx, cy).
@@ -213,54 +127,26 @@ pub(super) fn draw_small_ribbon(
     center_w: f64,
     scale: f64,
 ) {
-    let row_y = color_row as f64 * render_util::SMALL_RIBBON_CELL_H;
-
-    let (lsx, lsy, lsw, lsh) = render_util::SMALL_RIBBON_LEFT;
-    let (csx, csy, csw, csh) = render_util::SMALL_RIBBON_CENTER;
-    let (rsx, rsy, rsw, rsh) = render_util::SMALL_RIBBON_RIGHT;
-
-    let cap_lw = (lsw * scale).ceil() as u32;
-    let cap_rw = (rsw * scale).ceil() as u32;
-    let h = (lsh * scale).ceil() as u32;
-    let cw = center_w.ceil().max(0.0) as u32;
-
-    let total_w = cap_lw + cw + cap_rw;
-    let dx = (cx - total_w as f64 / 2.0).floor() as i32;
-    let dy = (cy - h as f64 / 2.0).floor() as i32;
-
-    // Left end
-    let _ = canvas.copy(
-        tex,
-        Rect::new(
-            lsx as i32,
-            (row_y + lsy) as i32,
-            lsw.ceil() as u32,
-            lsh.ceil() as u32,
-        ),
-        Rect::new(dx, dy, cap_lw, h),
-    );
-    // Center — stretched horizontally
-    if cw > 0 {
-        let _ = canvas.copy(
-            tex,
-            Rect::new(
-                csx as i32,
-                (row_y + csy) as i32,
-                csw.ceil() as u32,
-                csh.ceil() as u32,
-            ),
-            Rect::new(dx + cap_lw as i32, dy, cw, h),
-        );
+    for q in render_util::small_ribbon_quads(color_row, cx, cy, center_w, scale) {
+        blit(canvas, tex, &q);
     }
-    // Right end
-    let _ = canvas.copy(
-        tex,
-        Rect::new(
-            rsx as i32,
-            (row_y + rsy) as i32,
-            rsw.ceil() as u32,
-            rsh.ceil() as u32,
-        ),
-        Rect::new(dx + cap_lw as i32 + cw as i32, dy, cap_rw, h),
+}
+
+pub(super) fn blit(canvas: &mut Canvas<Window>, tex: &Texture, q: &render_util::SrcDst) {
+    if q.dw < 0.5 || q.dh < 0.5 {
+        return;
+    }
+    let src = Rect::new(
+        q.sx as i32,
+        q.sy as i32,
+        q.sw.ceil() as u32,
+        q.sh.ceil() as u32,
     );
+    let dst = Rect::new(
+        q.dx as i32,
+        q.dy as i32,
+        q.dw.ceil() as u32,
+        q.dh.ceil() as u32,
+    );
+    let _ = canvas.copy(tex, src, dst);
 }

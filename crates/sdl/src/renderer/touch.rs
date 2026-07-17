@@ -59,9 +59,10 @@ pub(super) fn draw_touch_controls(
     canvas: &mut Canvas<Window>,
     tc: &TextureCreator<WindowContext>,
     input: &InputState,
-    text_renderer: &TextRenderer,
+    assets: &crate::renderer::Assets,
     dpi_scale: f64,
 ) {
+    let text_renderer = &assets.text;
     let touch = &input.touch;
     if !touch.is_touch_device {
         return;
@@ -114,36 +115,39 @@ pub(super) fn draw_touch_controls(
     }
 
     // Attack button
-    draw_touch_button(
+    draw_round_asset_button(
         canvas,
         tc,
         text_renderer,
-        touch.attack.center_x as i32,
-        touch.attack.center_y as i32,
-        touch.attack.radius as i32,
-        Color::RGBA(220, 50, 50, 153),
-        "ATK",
+        assets,
+        touch.attack.center_x as f64,
+        touch.attack.center_y as f64,
+        touch.attack.radius as f64,
         touch.attack.pressed,
+        true,
+        0,
+        "ATK",
         dpr,
     );
 
     let order_btns = [
-        (&touch.charge, OrderRequest::Charge),
-        (&touch.defend, OrderRequest::Defend),
-        (&touch.dismiss, OrderRequest::Dismiss),
+        (&touch.charge, OrderRequest::Charge, 2usize),
+        (&touch.defend, OrderRequest::Defend, 1),
+        (&touch.dismiss, OrderRequest::Dismiss, 3),
     ];
-    for (btn, req) in order_btns {
-        let (r, g, b) = req.color();
-        draw_touch_button(
+    for (btn, req, icon) in order_btns {
+        draw_round_asset_button(
             canvas,
             tc,
             text_renderer,
-            btn.center_x as i32,
-            btn.center_y as i32,
-            btn.radius as i32,
-            Color::RGBA(r, g, b, 128),
-            req.short_label(),
+            assets,
+            btn.center_x as f64,
+            btn.center_y as f64,
+            btn.radius as f64,
             btn.pressed,
+            false,
+            icon,
+            req.short_label(),
             dpr,
         );
         if req == OrderRequest::Dismiss && btn.pressed {
@@ -153,8 +157,63 @@ pub(super) fn draw_touch_controls(
                 canvas,
                 btn.center_x as i32,
                 btn.center_y as i32,
-                (btn.radius * frac) as i32,
+                (btn.radius * frac * 0.4) as i32,
             );
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_round_asset_button(
+    canvas: &mut Canvas<Window>,
+    tc: &TextureCreator<WindowContext>,
+    text_renderer: &TextRenderer,
+    assets: &crate::renderer::Assets,
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    pressed: bool,
+    red: bool,
+    icon: usize,
+    fallback_label: &str,
+    dpr: f64,
+) {
+    let base = match (red, pressed) {
+        (true, false) => assets.ui_round_red.as_ref(),
+        (true, true) => assets
+            .ui_round_red_pressed
+            .as_ref()
+            .or(assets.ui_round_red.as_ref()),
+        (false, false) => assets.ui_round_blue.as_ref(),
+        (false, true) => assets
+            .ui_round_blue_pressed
+            .as_ref()
+            .or(assets.ui_round_blue.as_ref()),
+    };
+    let (base_q, icon_q) =
+        battlefield_core::render_util::round_button_quads(cx, cy, radius, pressed);
+    if let Some(tex) = base {
+        super::draw_helpers::blit(canvas, tex, &base_q);
+        if let Some(icon_tex) = assets.ui_icons[icon].as_ref() {
+            super::draw_helpers::blit(canvas, icon_tex, &icon_q);
+        }
+        return;
+    }
+
+    draw_touch_button(
+        canvas,
+        tc,
+        text_renderer,
+        cx as i32,
+        cy as i32,
+        radius as i32,
+        if red {
+            Color::RGBA(220, 50, 50, 153)
+        } else {
+            Color::RGBA(50, 90, 150, 128)
+        },
+        fallback_label,
+        pressed,
+        dpr,
+    );
 }

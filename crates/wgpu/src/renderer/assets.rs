@@ -95,6 +95,12 @@ pub struct Assets {
     /// Ribbons.
     pub ui_big_ribbons: Option<TextureId>,
     pub ui_small_ribbons: Option<TextureId>,
+    pub ui_round_blue: Option<TextureId>,
+    pub ui_round_blue_pressed: Option<TextureId>,
+    pub ui_round_red: Option<TextureId>,
+    pub ui_round_red_pressed: Option<TextureId>,
+    /// Icon overlays: [sword, shield, arrow, cross].
+    pub ui_icons: [Option<TextureId>; 4],
 
     /// Text renderer with glyph cache.
     pub text: crate::renderer::text::TextRenderer,
@@ -133,6 +139,11 @@ impl Assets {
             ui_bar_fill: None,
             ui_big_ribbons: None,
             ui_small_ribbons: None,
+            ui_round_blue: None,
+            ui_round_blue_pressed: None,
+            ui_round_red: None,
+            ui_round_red_pressed: None,
+            ui_icons: [None; 4],
             text: crate::renderer::text::TextRenderer::new(0), // base_id set after load
         };
 
@@ -601,6 +612,18 @@ impl Assets {
         // Ribbons
         self.ui_big_ribbons = self.load_png(gpu, &format!("{ui_base}/Ribbons/BigRibbons.png"));
         self.ui_small_ribbons = self.load_png(gpu, &format!("{ui_base}/Ribbons/SmallRibbons.png"));
+
+        let btns = format!("{ui_base}/Buttons");
+        self.ui_round_blue =
+            self.load_png(gpu, &format!("{btns}/SmallBlueRoundButton_Regular.png"));
+        self.ui_round_blue_pressed =
+            self.load_png(gpu, &format!("{btns}/SmallBlueRoundButton_Pressed.png"));
+        self.ui_round_red = self.load_png(gpu, &format!("{btns}/SmallRedRoundButton_Regular.png"));
+        self.ui_round_red_pressed =
+            self.load_png(gpu, &format!("{btns}/SmallRedRoundButton_Pressed.png"));
+        for (slot, num) in [(0, 5), (1, 6), (2, 8), (3, 9)] {
+            self.ui_icons[slot] = self.load_png(gpu, &format!("{ui_base}/Icons/Icon_{num:02}.png"));
+        }
     }
 
     fn load_9slice_atlas(
