@@ -58,3 +58,7 @@ tags
 
 # Claude Code
 .claude/
+
+# wgpu web build output (index.html is source; the rest is generated)
+web-wgpu/*
+!web-wgpu/index.html
