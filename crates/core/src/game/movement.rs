@@ -101,7 +101,12 @@ impl Game {
         // (right, below-left, below, below-right) to avoid duplicate pairs
         let neighbor_offsets: [(i32, i32); 4] = [(1, 0), (-1, 1), (0, 1), (1, 1)];
 
-        for (&(cx, cy), indices) in &grid_cells {
+        // Deterministic cell order — HashMap iteration order varies per run
+        let mut cells: Vec<(i32, i32)> = grid_cells.keys().copied().collect();
+        cells.sort_unstable();
+
+        for (cx, cy) in cells {
+            let indices = &grid_cells[&(cx, cy)];
             // Pairs within the same cell
             for a in 0..indices.len() {
                 for b in (a + 1)..indices.len() {

@@ -342,11 +342,13 @@ impl ZoneManager {
     /// Update victory timer. Returns Some(faction) if a faction has won.
     pub fn tick_victory(&mut self, dt: f32, victory_hold_time: f32) -> Option<Faction> {
         let leader = self.all_zones_controlled_by();
-        self.advance_victory(leader, dt, victory_hold_time)
+        self.advance_victory(leader, dt, victory_hold_time, true)
     }
 
     /// Sudden-death victory (both manpower pools exhausted): a strict zone
-    /// majority held for the hold time wins.
+    /// majority held for the hold time wins. Frontline flicker (ties,
+    /// zones dipping to contested) pauses the timer instead of resetting
+    /// it — only an actual leadership flip resets.
     pub fn tick_victory_majority(&mut self, dt: f32, victory_hold_time: f32) -> Option<Faction> {
         let blue = self.controlled_count(Faction::Blue);
         let red = self.controlled_count(Faction::Red);
@@ -355,7 +357,7 @@ impl ZoneManager {
             std::cmp::Ordering::Less => Some(Faction::Red),
             std::cmp::Ordering::Equal => None,
         };
-        self.advance_victory(leader, dt, victory_hold_time)
+        self.advance_victory(leader, dt, victory_hold_time, false)
     }
 
     pub fn controlled_count(&self, faction: Faction) -> usize {
@@ -370,6 +372,7 @@ impl ZoneManager {
         leader: Option<Faction>,
         dt: f32,
         victory_hold_time: f32,
+        reset_on_none: bool,
     ) -> Option<Faction> {
         match leader {
             Some(faction) => {
@@ -386,8 +389,10 @@ impl ZoneManager {
                 }
             }
             None => {
-                self.victory_timer = 0.0;
-                self.victory_candidate = None;
+                if reset_on_none {
+                    self.victory_timer = 0.0;
+                    self.victory_candidate = None;
+                }
                 None
             }
         }

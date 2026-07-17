@@ -193,15 +193,32 @@ Status legend: item is checked when its tests pass and both renderers build.
   exhausted, a strict zone majority held 60s wins (probe found a 35v35
   double-exhaustion standoff that annihilation could not break).
 
-## Known issues
+## Stall investigation (resolved)
 
-- **Seed 7 AI standoff**: both armies at unit cap, garrisoned on split
-  zones, stop engaging (independent of knockback — reproduced at 0.0).
-  One pool stays stocked, so neither sudden death nor annihilation
-  triggers. Root cause is faction-planner passivity at full strength, not
-  the manpower rules. Candidate fixes to decide on: an arcade match timer
-  with standing-based resolution, or planner aggression when at cap with
-  a pool advantage.
+The probe stalls traced to four distinct causes, all fixed:
+
+1. **Nondeterministic simulation** — `resolve_collisions` iterated a
+   `HashMap` (random order per process), so identical seeds produced
+   different battles. Cells are now iterated in sorted order; same seed =
+   identical battle, byte for byte.
+2. **Monk accumulation** — fighters died and were replaced by cycling the
+   WAVE pattern while fleeing monks never died; losing armies curdled
+   into heal-stacks (11 monks of 30) that out-healed all damage.
+   Production is now deficit-based (`build_wave`): each slot goes to the
+   kind furthest below its WAVE-share of the army.
+3. **Sudden-death timer flicker** — a stable 4–3 zone majority never held
+   60 *unbroken* seconds because frontline zones dip to contested for
+   moments. In sudden death, ties/flicker now pause the timer; only an
+   actual leadership flip resets it. (Domination keeps strict resets.)
+4. **Fractional pool never exhausts** — bleed could leave a pool at e.g.
+   0.7: unable to field a unit (spawn costs 1.0) yet not `<= 0`, so no
+   end condition armed. Exhaustion/annihilation thresholds are now
+   `< 1.0`.
+
+Probe results after fixes (deterministic): seeds 42/1234/21 end 354–393s
+by annihilation; 99 at 462s; 5 at 722s by sudden-death majority (16
+soldiers beating 35 on zone standing); 7 at 1921s by sudden death. The
+bench prints composition + zone standing for future probes.
 
 ## Decisions taken
 

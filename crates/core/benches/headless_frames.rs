@@ -61,22 +61,57 @@ fn main() {
     let frames = frame_times.len();
     let avg_us = total.as_micros() as f64 / frames as f64;
 
+    use battlefield_core::unit::{Faction, UnitKind};
     let alive = |f| {
         game.units
             .iter()
             .filter(|u| u.alive && u.faction == f)
             .count()
     };
+    let comp = |f: Faction| {
+        let count = |k| {
+            game.units
+                .iter()
+                .filter(|u| u.alive && u.faction == f && u.kind == k)
+                .count()
+        };
+        format!(
+            "W{} L{} A{} M{}",
+            count(UnitKind::Warrior),
+            count(UnitKind::Lancer),
+            count(UnitKind::Archer),
+            count(UnitKind::Monk)
+        )
+    };
     println!();
     println!(
-        "Battle state after {:.0}s simulated: winner={:?}, manpower=[{:.0}, {:.0}], alive=[{}, {}]",
+        "Battle state after {:.0}s simulated: winner={:?}, manpower=[{:.1}, {:.1}], alive=[{}, {}]",
         frames as f32 * dt,
         game.winner,
         game.manpower[0],
         game.manpower[1],
-        alive(battlefield_core::unit::Faction::Blue),
-        alive(battlefield_core::unit::Faction::Red),
+        alive(Faction::Blue),
+        alive(Faction::Red),
     );
+    println!(
+        "Composition: blue=[{}] red=[{}]",
+        comp(Faction::Blue),
+        comp(Faction::Red)
+    );
+    let zones: String = game
+        .zone_manager
+        .zones
+        .iter()
+        .map(|z| match z.state {
+            battlefield_core::zone::ZoneState::Controlled(Faction::Blue) => 'B',
+            battlefield_core::zone::ZoneState::Controlled(Faction::Red) => 'R',
+            battlefield_core::zone::ZoneState::Capturing(Faction::Blue) => 'b',
+            battlefield_core::zone::ZoneState::Capturing(Faction::Red) => 'r',
+            battlefield_core::zone::ZoneState::Contested => 'c',
+            battlefield_core::zone::ZoneState::Neutral => 'n',
+        })
+        .collect();
+    println!("Zones: [{zones}]");
 
     let mut sorted_us: Vec<u128> = frame_times.iter().map(|d| d.as_micros()).collect();
     sorted_us.sort();

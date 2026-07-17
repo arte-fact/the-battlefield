@@ -125,7 +125,8 @@ impl Game {
 
         if self.winner.is_none() {
             let hold = self.config.victory_hold_time;
-            let exhausted = self.manpower[0] <= 0.0 && self.manpower[1] <= 0.0;
+            // A pool below 1.0 cannot field a unit — effectively exhausted
+            let exhausted = self.manpower[0] < 1.0 && self.manpower[1] < 1.0;
             let won = if exhausted {
                 self.zone_manager.tick_victory_majority(dt, hold)
             } else {
@@ -189,13 +190,58 @@ impl Game {
             return;
         }
         for (fi, faction) in [(0usize, Faction::Blue), (1, Faction::Red)] {
-            if self.manpower[fi] <= 0.0
+            if self.manpower[fi] < 1.0
                 && !self.units.iter().any(|u| u.alive && u.faction == faction)
             {
                 self.winner = Some(faction.enemy());
                 return;
             }
         }
+    }
+
+    /// Target composition shares (from WAVE: 7 Warriors, 4 Lancers, 8 Archers, 2 Monks).
+    const WAVE_SHARES: [(UnitKind, f32); 4] = [
+        (UnitKind::Warrior, 7.0),
+        (UnitKind::Lancer, 4.0),
+        (UnitKind::Archer, 8.0),
+        (UnitKind::Monk, 2.0),
+    ];
+
+    /// Build a reinforcement wave that restores the target composition:
+    /// each slot goes to the kind furthest below its share of the army.
+    /// Prevents survivor drift (e.g. fleeing monks accumulating while
+    /// fighters die and get replaced).
+    fn build_wave(&self, faction: Faction, wave_size: usize) -> Vec<UnitKind> {
+        let share_total: f32 = Self::WAVE_SHARES.iter().map(|&(_, s)| s).sum();
+        let mut counts = [0.0f32; 4];
+        let mut total = 0.0f32;
+        for u in &self.units {
+            if u.alive && u.faction == faction {
+                let i = Self::WAVE_SHARES
+                    .iter()
+                    .position(|&(k, _)| k == u.kind)
+                    .unwrap();
+                counts[i] += 1.0;
+                total += 1.0;
+            }
+        }
+
+        let mut queue = Vec::with_capacity(wave_size);
+        for _ in 0..wave_size {
+            let mut best = 0;
+            let mut best_deficit = f32::MIN;
+            for (i, &(_, share)) in Self::WAVE_SHARES.iter().enumerate() {
+                let deficit = share / share_total * (total + 1.0) - counts[i];
+                if deficit > best_deficit {
+                    best_deficit = deficit;
+                    best = i;
+                }
+            }
+            queue.push(Self::WAVE_SHARES[best].0);
+            counts[best] += 1.0;
+            total += 1.0;
+        }
+        queue
     }
 
     /// Spawn units one-by-one from the queue at the rally point (base center).
@@ -230,12 +276,7 @@ impl Game {
                         Self::WAVE.len() * 2
                     };
                     let wave_size = slots.min(max_wave).min(self.manpower[fi] as usize);
-                    // Build wave by cycling through WAVE pattern
-                    let mut queue = Vec::with_capacity(wave_size);
-                    for i in 0..wave_size {
-                        queue.push(Self::WAVE[i % Self::WAVE.len()]);
-                    }
-                    self.spawn_queue[fi] = queue;
+                    self.spawn_queue[fi] = self.build_wave(faction, wave_size);
                     self.spawn_timer[fi] = 0.0;
                     // Skip rally when dominating — reinforcements march out immediately
                     self.skip_rally[fi] = zone_count > 0 && controlled == zone_count;
@@ -675,6 +716,40 @@ mod tests {
     }
 
     #[test]
+    fn production_restores_composition_instead_of_cycling() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        for i in 0..12 {
+            game.spawn_unit(UnitKind::Monk, Faction::Blue, 6 + i % 3, 5 + i / 3, false);
+        }
+        let monks_before = game
+            .units
+            .iter()
+            .filter(|u| u.alive && u.kind == UnitKind::Monk && u.faction == Faction::Blue)
+            .count();
+
+        for _ in 0..600 {
+            game.tick_production(0.1);
+        }
+
+        let monks_after = game
+            .units
+            .iter()
+            .filter(|u| u.alive && u.kind == UnitKind::Monk && u.faction == Faction::Blue)
+            .count();
+        assert_eq!(
+            monks_after, monks_before,
+            "monk-saturated army must not produce more monks"
+        );
+        let warriors = game
+            .units
+            .iter()
+            .filter(|u| u.alive && u.kind == UnitKind::Warrior && u.faction == Faction::Blue)
+            .count();
+        assert!(warriors > 1, "deficit kinds should be produced");
+    }
+
+    #[test]
     fn sudden_death_majority_wins_when_both_pools_empty() {
         let mut game = game_with_three_zones();
         game.manpower = [0.0, 0.0];
@@ -687,6 +762,27 @@ mod tests {
         game.tick_zones(game.config.victory_hold_time * 0.5);
         assert_eq!(game.winner, None);
         game.tick_zones(game.config.victory_hold_time * 0.6);
+        assert_eq!(game.winner, Some(Faction::Blue));
+    }
+
+    #[test]
+    fn sudden_death_timer_pauses_on_flicker_not_resets() {
+        let mut game = game_with_three_zones();
+        game.manpower = [0.0, 0.0];
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 100, 100, false);
+        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
+        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
+        game.zone_manager.zones[2].state = ZoneState::Controlled(Faction::Red);
+
+        game.tick_zones(game.config.victory_hold_time * 0.9);
+        // Frontline flicker: one Blue zone dips to Capturing — tie
+        game.zone_manager.zones[1].state = ZoneState::Capturing(Faction::Red);
+        game.tick_zones(1.0);
+        assert_eq!(game.winner, None);
+        // Majority restored — accumulated time must survive the flicker
+        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
+        game.tick_zones(game.config.victory_hold_time * 0.2);
         assert_eq!(game.winner, Some(Faction::Blue));
     }
 
