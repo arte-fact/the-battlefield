@@ -32,6 +32,9 @@ pub struct GameConfig {
     pub separation_smoothing: f32,
     pub fov_radius: i32,
     pub move_speed_divisor: f32,
+    /// Seconds a unit ignores out-of-reach enemies after failing to path to one.
+    #[serde(default = "default_chase_block_secs")]
+    pub chase_block_secs: f32,
 
     // ── Authority System ────────────────────────────────────────────
     pub authority_follow_base: f32,
@@ -122,6 +125,10 @@ pub struct GameConfig {
     pub bleed_per_extra_zone: f32,
 }
 
+fn default_chase_block_secs() -> f32 {
+    5.0
+}
+
 fn default_recruit_interval() -> f32 {
     1.0
 }
@@ -181,6 +188,7 @@ impl Default for GameConfig {
             separation_smoothing: 0.3,
             fov_radius: 15,
             move_speed_divisor: 0.90,
+            chase_block_secs: default_chase_block_secs(),
 
             // Authority System
             authority_follow_base: 0.30,

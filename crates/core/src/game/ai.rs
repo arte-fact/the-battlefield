@@ -68,13 +68,22 @@ impl Game {
             self.assign_unit_objectives();
         }
 
-        let ai_indices: Vec<usize> = self
+        let mut ai_indices: Vec<usize> = self
             .units
             .iter()
             .enumerate()
             .filter(|(_, u)| u.alive && !u.is_player)
             .map(|(i, _)| i)
             .collect();
+
+        // Rotate iteration order per tick: the A* budget is consumed in
+        // order, and a fixed order starves late units of pathfinding when
+        // demand exceeds the per-tick budget.
+        if !ai_indices.is_empty() {
+            let start = self.ai_rotation as usize % ai_indices.len();
+            ai_indices.rotate_left(start);
+            self.ai_rotation = self.ai_rotation.wrapping_add(1);
+        }
 
         for ai_idx in ai_indices {
             if !self.units[ai_idx].alive {
@@ -208,6 +217,31 @@ impl Game {
         None
     }
 
+    /// Move toward a combat target via A*, tracking failures: a target that
+    /// is visible but unreachable (e.g. across water) stalls the unit forever
+    /// otherwise. After repeated failures the chase is abandoned and combat
+    /// acquisition shrinks to attack reach until `chase_block_timer` expires,
+    /// letting flow-field movement route around the obstacle.
+    pub(super) fn chase_enemy(&mut self, ai_idx: usize, ex: f32, ey: f32, dt: f32) {
+        const MAX_FAIL_STREAK: u8 = 3;
+        self.last_path_result = Some(true);
+        self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
+        match self.last_path_result {
+            Some(false) => {
+                let u = &mut self.units[ai_idx];
+                u.chase_fail_streak += 1;
+                if u.chase_fail_streak >= MAX_FAIL_STREAK {
+                    u.chase_fail_streak = 0;
+                    u.chase_block_timer = self.config.chase_block_secs;
+                    u.combat_target = None;
+                    u.combat_target_timer = 0.0;
+                }
+            }
+            Some(true) => self.units[ai_idx].chase_fail_streak = 0,
+            None => {}
+        }
+    }
+
     /// Real-time melee AI: attack if in range, else close distance to enemy.
     /// If no enemy visible, follow flow field toward zone objective.
     fn ai_melee_tick(&mut self, ai_idx: usize, dt: f32) {
@@ -224,7 +258,7 @@ impl Game {
             self.attack_target(ai_idx, ex, ey, enemy_id);
         } else {
             // Enemy visible — close distance
-            self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
+            self.chase_enemy(ai_idx, ex, ey, dt);
         }
     }
 
@@ -267,7 +301,7 @@ impl Game {
             self.units[ai_idx].set_anim(UnitAnim::Idle);
         } else {
             // Out of range — approach enemy
-            self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
+            self.chase_enemy(ai_idx, ex, ey, dt);
         }
     }
 
@@ -306,7 +340,7 @@ impl Game {
             self.ai_move_toward_continuous(ai_idx, away_x, away_y, dt);
         } else {
             // Close distance to reach range
-            self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
+            self.chase_enemy(ai_idx, ex, ey, dt);
         }
     }
 
@@ -402,6 +436,85 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreachable_visible_enemy_triggers_chase_block() {
+        let mut game = Game::new(960.0, 640.0);
+        // Full-height water wall: enemy is visible across it but unpathable
+        for y in 0..GRID_SIZE {
+            game.grid.set(30, y, TileKind::Water);
+        }
+        game.grid.recompute_caches();
+        let a = game.spawn_unit(UnitKind::Warrior, Faction::Blue, 28, 20, false);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 32, 20, false);
+
+        for _ in 0..30 {
+            game.tick_ai(0.1);
+        }
+
+        let u = game.units.iter().find(|u| u.id == a).unwrap();
+        assert!(
+            u.chase_block_timer > 0.0,
+            "failed chases must trigger the chase block"
+        );
+        assert_eq!(u.combat_target, None);
+    }
+
+    #[test]
+    fn starved_astar_budget_still_moves_units() {
+        let mut game = Game::new(960.0, 640.0);
+        game.config.astar_budget_per_tick = 0;
+        let a = game.spawn_unit(UnitKind::Warrior, Faction::Blue, 20, 20, false);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 26, 20, false);
+        let x0 = game.units.iter().find(|u| u.id == a).unwrap().x;
+
+        for _ in 0..30 {
+            game.tick_ai(1.0 / 60.0);
+        }
+
+        let u = game.units.iter().find(|u| u.id == a).unwrap();
+        assert!(
+            u.x > x0 + TILE_SIZE,
+            "unit must steer toward its target even with no pathfinding budget"
+        );
+    }
+
+    #[test]
+    fn chase_block_still_fights_within_reach() {
+        let mut game = Game::new(960.0, 640.0);
+        let a = game.spawn_unit(UnitKind::Warrior, Faction::Blue, 20, 20, false);
+        let b = game.spawn_unit(UnitKind::Warrior, Faction::Red, 21, 20, false);
+        game.units.iter_mut().for_each(|u| {
+            u.chase_block_timer = 10.0;
+            u.attack_cooldown = 0.0;
+        });
+
+        game.tick_ai(0.1);
+
+        let hp = game.units.iter().find(|u| u.id == b).unwrap().hp;
+        let max = game.units.iter().find(|u| u.id == a).unwrap().stats.max_hp;
+        assert!(hp < max, "blocked units still fight enemies in reach");
+    }
+
+    #[test]
+    fn successful_chase_resets_fail_streak() {
+        let mut game = Game::new(960.0, 640.0);
+        let a = game.spawn_unit(UnitKind::Warrior, Faction::Blue, 20, 20, false);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 26, 20, false);
+        game.units
+            .iter_mut()
+            .find(|u| u.id == a)
+            .unwrap()
+            .chase_fail_streak = 2;
+
+        for _ in 0..5 {
+            game.tick_ai(0.1);
+        }
+
+        let u = game.units.iter().find(|u| u.id == a).unwrap();
+        assert_eq!(u.chase_fail_streak, 0);
+        assert_eq!(u.chase_block_timer, 0.0);
+    }
 
     #[test]
     fn tick_ai_melee_moves_when_ready() {

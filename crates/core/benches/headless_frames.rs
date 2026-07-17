@@ -46,12 +46,44 @@ fn main() {
 
     let start = Instant::now();
     let mut frame_times = Vec::with_capacity(frames);
+    let mut prev_pos: std::collections::HashMap<u32, (f32, f32)> = std::collections::HashMap::new();
 
-    for _ in 0..frames {
+    let dump_interval = std::env::var("BENCH_DUMP")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 1);
+    for frame in 0..frames {
         let frame_start = Instant::now();
         game.tick(&input, dt);
         game.update(dt as f64);
         frame_times.push(frame_start.elapsed());
+        if let Some(every) = dump_interval {
+            if frame % every == 0 {
+                println!("t={}s", frame as f32 * dt);
+                print!("{}", game.flow_diagnostics());
+                let mut moved = 0.0f32;
+                let mut still = 0usize;
+                for u in game.units.iter().filter(|u| u.alive) {
+                    if let Some(&(px, py)) = prev_pos.get(&u.id) {
+                        let d = ((u.x - px).powi(2) + (u.y - py).powi(2)).sqrt();
+                        moved += d;
+                        if d < 32.0 {
+                            still += 1;
+                        }
+                    }
+                }
+                println!(
+                    "displacement since last dump: total={:.0}px still_units={} of {}",
+                    moved,
+                    still,
+                    game.units.iter().filter(|u| u.alive).count()
+                );
+                prev_pos.clear();
+                for u in game.units.iter().filter(|u| u.alive) {
+                    prev_pos.insert(u.id, (u.x, u.y));
+                }
+            }
+        }
         if run_to_end && game.winner.is_some() {
             break;
         }
@@ -112,6 +144,68 @@ fn main() {
         })
         .collect();
     println!("Zones: [{zones}]");
+    if std::env::var("BENCH_DUMP").is_ok() {
+        println!("{}", game.flow_diagnostics());
+        // ASCII map: terrain + units around each army blob
+        use battlefield_core::grid::TileKind;
+        for (label, fac) in [("BLUE", Faction::Blue), ("RED", Faction::Red)] {
+            let cells: Vec<(u32, u32)> = game
+                .units
+                .iter()
+                .filter(|u| u.alive && u.faction == fac)
+                .map(|u| u.grid_cell())
+                .collect();
+            if cells.is_empty() {
+                continue;
+            }
+            let cx = cells.iter().map(|c| c.0).sum::<u32>() / cells.len() as u32;
+            let cy = cells.iter().map(|c| c.1).sum::<u32>() / cells.len() as u32;
+            println!("{label} blob around ({cx},{cy}):");
+            for y in cy.saturating_sub(12)..cy + 13 {
+                let mut row = String::new();
+                for x in cx.saturating_sub(24)..cx + 25 {
+                    let n_here = game
+                        .units
+                        .iter()
+                        .filter(|u| u.alive && u.grid_cell() == (x, y))
+                        .count();
+                    let ch = if n_here > 0 {
+                        let f = game
+                            .units
+                            .iter()
+                            .find(|u| u.alive && u.grid_cell() == (x, y))
+                            .unwrap()
+                            .faction;
+                        if f == Faction::Blue {
+                            'b'
+                        } else {
+                            'r'
+                        }
+                    } else if !game.grid.in_bounds(x as i32, y as i32) {
+                        '#'
+                    } else {
+                        match game.grid.get(x, y) {
+                            TileKind::Water => '~',
+                            TileKind::Forest => 'T',
+                            TileKind::Rock => '^',
+                            TileKind::Road => '=',
+                            _ => {
+                                if game.grid.elevation(x, y) > 0 {
+                                    'E'
+                                } else if !game.grid.is_passable(x, y) {
+                                    'X'
+                                } else {
+                                    '.'
+                                }
+                            }
+                        }
+                    };
+                    row.push(ch);
+                }
+                println!("{row}");
+            }
+        }
+    }
 
     let mut sorted_us: Vec<u128> = frame_times.iter().map(|d| d.as_micros()).collect();
     sorted_us.sort();

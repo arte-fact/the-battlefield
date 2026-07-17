@@ -202,7 +202,11 @@ impl Game {
         let faction = self.units[ai_idx].faction;
         let ax = self.units[ai_idx].x;
         let ay = self.units[ai_idx].y;
-        let vision_range = self.config.ai_vision_radius as f32 * TILE_SIZE;
+        let vision_range = if self.units[ai_idx].chase_block_timer > 0.0 {
+            self.attack_reach(ai_idx)
+        } else {
+            self.config.ai_vision_radius as f32 * TILE_SIZE
+        };
 
         let mut best: Option<(f32, f32, UnitId, f32)> = None;
 

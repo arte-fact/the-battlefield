@@ -147,6 +147,10 @@ pub struct Game {
     flow_field_turn: bool,
     /// Per-frame A* pathfind budget (reset each tick, decremented per find_path call).
     pub(crate) astar_budget: u8,
+    /// Outcome of the most recent A* attempt: Some(found), None = deferred.
+    pub(crate) last_path_result: Option<bool>,
+    /// Rotates AI iteration order so the A* budget is shared fairly.
+    ai_rotation: u32,
     /// Player authority level (0..100), governing order radius, follow chance, and rank.
     pub authority: f32,
     /// Runtime-tweakable AI configuration.
@@ -207,6 +211,8 @@ impl Game {
             recruit_timer: 0.0,
             flow_field_turn: false,
             astar_budget: 0,
+            last_path_result: None,
+            ai_rotation: 0,
             authority: 0.0,
             config,
             floating_texts: Vec::new(),

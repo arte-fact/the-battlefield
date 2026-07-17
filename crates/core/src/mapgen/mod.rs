@@ -812,12 +812,11 @@ mod tests {
         for seed in [1, 5, 7, 21, 42, 99, 777, 1234, 31337] {
             let (grid, layout) = generate_battlefield(seed);
 
-            // Flood fill from the blue base with unit collision clearance:
-            // tile-wide gaps that block a UNIT_RADIUS circle don't count.
-            let clear = |x: u32, y: u32| {
-                let (wx, wy) = crate::grid::grid_to_world(x, y);
-                grid.is_circle_passable(wx, wy, crate::unit::UNIT_RADIUS)
-            };
+            // Flood fill from the blue base under the PLANNER's traversal
+            // rules (passable + no cliff crossing) — what flow fields, A*,
+            // and unit movement all enforce. Tile passability alone is not
+            // enough: an elevation step or dropped road edge partitions the
+            // map for actual units.
             let mut visited = vec![false; (grid.width * grid.height) as usize];
             let idx = |x: u32, y: u32| (y * grid.width + x) as usize;
             let mut stack = vec![layout.blue_base];
@@ -826,13 +825,18 @@ mod tests {
                 for (dx, dy) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
                     let nx = x as i32 + dx;
                     let ny = y as i32 + dy;
-                    if grid.in_bounds(nx, ny)
-                        && clear(nx as u32, ny as u32)
-                        && !visited[idx(nx as u32, ny as u32)]
-                    {
-                        visited[idx(nx as u32, ny as u32)] = true;
-                        stack.push((nx as u32, ny as u32));
+                    if !grid.in_bounds(nx, ny) {
+                        continue;
                     }
+                    let (ux, uy) = (nx as u32, ny as u32);
+                    if visited[idx(ux, uy)]
+                        || !grid.is_passable(ux, uy)
+                        || grid.is_cliff_between(x, y, ux, uy)
+                    {
+                        continue;
+                    }
+                    visited[idx(ux, uy)] = true;
+                    stack.push((ux, uy));
                 }
             }
 

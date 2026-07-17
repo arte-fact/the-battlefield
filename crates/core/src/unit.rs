@@ -308,6 +308,11 @@ pub struct Unit {
     pub defend_in_position: bool,
     /// Seconds this unit refuses re-recruitment after being dismissed.
     pub re_recruit_cooldown: f32,
+    /// Consecutive failed pathfinding attempts toward the combat target.
+    pub chase_fail_streak: u8,
+    /// While positive, combat acquisition is limited to attack reach
+    /// (target was visible but unreachable — e.g. across water).
+    pub chase_block_timer: f32,
     /// Seconds a follower has been beyond the contact leash from the player.
     pub lost_contact_timer: f32,
     /// EMA-smoothed separation steering X component.
@@ -361,6 +366,8 @@ impl Unit {
             defend_slot: None,
             defend_in_position: false,
             re_recruit_cooldown: 0.0,
+            chase_fail_streak: 0,
+            chase_block_timer: 0.0,
             lost_contact_timer: 0.0,
             sep_smooth_x: 0.0,
             sep_smooth_y: 0.0,
@@ -426,6 +433,7 @@ impl Unit {
             self.combat_target = None;
         }
         self.re_recruit_cooldown = (self.re_recruit_cooldown - dt).max(0.0);
+        self.chase_block_timer = (self.chase_block_timer - dt).max(0.0);
         // Follow is sticky; timed orders expire back into Follow.
         if self.order.is_some() && !matches!(self.order, Some(OrderKind::Follow)) {
             self.order_timer -= dt;

@@ -20,8 +20,16 @@ impl Game {
         if needs_repath {
             // Cap A* calls per frame to prevent spike frames
             if self.astar_budget == 0 {
-                // Defer to next frame — keep following current waypoints
+                // Defer to next frame — keep following current waypoints.
+                // Without any, steer straight at the target: under sustained
+                // demand a unit may never win a budget slot, and standing
+                // still until it does freezes entire battles.
                 self.units[ai_idx].ai_path_cooldown = self.config.deferred_repath_delay;
+                self.last_path_result = None;
+                if self.units[ai_idx].ai_waypoint_idx >= self.units[ai_idx].ai_waypoints.len() {
+                    self.steer_toward(ai_idx, target_x, target_y, dt);
+                    return;
+                }
             } else {
                 self.astar_budget -= 1;
 
@@ -34,6 +42,7 @@ impl Game {
                     self.grid
                         .find_path(ax, ay, gx, gy, self.config.astar_search_limit, |_, _| false);
 
+                self.last_path_result = Some(path.is_some());
                 if let Some(steps) = path {
                     self.units[ai_idx].ai_waypoints = steps
                         .iter()
@@ -65,24 +74,37 @@ impl Game {
 
             if dist < TILE_SIZE * self.config.waypoint_arrival_frac {
                 self.units[ai_idx].ai_waypoint_idx += 1;
-            } else if dist > 0.01 {
-                let dir_x = ddx / dist;
-                let dir_y = ddy / dist;
-                let (raw_sep_x, raw_sep_y) = self.compute_separation(ai_idx);
-                let alpha = self.config.separation_smoothing;
-                self.units[ai_idx].sep_smooth_x =
-                    self.units[ai_idx].sep_smooth_x * (1.0 - alpha) + raw_sep_x * alpha;
-                self.units[ai_idx].sep_smooth_y =
-                    self.units[ai_idx].sep_smooth_y * (1.0 - alpha) + raw_sep_y * alpha;
-                let sep_x = self.units[ai_idx].sep_smooth_x;
-                let sep_y = self.units[ai_idx].sep_smooth_y;
-                let bx = dir_x * self.config.flow_weight + sep_x * self.config.separation_weight;
-                let by = dir_y * self.config.flow_weight + sep_y * self.config.separation_weight;
-                let len = (bx * bx + by * by).sqrt();
-                if len > 0.01 {
-                    self.move_unit(ai_idx, bx / len, by / len, dt);
-                }
+            } else {
+                self.steer_toward(ai_idx, wx, wy, dt);
             }
+        }
+    }
+
+    /// Separation-blended steering toward a world position (collision-checked).
+    fn steer_toward(&mut self, ai_idx: usize, wx: f32, wy: f32, dt: f32) {
+        let ux = self.units[ai_idx].x;
+        let uy = self.units[ai_idx].y;
+        let ddx = wx - ux;
+        let ddy = wy - uy;
+        let dist = (ddx * ddx + ddy * ddy).sqrt();
+        if dist <= 0.01 {
+            return;
+        }
+        let dir_x = ddx / dist;
+        let dir_y = ddy / dist;
+        let (raw_sep_x, raw_sep_y) = self.compute_separation(ai_idx);
+        let alpha = self.config.separation_smoothing;
+        self.units[ai_idx].sep_smooth_x =
+            self.units[ai_idx].sep_smooth_x * (1.0 - alpha) + raw_sep_x * alpha;
+        self.units[ai_idx].sep_smooth_y =
+            self.units[ai_idx].sep_smooth_y * (1.0 - alpha) + raw_sep_y * alpha;
+        let sep_x = self.units[ai_idx].sep_smooth_x;
+        let sep_y = self.units[ai_idx].sep_smooth_y;
+        let bx = dir_x * self.config.flow_weight + sep_x * self.config.separation_weight;
+        let by = dir_y * self.config.flow_weight + sep_y * self.config.separation_weight;
+        let len = (bx * bx + by * by).sqrt();
+        if len > 0.01 {
+            self.move_unit(ai_idx, bx / len, by / len, dt);
         }
     }
 
@@ -539,5 +561,131 @@ mod tests {
             "Blue should target a zone (x < {base_wx}), got x={}",
             obj.0
         );
+    }
+}
+
+impl Game {
+    /// Diagnostic snapshot of unit movement state (bench/debug tooling).
+    pub fn flow_diagnostics(&self) -> String {
+        let mut out = String::new();
+        for (fi, faction) in [(0usize, Faction::Blue), (1, Faction::Red)] {
+            let flow = if fi == 0 {
+                &self.blue_flow
+            } else {
+                &self.red_flow
+            };
+            let mut unassigned = 0;
+            let mut idle_in_zone = 0;
+            let mut flowing = 0;
+            let mut unreachable = 0;
+            let mut zone_hist = std::collections::BTreeMap::new();
+            for u in self
+                .units
+                .iter()
+                .filter(|u| u.alive && !u.is_player && u.faction == faction)
+            {
+                let Some(zi) = u.assigned_zone else {
+                    unassigned += 1;
+                    continue;
+                };
+                *zone_hist.entry(zi).or_insert(0) += 1;
+                let z = &self.zone_manager.zones[zi as usize];
+                let dx = u.x - z.center_wx;
+                let dy = u.y - z.center_wy;
+                let stop_r =
+                    z.radius as f32 * TILE_SIZE + self.config.zone_idle_margin_tiles * TILE_SIZE;
+                if dx * dx + dy * dy <= stop_r * stop_r {
+                    idle_in_zone += 1;
+                    continue;
+                }
+                let (gx, gy) = u.grid_cell();
+                let cost = flow
+                    .zone_fields
+                    .get(zi as usize)
+                    .and_then(|f| f.as_ref())
+                    .map(|f| f.cost_at(gx, gy))
+                    .unwrap_or(u32::MAX);
+                if cost == u32::MAX {
+                    unreachable += 1;
+                } else {
+                    flowing += 1;
+                }
+            }
+            let mut dist_sum = 0.0f32;
+            let mut dist_n = 0;
+            for u in self
+                .units
+                .iter()
+                .filter(|u| u.alive && !u.is_player && u.faction == faction)
+            {
+                if let Some(zi) = u.assigned_zone {
+                    let z = &self.zone_manager.zones[zi as usize];
+                    dist_sum += ((u.x - z.center_wx).powi(2) + (u.y - z.center_wy).powi(2)).sqrt();
+                    dist_n += 1;
+                }
+            }
+            let avg_dist = if dist_n > 0 {
+                dist_sum / dist_n as f32 / TILE_SIZE
+            } else {
+                0.0
+            };
+            out.push_str(&format!(
+                "{faction:?}: unassigned={unassigned} idle_in_zone={idle_in_zone} flowing={flowing} unreachable={unreachable} avg_dist_tiles={avg_dist:.1} zones={zone_hist:?}\n"
+            ));
+            let mut front: Vec<usize> = self
+                .units
+                .iter()
+                .enumerate()
+                .filter(|(_, u)| {
+                    u.alive && !u.is_player && u.faction == faction && u.assigned_zone.is_some()
+                })
+                .map(|(i, _)| i)
+                .collect();
+            front.sort_by(|&a, &b| {
+                let d = |i: usize| {
+                    let u = &self.units[i];
+                    let z = &self.zone_manager.zones[u.assigned_zone.unwrap() as usize];
+                    (u.x - z.center_wx).powi(2) + (u.y - z.center_wy).powi(2)
+                };
+                d(a).partial_cmp(&d(b)).unwrap()
+            });
+            for &i in front.iter().take(8) {
+                let u = &self.units[i];
+                let zi = u.assigned_zone.unwrap();
+                let (gx, gy) = u.grid_cell();
+                let dir = flow
+                    .zone_fields
+                    .get(zi as usize)
+                    .and_then(|f| f.as_ref())
+                    .map(|f| f.direction_at(gx, gy))
+                    .unwrap_or((0, 0));
+                let enemy = self
+                    .units
+                    .iter()
+                    .filter(|e| e.alive && e.faction != faction)
+                    .map(|e| {
+                        let d = ((e.x - u.x).powi(2) + (e.y - u.y).powi(2)).sqrt();
+                        (d, e.x, e.y)
+                    })
+                    .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                let (edist, elos) = match enemy {
+                    Some((d, ex, ey)) => (d / TILE_SIZE, self.has_line_of_sight(u.x, u.y, ex, ey)),
+                    None => (-1.0, false),
+                };
+                out.push_str(&format!(
+                    "  front id={} kind={:?} hp={} pos=({:.0},{:.0}) dir={dir:?} enemy_dist={edist:.1} los={elos} cd={:.2} target={:?} wp={}\n",
+                    u.id, u.kind, u.hp, u.x / TILE_SIZE, u.y / TILE_SIZE,
+                    u.attack_cooldown, u.combat_target, u.ai_waypoints.len(),
+                ));
+            }
+            out.push_str(&format!(
+                "  objectives={:?}\n",
+                self.macro_objectives[fi]
+                    .iter()
+                    .map(|&(x, y, s)| (x as u32 / 64, y as u32 / 64, s as i32))
+                    .collect::<Vec<_>>()
+            ));
+        }
+        out
     }
 }

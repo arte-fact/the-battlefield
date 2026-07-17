@@ -67,14 +67,8 @@ impl Game {
             return true;
         }
 
-        // Out of range — melee units chase, ranged units only approach to their attack range
-        if kind == UnitKind::Archer {
-            // Archers approach to firing range, not into melee
-            self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
-        } else {
-            // Warriors and Lancers close the distance
-            self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
-        }
+        // Out of range — approach to attack range, abandoning unreachable targets
+        self.chase_enemy(ai_idx, ex, ey, dt);
         true
     }
 
@@ -185,8 +179,6 @@ impl Game {
 
     // ── Order issuance ───────────────────────────────────────────────────
 
-    /// Issue a direct order to nearby allied units within command radius.
-    /// Each unit rolls authority_follow_chance() — success = accepts, failure = "?" flash.
     /// Command the retinue. Charge/Defend re-task non-committed followers;
     /// Dismiss releases everyone and sets their re-recruit cooldown.
     pub fn issue_order(&mut self, req: OrderRequest) -> OrderOutcome {
