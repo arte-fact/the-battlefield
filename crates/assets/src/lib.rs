@@ -215,6 +215,22 @@ pub fn get(path: &str) -> Option<&'static [u8]> {
             Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Ribbons/BigRibbons.png")),
         "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Ribbons/SmallRibbons.png" =>
             Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Ribbons/SmallRibbons.png")),
+        "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Buttons/SmallBlueRoundButton_Regular.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Buttons/SmallBlueRoundButton_Regular.png")),
+        "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Buttons/SmallBlueRoundButton_Pressed.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Buttons/SmallBlueRoundButton_Pressed.png")),
+        "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Buttons/SmallRedRoundButton_Regular.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Buttons/SmallRedRoundButton_Regular.png")),
+        "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Buttons/SmallRedRoundButton_Pressed.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Buttons/SmallRedRoundButton_Pressed.png")),
+        "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Icons/Icon_05.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Icons/Icon_05.png")),
+        "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Icons/Icon_06.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Icons/Icon_06.png")),
+        "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Icons/Icon_08.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Icons/Icon_08.png")),
+        "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Icons/Icon_09.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Icons/Icon_09.png")),
         "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Swords/Swords.png" =>
             Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Swords/Swords.png")),
         "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Wood Table/WoodTable.png" =>
