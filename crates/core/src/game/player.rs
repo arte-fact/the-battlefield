@@ -30,42 +30,17 @@ impl Game {
             return false;
         }
 
-        let player_id = self.units[player_idx].id;
-        let player_faction = self.units[player_idx].faction;
-        let px = self.units[player_idx].x;
-        let py = self.units[player_idx].y;
-
-        let attack_range = if self.units[player_idx].stats.range > 1 {
-            self.units[player_idx].stats.range as f32 * TILE_SIZE
-        } else {
-            TILE_SIZE // 1 tile melee reach for player
-        };
-
-        let targets = self.enemies_in_cone(
-            px,
-            py,
-            player_faction,
-            attack_range,
-            self.player_aim_dir,
-            ATTACK_CONE_HALF_ANGLE,
-        );
-
-        if targets.is_empty() {
+        let hits = self.swing_in_cone(player_idx, self.player_aim_dir);
+        if hits == 0 {
             // Whiff: play attack anim with full cooldown (same rate as hits)
             let anim = self.units[player_idx].next_attack_anim();
             self.units[player_idx].set_anim(anim);
-            self.units[player_idx].attack_cooldown =
-                self.units[player_idx].kind.base_attack_cooldown();
-            false
-        } else {
-            for enemy_id in targets {
-                self.execute_attack(player_id, enemy_id, None);
-                if let Some(idx) = self.units.iter().position(|u| u.id == enemy_id) {
-                    self.apply_knockback(idx, px, py);
-                }
-            }
-            true
+            let cd = self.units[player_idx]
+                .kind
+                .cooldown_from_config(&self.config);
+            self.units[player_idx].start_attack_cooldown_cfg(cd);
         }
+        hits > 0
     }
 
     /// Find ALL enemies within range AND within a cone (for cleave attacks).
@@ -130,6 +105,17 @@ mod tests {
 
     fn find_unit(game: &Game, id: UnitId) -> Option<&Unit> {
         game.units.iter().find(|u| u.id == id)
+    }
+
+    #[test]
+    fn player_whiff_cooldown_matches_config() {
+        let mut game = Game::new(960.0, 640.0);
+        game.config.warrior_cooldown = 0.9;
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        // No enemies anywhere — guaranteed whiff. Rate fairness: a whiff must
+        // charge the same (config-tuned) cooldown as a hit.
+        assert!(!game.player_attack());
+        assert_eq!(game.player_unit().unwrap().attack_cooldown, 0.9);
     }
 
     #[test]

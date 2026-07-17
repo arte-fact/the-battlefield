@@ -81,7 +81,7 @@ Seven named capture zones are arranged in a diamond layout across the battlefiel
 
 Zone states: **Neutral → Contested → Capturing(faction) → Controlled(faction)**.
 
-**Victory:** a faction that controls all seven zones simultaneously starts a 60-second victory timer. If it holds them all for the full duration, it wins by domination. Losing any zone resets the timer.
+**Victory:** a faction that controls all seven zones simultaneously starts a 60-second victory timer. If it holds them all for the full duration, it wins by domination. Losing any zone resets the timer. **Sudden death:** once both manpower pools are exhausted, a strict zone majority held for the same duration wins instead.
 
 **Manpower and bleed (Conquest attrition):** each faction starts with a finite manpower pool (default 300) -- the reinforcements it can still field. Every reinforcement spawn costs 1; the starting armies are free. Controlling a majority of zones (4+ of 7) bleeds the enemy pool over time, scaling with each zone at or above the threshold. A faction whose pool is empty and whose army is destroyed loses by annihilation -- so any sustained advantage ends the battle eventually, and every kill is a manpower point the enemy must spend to replace.
 
@@ -103,7 +103,7 @@ Stats live in `GameConfig` and can be rebalanced at runtime. Damage is `max(1, A
 You play a Blue Warrior in real time:
 
 - **Movement** -- continuous 360° movement via virtual joystick (touch), WASD/arrows (keyboard), or gamepad stick.
-- **Attack** -- an explicit attack action (button / Space / gamepad) that hits all enemies in a 180° cone in your facing direction. No auto-attack.
+- **Attack** -- an explicit attack action (button / Space / gamepad) that hits all enemies in a 180° cone in your facing direction, with knockback. No auto-attack. **You fight exactly like other soldiers**: AI melee units use the same cone swing, knockback, and reach (1.5 tiles), at the same rate.
 - **Fog of war** -- you see a personal field-of-view radius; the rest of the map is fogged (FOV recomputed every third frame for performance).
 
 ### Authority
@@ -120,21 +120,27 @@ Authority is a 0-100 reputation score, displayed as a rank:
 
 It changes in response to events **witnessed within your reputation FOV** -- kills and assists you land, zones captured while you're present (positive); allied deaths nearby, zones lost (negative). Authority determines three things, each scaling linearly with the score:
 
-1. **Follow chance** -- the probability an allied unit accepts your order.
-2. **Command radius** -- how far around you orders reach.
-3. **Max followers** -- how many units can be under your command at once.
+1. **Recruitment chance** -- the probability an allied unit joins your retinue.
+2. **Command radius** -- how far around you recruitment reaches.
+3. **Max followers** -- how many soldiers your retinue can hold.
+
+### The Retinue (auto-follow)
+
+Soldiers join you on their own. Every second, allied units inside your command radius with no current assignment roll a deterministic acceptance check (same unit + same authority level = same answer, so there is nothing to reroll); accepters become **sticky followers** up to your follower cap. Failures are silent. Followers stay yours until they die, you die, you Dismiss them, or they lose contact (left more than 15 tiles behind for a few seconds).
+
+The pull is always on -- walk past a zone your side is defending and you will vacuum its garrison into your wake. Managing where you walk *is* a tactical decision, and delivering your retinue somewhere and dismissing it is a strategic one (troop ferrying).
 
 ### Orders
 
-You can issue three orders to allied units within your command radius:
+Charge and Defend command **your retinue** -- these soldiers already chose you, so they always obey, subject to commitment:
 
-| Order | Key | Effect | Expires |
-|-------|:---:|--------|---------|
-| Follow | J | Units escort you at close distance | after a timer |
-| Charge | L | Units rush a point ahead of you, then transition to Follow | on arrival or timeout |
-| Defend | K | Units form a layered line behind an anchor (Warriors front, Lancers, Archers, Monks behind) | after a timer |
+| Order | Key | Effect | Ends |
+|-------|:---:|--------|------|
+| Charge | J | Followers rush a point ahead of you, then revert to Follow | on arrival or timeout |
+| Defend | K | Followers form a layered line at your position (Warriors front, Lancers, Archers, Monks behind), then revert to Follow | after a timer |
+| Dismiss | L (hold on touch, ~0.4s) | Releases the whole retinue back to the army; each unit refuses re-recruitment for 12s | -- |
 
-Each unit rolls a deterministic per-unit acceptance check against your follow chance -- the same unit always makes the same decision at the same authority level, so spamming the button doesn't reroll. Ordered units show a marker with a progress bar indicating time remaining. Units on orders keep fighting enemies within a leash distance of their assignment, and always defend themselves in melee.
+**Commitment is tied to action timing, per soldier**: a unit sprinting a charge or walking into its defend slot cannot be re-tasked until the move completes; a follower at your side or a defender posted in line obeys instantly. No artificial cooldowns -- pacing comes from real movement time. Timed orders that expire revert the unit to Follow (it stays yours and returns). Ordered units show a marker (progress bar = remaining time; full bar = Follow). Units on orders fight enemies within a leash of their assignment and always defend themselves in melee.
 
 ## Army AI
 
@@ -159,21 +165,23 @@ Villages have wandering **pawns** that walk to trees, chop them down, and idle -
 
 ## Controls
 
-Touch is the primary input; keyboard/mouse and gamepad are supported.
+**Arcade cabinet format**: one joystick + a standard 4-button layout. Touch is the primary input; keyboard/mouse and gamepad map to the same scheme.
 
 | Input | Touch | Keyboard / Mouse | Gamepad |
 |-------|-------|------------------|---------|
-| Move | Virtual joystick | WASD / arrows | Left stick |
-| Attack | Attack button | Space | Face button |
-| Orders | Follow / Charge / Defend buttons | J / L / K | Buttons |
-| Zoom | Pinch | Mouse wheel | -- |
+| Move | Virtual joystick | WASD / arrows | Left stick / D-pad |
+| Attack | Attack button (held = AI attack rate) | Space | South button |
+| Charge | C button | J | West button |
+| Defend | D button | K | North button |
+| Dismiss | X button (hold, fill ring) | L | East button |
+| Zoom | Pinch | Mouse wheel | Right trigger |
 | Camera | Follows player | Follows player | Follows player |
 
 ## User Interface
 
-- **HUD** -- player health, authority rank, zone ownership summary, and per-faction manpower counters (tinted amber while a pool is bleeding).
+- **HUD** -- player health, authority rank, retinue counter (current/cap), zone ownership summary, and per-faction manpower counters (tinted amber while a pool is bleeding).
 - **Minimap** -- top-right corner (240px), showing terrain, zones, and unit positions in faction colors.
-- **Order markers** -- floating marker with progress bar above units currently under your command.
+- **Order markers** -- floating marker with progress bar above units currently under your command; a command-radius pulse ripples out when an order lands.
 - **Floating text** -- authority gains/losses pop above the player.
 - **Menus** -- main menu, death, victory, and defeat screens built from the Tiny Swords UI kit.
 - Mobile-first: fullscreen toggle, DPR-aware canvas scaling, touch targets sized for thumbs.

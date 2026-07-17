@@ -103,6 +103,48 @@ impl Game {
         }
     }
 
+    pub(super) fn attack_reach(&self, idx: usize) -> f32 {
+        (self.units[idx].stats.range as f32 * TILE_SIZE).max(MELEE_RANGE)
+    }
+
+    /// Cone attack hitting every enemy in the 180° arc, with knockback.
+    /// Returns the number of enemies hit.
+    pub(super) fn swing_in_cone(&mut self, attacker_idx: usize, aim_dir: f32) -> usize {
+        let (ax, ay, faction, attacker_id) = {
+            let u = &self.units[attacker_idx];
+            (u.x, u.y, u.faction, u.id)
+        };
+        let reach = self.attack_reach(attacker_idx);
+        let targets = self.enemies_in_cone(ax, ay, faction, reach, aim_dir, ATTACK_CONE_HALF_ANGLE);
+        for &enemy_id in &targets {
+            self.execute_attack(attacker_id, enemy_id, None);
+            if let Some(idx) = self.units.iter().position(|u| u.id == enemy_id) {
+                self.apply_knockback(idx, ax, ay);
+            }
+        }
+        targets.len()
+    }
+
+    /// Melee kinds swing in a cone; other kinds attack the single target.
+    pub(super) fn attack_target(
+        &mut self,
+        attacker_idx: usize,
+        ex: f32,
+        ey: f32,
+        enemy_id: UnitId,
+    ) {
+        match self.units[attacker_idx].kind {
+            UnitKind::Warrior | UnitKind::Lancer => {
+                let aim = (ey - self.units[attacker_idx].y).atan2(ex - self.units[attacker_idx].x);
+                self.swing_in_cone(attacker_idx, aim);
+            }
+            _ => {
+                let attacker_id = self.units[attacker_idx].id;
+                self.execute_attack(attacker_id, enemy_id, None);
+            }
+        }
+    }
+
     /// Push a unit away from a source position. Respects terrain collision.
     pub(super) fn apply_knockback(&mut self, target_idx: usize, from_x: f32, from_y: f32) {
         let tx = self.units[target_idx].x;
@@ -265,6 +307,54 @@ mod tests {
 
     fn find_unit(game: &Game, id: UnitId) -> Option<&Unit> {
         game.units.iter().find(|u| u.id == id)
+    }
+
+    #[test]
+    fn ai_swing_cleaves_all_enemies_in_cone_with_knockback() {
+        let mut game = Game::new(960.0, 640.0);
+        let attacker = game.spawn_unit(UnitKind::Warrior, Faction::Blue, 20, 20, false);
+        let e1 = game.spawn_unit(UnitKind::Warrior, Faction::Red, 21, 20, false);
+        let e2 = game.spawn_unit(UnitKind::Warrior, Faction::Red, 21, 21, false);
+        let e1_x = find_unit(&game, e1).unwrap().x;
+
+        let idx = game.units.iter().position(|u| u.id == attacker).unwrap();
+        let hits = game.swing_in_cone(idx, 0.0);
+
+        assert_eq!(hits, 2);
+        let max_hp = UnitKind::Warrior.base_stats().max_hp;
+        assert!(find_unit(&game, e1).unwrap().hp < max_hp);
+        assert!(find_unit(&game, e2).unwrap().hp < max_hp);
+        assert!(find_unit(&game, e1).unwrap().x > e1_x);
+    }
+
+    #[test]
+    fn player_and_ai_warrior_share_attack_reach() {
+        let mut game = Game::new(960.0, 640.0);
+        let player = game.spawn_unit(UnitKind::Warrior, Faction::Blue, 20, 20, true);
+        let ai = game.spawn_unit(UnitKind::Warrior, Faction::Blue, 30, 30, false);
+        let p_idx = game.units.iter().position(|u| u.id == player).unwrap();
+        let ai_idx = game.units.iter().position(|u| u.id == ai).unwrap();
+        assert_eq!(game.attack_reach(p_idx), game.attack_reach(ai_idx));
+        assert_eq!(game.attack_reach(p_idx), MELEE_RANGE);
+    }
+
+    #[test]
+    fn player_attack_uses_shared_reach() {
+        let mut game = Game::new(960.0, 640.0);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 20, 20, true);
+        let enemy = game.spawn_unit(UnitKind::Warrior, Faction::Red, 20, 20, false);
+        // 1.3 tiles away: beyond the old 1-tile player reach, inside MELEE_RANGE
+        let (px, py) = {
+            let p = game.player_unit().unwrap();
+            (p.x, p.y)
+        };
+        {
+            let e = game.units.iter_mut().find(|u| u.id == enemy).unwrap();
+            e.x = px + TILE_SIZE * 1.3;
+            e.y = py;
+        }
+        game.player_aim_dir = 0.0;
+        assert!(game.player_attack());
     }
 
     #[test]

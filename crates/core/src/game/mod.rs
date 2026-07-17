@@ -21,7 +21,8 @@ use crate::pawn::Pawn;
 use crate::player_input::PlayerInput;
 use crate::sheep::Sheep;
 use crate::unit::{
-    Facing, Faction, OrderKind, Unit, UnitAnim, UnitId, UnitKind, MELEE_RANGE, UNIT_RADIUS,
+    Facing, Faction, OrderKind, OrderOutcome, OrderRequest, Unit, UnitAnim, UnitId, UnitKind,
+    MELEE_RANGE, UNIT_RADIUS,
 };
 use crate::zone::{ZoneManager, ZoneState};
 
@@ -140,6 +141,8 @@ pub struct Game {
     pub macro_objectives: [Vec<(f32, f32, f32)>; 2],
     /// Timer for periodic macro objective recomputation.
     objective_timer: f32,
+    /// Timer for periodic auto-recruitment passes.
+    recruit_timer: f32,
     /// Alternates each frame to stagger Blue/Red flow field updates.
     flow_field_turn: bool,
     /// Per-frame A* pathfind budget (reset each tick, decremented per find_path call).
@@ -150,6 +153,10 @@ pub struct Game {
     pub config: GameConfig,
     /// Floating authority change indicators.
     pub floating_texts: Vec<FloatingText>,
+    /// Command-radius pulse on order issue (seconds remaining).
+    pub order_pulse: f32,
+    /// Radius of the active order pulse in world pixels.
+    pub order_pulse_radius: f32,
     /// Per-frame spatial hash of alive units (rebuilt in tick / update).
     pub(crate) spatial: UnitSpatialGrid,
     /// Frame counter for throttling expensive per-frame operations (e.g. FOV).
@@ -197,11 +204,14 @@ impl Game {
             red_flow: FactionFlowState::new(),
             macro_objectives: [Vec::new(), Vec::new()],
             objective_timer: 0.0,
+            recruit_timer: 0.0,
             flow_field_turn: false,
             astar_budget: 0,
             authority: 0.0,
             config,
             floating_texts: Vec::new(),
+            order_pulse: 0.0,
+            order_pulse_radius: 0.0,
             spatial: UnitSpatialGrid::new(),
             fov_frame_counter: 0,
         }
@@ -281,6 +291,7 @@ impl Game {
             ft.y -= 30.0 * dt_f; // drift upward
         }
         self.floating_texts.retain(|ft| ft.remaining > 0.0);
+        self.order_pulse = (self.order_pulse - dt_f).max(0.0);
 
         for sheep in &mut self.sheep {
             sheep.animation.update(dt);

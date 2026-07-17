@@ -163,6 +163,17 @@ pub(super) fn draw_player_overlay(canvas: &mut Canvas<Window>, game: &Game, cam:
     let radius = (24.0 * cam.zoom) as i32;
     canvas.set_draw_color(Color::RGBA(255, 255, 51, 50));
     draw_filled_circle(canvas, px, py, radius);
+
+    // Command-radius pulse (expanding ring when an order is issued)
+    if game.order_pulse > 0.0 {
+        let alpha = game.order_pulse / 0.6;
+        let progress = 1.0 - alpha;
+        let ring_r = (game.order_pulse_radius * progress * cam.zoom) as i32;
+        if ring_r > 0 {
+            canvas.set_draw_color(Color::RGBA(230, 217, 102, (alpha * 200.0) as u8));
+            super::draw_helpers::stroke_circle(canvas, px, py, ring_r);
+        }
+    }
 }
 
 fn draw_filled_circle(canvas: &mut Canvas<Window>, cx: i32, cy: i32, radius: i32) {
@@ -681,14 +692,17 @@ pub(super) fn draw_unit_overlays(
         canvas.set_draw_color(Color::RGB(hr, hg, hb));
         let _ = canvas.fill_rect(Rect::new(bar_x, bar_y, fill_w, bar_h as u32));
 
-        // Order progress bar — shows active order type + remaining time
+        // Order progress bar — remaining time for timed orders, full for Follow
         if let Some(ref order) = unit.order {
-            let max_dur = match order {
-                OrderKind::Follow => game.config.order_follow_duration,
-                OrderKind::Charge { .. } => game.config.order_charge_timeout,
-                OrderKind::Defend { .. } => game.config.order_defend_duration,
+            let remaining = match order {
+                OrderKind::Follow => 1.0,
+                OrderKind::Charge { .. } => {
+                    (unit.order_timer / game.config.order_charge_timeout).clamp(0.0, 1.0)
+                }
+                OrderKind::Defend { .. } => {
+                    (unit.order_timer / game.config.order_defend_duration).clamp(0.0, 1.0)
+                }
             };
-            let remaining = (unit.order_timer / max_dur).clamp(0.0, 1.0);
 
             let ob_h = (3.0 * zoom).max(1.0) as i32;
             let ob_y = bar_y - ob_h - (1.0 * zoom) as i32;

@@ -209,6 +209,7 @@ impl GameLoop {
         // Update touch input with current canvas dimensions and layout
         self.input_state.set_canvas_size(cur_w as f32, cur_h as f32);
         self.input_state
+            .touch
             .update_layout(cur_w as f32, cur_h as f32, self.touch_dpr);
 
         // Screen transition logic
@@ -249,26 +250,27 @@ impl GameLoop {
                 }
 
                 // Touch: pinch-to-zoom
-                let pinch = self.input_state.take_pinch_zoom();
+                let pinch = self.input_state.touch.take_pinch_zoom();
                 if pinch.abs() > f32::EPSILON {
                     self.game.camera.zoom_by(pinch);
                 }
 
                 // Touch: two-finger pan
-                let (pan_tx, pan_ty) = self.input_state.take_touch_pan();
+                let (pan_tx, pan_ty) = self.input_state.touch.take_touch_pan();
                 if pan_tx.abs() > f32::EPSILON || pan_ty.abs() > f32::EPSILON {
                     self.game.camera.x -= pan_tx / self.game.camera.zoom;
                     self.game.camera.y -= pan_ty / self.game.camera.zoom;
                 }
 
                 // Touch: single-finger camera drag
-                let (drag_dx, drag_dy) = self.input_state.take_camera_drag();
+                let (drag_dx, drag_dy) = self.input_state.touch.take_camera_drag();
                 if drag_dx.abs() > f32::EPSILON || drag_dy.abs() > f32::EPSILON {
                     self.game.camera.x -= drag_dx / self.game.camera.zoom;
                     self.game.camera.y -= drag_dy / self.game.camera.zoom;
                 }
 
                 // Build input and tick game
+                self.input_state.touch.tick(dt as f32);
                 let player_input = self.input_state.build_player_input(&keyboard);
 
                 if self.game.winner.is_none() {
@@ -283,20 +285,8 @@ impl GameLoop {
                             let _ = gc.set_rumble(0x4000, 0x8000, 80);
                         }
                     }
-                    if player_input.order_follow {
-                        self.game.issue_order("follow");
-                        if let Some(ref mut gc) = self.active_controller {
-                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
-                        }
-                    }
-                    if player_input.order_charge {
-                        self.game.issue_order("charge");
-                        if let Some(ref mut gc) = self.active_controller {
-                            let _ = gc.set_rumble(0x2000, 0x4000, 50);
-                        }
-                    }
-                    if player_input.order_defend {
-                        self.game.issue_order("defend");
+                    if let Some(req) = player_input.order {
+                        self.game.issue_order(req);
                         if let Some(ref mut gc) = self.active_controller {
                             let _ = gc.set_rumble(0x2000, 0x4000, 50);
                         }

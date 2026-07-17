@@ -341,7 +341,37 @@ impl ZoneManager {
 
     /// Update victory timer. Returns Some(faction) if a faction has won.
     pub fn tick_victory(&mut self, dt: f32, victory_hold_time: f32) -> Option<Faction> {
-        match self.all_zones_controlled_by() {
+        let leader = self.all_zones_controlled_by();
+        self.advance_victory(leader, dt, victory_hold_time)
+    }
+
+    /// Sudden-death victory (both manpower pools exhausted): a strict zone
+    /// majority held for the hold time wins.
+    pub fn tick_victory_majority(&mut self, dt: f32, victory_hold_time: f32) -> Option<Faction> {
+        let blue = self.controlled_count(Faction::Blue);
+        let red = self.controlled_count(Faction::Red);
+        let leader = match blue.cmp(&red) {
+            std::cmp::Ordering::Greater => Some(Faction::Blue),
+            std::cmp::Ordering::Less => Some(Faction::Red),
+            std::cmp::Ordering::Equal => None,
+        };
+        self.advance_victory(leader, dt, victory_hold_time)
+    }
+
+    pub fn controlled_count(&self, faction: Faction) -> usize {
+        self.zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(faction))
+            .count()
+    }
+
+    fn advance_victory(
+        &mut self,
+        leader: Option<Faction>,
+        dt: f32,
+        victory_hold_time: f32,
+    ) -> Option<Faction> {
+        match leader {
             Some(faction) => {
                 if self.victory_candidate == Some(faction) {
                     self.victory_timer += dt;

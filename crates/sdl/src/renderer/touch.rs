@@ -1,3 +1,5 @@
+use battlefield_core::unit::OrderRequest;
+
 use crate::input::InputState;
 use sdl2::pixels::Color;
 use sdl2::render::{Canvas, TextureCreator};
@@ -60,18 +62,19 @@ pub(super) fn draw_touch_controls(
     text_renderer: &TextRenderer,
     dpi_scale: f64,
 ) {
-    if !input.is_touch_device {
+    let touch = &input.touch;
+    if !touch.is_touch_device {
         return;
     }
 
     let dpr = dpi_scale;
 
     // Ghost joystick hint (before first use)
-    if !input.has_used_joystick && !input.joystick.active {
+    if !touch.has_used_joystick && !touch.joystick.active {
         let ghost_x = (100.0 * dpr) as i32;
         let ghost_y =
             canvas.output_size().map(|(_, h)| h).unwrap_or(640) as i32 - (120.0 * dpr) as i32;
-        let radius = input.joystick.max_radius as i32;
+        let radius = touch.joystick.max_radius as i32;
 
         canvas.set_draw_color(Color::RGBA(255, 255, 255, 38));
         fill_circle(canvas, ghost_x, ghost_y, radius);
@@ -91,10 +94,10 @@ pub(super) fn draw_touch_controls(
     }
 
     // Virtual joystick (when active)
-    if input.joystick.active {
-        let cx = input.joystick.center_x as i32;
-        let cy = input.joystick.center_y as i32;
-        let base_r = input.joystick.max_radius as i32;
+    if touch.joystick.active {
+        let cx = touch.joystick.center_x as i32;
+        let cy = touch.joystick.center_y as i32;
+        let base_r = touch.joystick.max_radius as i32;
 
         // Base circle
         canvas.set_draw_color(Color::RGBA(255, 255, 255, 64));
@@ -102,8 +105,8 @@ pub(super) fn draw_touch_controls(
 
         // Stick knob
         let knob_r = (22.0 * dpr) as i32;
-        let kx = input.joystick.stick_x as i32;
-        let ky = input.joystick.stick_y as i32;
+        let kx = touch.joystick.stick_x as i32;
+        let ky = touch.joystick.stick_y as i32;
         canvas.set_draw_color(Color::RGBA(255, 255, 255, 153));
         fill_circle(canvas, kx, ky, knob_r);
         canvas.set_draw_color(Color::RGBA(255, 255, 255, 128));
@@ -115,22 +118,22 @@ pub(super) fn draw_touch_controls(
         canvas,
         tc,
         text_renderer,
-        input.attack_button.center_x as i32,
-        input.attack_button.center_y as i32,
-        input.attack_button.radius as i32,
+        touch.attack.center_x as i32,
+        touch.attack.center_y as i32,
+        touch.attack.radius as i32,
         Color::RGBA(220, 50, 50, 153),
         "ATK",
-        input.attack_button.pressed,
+        touch.attack.pressed,
         dpr,
     );
 
-    // Order buttons (Follow, Charge, Defend — no separate Recruit)
-    let order_btns: [(&crate::input::ActionButton, &str, Color); 3] = [
-        (&input.order_follow_btn, "F", Color::RGBA(160, 80, 200, 128)),
-        (&input.order_charge_btn, "C", Color::RGBA(220, 50, 50, 128)),
-        (&input.order_defend_btn, "V", Color::RGBA(50, 120, 200, 128)),
+    let order_btns = [
+        (&touch.charge, OrderRequest::Charge),
+        (&touch.defend, OrderRequest::Defend),
+        (&touch.dismiss, OrderRequest::Dismiss),
     ];
-    for (btn, label, color) in &order_btns {
+    for (btn, req) in order_btns {
+        let (r, g, b) = req.color();
         draw_touch_button(
             canvas,
             tc,
@@ -138,10 +141,20 @@ pub(super) fn draw_touch_controls(
             btn.center_x as i32,
             btn.center_y as i32,
             btn.radius as i32,
-            *color,
-            label,
+            Color::RGBA(r, g, b, 128),
+            req.short_label(),
             btn.pressed,
             dpr,
         );
+        if req == OrderRequest::Dismiss && btn.pressed {
+            let frac = touch.dismiss_hold_frac();
+            canvas.set_draw_color(Color::RGBA(255, 255, 255, 115));
+            fill_circle(
+                canvas,
+                btn.center_x as i32,
+                btn.center_y as i32,
+                (btn.radius * frac) as i32,
+            );
+        }
     }
 }

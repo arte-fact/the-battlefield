@@ -96,6 +96,20 @@ pub struct GameConfig {
     pub zone_radius: u32,
     pub victory_hold_time: f32,
 
+    // ── Retinue / Recruitment ───────────────────────────────────────
+    /// Seconds between auto-recruitment passes.
+    #[serde(default = "default_recruit_interval")]
+    pub recruit_interval: f32,
+    /// Distance (tiles) beyond which a follower starts losing contact.
+    #[serde(default = "default_recruit_leash_tiles")]
+    pub recruit_leash_tiles: f32,
+    /// Seconds out of contact before a follower is released to the army.
+    #[serde(default = "default_recruit_lost_contact_secs")]
+    pub recruit_lost_contact_secs: f32,
+    /// Seconds a dismissed unit refuses re-recruitment.
+    #[serde(default = "default_re_recruit_cooldown_secs")]
+    pub re_recruit_cooldown_secs: f32,
+
     // ── Manpower / Conquest ─────────────────────────────────────────
     /// Reinforcements each faction can field over the battle (spawns cost 1).
     #[serde(default = "default_manpower_start")]
@@ -106,6 +120,22 @@ pub struct GameConfig {
     /// Enemy manpower drained per second per zone at or above the threshold.
     #[serde(default = "default_bleed_per_extra_zone")]
     pub bleed_per_extra_zone: f32,
+}
+
+fn default_recruit_interval() -> f32 {
+    1.0
+}
+
+fn default_recruit_leash_tiles() -> f32 {
+    15.0
+}
+
+fn default_recruit_lost_contact_secs() -> f32 {
+    3.0
+}
+
+fn default_re_recruit_cooldown_secs() -> f32 {
+    12.0
 }
 
 fn default_manpower_start() -> f32 {
@@ -130,7 +160,7 @@ impl Default for GameConfig {
             objective_interval: 2.0,
             astar_budget_per_tick: 3,
             ai_vision_radius: 10,
-            knockback_dist_tiles: 0.7,
+            knockback_dist_tiles: 0.2,
             astar_search_limit: 40,
             repath_cooldown_base: 0.4,
             repath_cooldown_jitter: 0.17,
@@ -214,6 +244,12 @@ impl Default for GameConfig {
             max_units_per_faction: 35,
             zone_radius: 6,
             victory_hold_time: 60.0,
+
+            // Retinue / Recruitment
+            recruit_interval: default_recruit_interval(),
+            recruit_leash_tiles: default_recruit_leash_tiles(),
+            recruit_lost_contact_secs: default_recruit_lost_contact_secs(),
+            re_recruit_cooldown_secs: default_re_recruit_cooldown_secs(),
 
             // Manpower / Conquest
             manpower_start: default_manpower_start(),

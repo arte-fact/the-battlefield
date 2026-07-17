@@ -124,10 +124,14 @@ impl Game {
         }
 
         if self.winner.is_none() {
-            if let Some(faction) = self
-                .zone_manager
-                .tick_victory(dt, self.config.victory_hold_time)
-            {
+            let hold = self.config.victory_hold_time;
+            let exhausted = self.manpower[0] <= 0.0 && self.manpower[1] <= 0.0;
+            let won = if exhausted {
+                self.zone_manager.tick_victory_majority(dt, hold)
+            } else {
+                self.zone_manager.tick_victory(dt, hold)
+            };
+            if let Some(faction) = won {
                 self.winner = Some(faction);
             }
         }
@@ -668,6 +672,38 @@ mod tests {
         }
         game.tick_zones(0.1);
         assert_eq!(game.winner, None);
+    }
+
+    #[test]
+    fn sudden_death_majority_wins_when_both_pools_empty() {
+        let mut game = game_with_three_zones();
+        game.manpower = [0.0, 0.0];
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 100, 100, false);
+        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
+        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
+        game.zone_manager.zones[2].state = ZoneState::Controlled(Faction::Red);
+
+        game.tick_zones(game.config.victory_hold_time * 0.5);
+        assert_eq!(game.winner, None);
+        game.tick_zones(game.config.victory_hold_time * 0.6);
+        assert_eq!(game.winner, Some(Faction::Blue));
+    }
+
+    #[test]
+    fn no_sudden_death_while_a_pool_remains() {
+        let mut game = game_with_three_zones();
+        game.manpower = [10.0, 0.0];
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 100, 100, false);
+        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
+        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
+
+        game.tick_zones(game.config.victory_hold_time * 2.0);
+        assert_eq!(
+            game.winner, None,
+            "majority is not enough outside sudden death"
+        );
     }
 
     #[test]

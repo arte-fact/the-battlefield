@@ -15,7 +15,7 @@ use battlefield_core::grid::{self, Decoration, TileKind, TILE_SIZE};
 use battlefield_core::render_util;
 use battlefield_core::rendering::{DrawBackend, SpriteInfo, SpriteKey};
 use battlefield_core::ui::GameScreen;
-use battlefield_core::unit::{Faction, OrderKind};
+use battlefield_core::unit::{Faction, OrderKind, OrderRequest};
 use effects_batch::EffectsBatch;
 use primitive_batch::PrimitiveBatch;
 use sprite_batch::SpriteBatch;
@@ -923,14 +923,17 @@ fn draw_unit_overlays(
             [hr as f32 / 255.0, hg as f32 / 255.0, hb as f32 / 255.0, 1.0],
         );
 
-        // Order progress bar — shows active order type + remaining time
+        // Order progress bar — remaining time for timed orders, full for Follow
         if let Some(ref order) = u.order {
-            let max_dur = match order {
-                OrderKind::Follow => game.config.order_follow_duration,
-                OrderKind::Charge { .. } => game.config.order_charge_timeout,
-                OrderKind::Defend { .. } => game.config.order_defend_duration,
+            let remaining = match order {
+                OrderKind::Follow => 1.0,
+                OrderKind::Charge { .. } => {
+                    (u.order_timer / game.config.order_charge_timeout).clamp(0.0, 1.0)
+                }
+                OrderKind::Defend { .. } => {
+                    (u.order_timer / game.config.order_defend_duration).clamp(0.0, 1.0)
+                }
             };
-            let remaining = (u.order_timer / max_dur).clamp(0.0, 1.0);
 
             let ob_w = 36.0_f32;
             let ob_h = 3.0_f32;
@@ -1004,31 +1007,6 @@ fn draw_unit_overlays(
             assets
                 .text
                 .draw_text_centered(sprites, gpu, "!", cx, cy, font_size, 255, 255, 255, a);
-        }
-
-        // Rejection "?" (shadowed text, reddish)
-        if u.reject_flash > 0.0 {
-            let alpha = (u.reject_flash / game.config.order_flash_duration).min(1.0);
-            let font_size = 33.0_f32;
-            let cx = u.x;
-            let cy = u.y - ts;
-            let a = (alpha * 255.0) as u8;
-            let off = 1.5_f32;
-            assets.text.draw_text_centered(
-                sprites,
-                gpu,
-                "?",
-                cx + off,
-                cy + off,
-                font_size,
-                0,
-                0,
-                0,
-                a,
-            );
-            assets
-                .text
-                .draw_text_centered(sprites, gpu, "?", cx, cy, font_size, 255, 255, 255, a);
         }
     }
 }
@@ -1120,7 +1098,7 @@ fn draw_hud(
     bg: &mut SpriteBatch,
     prim: &mut PrimitiveBatch,
     sprites: &mut SpriteBatch,
-    _gpu: &GpuContext,
+    gpu: &GpuContext,
     game: &Game,
     assets: &mut Assets,
     vw: f32,
@@ -1214,6 +1192,25 @@ fn draw_hud(
                 );
             }
         }
+
+        // Follower count next to the authority bar
+        let followers = format!(
+            "{}/{}",
+            game.follower_count(),
+            game.authority_max_followers()
+        );
+        assets.text.draw_text_centered(
+            sprites,
+            gpu,
+            &followers,
+            bar_x + bar_w + 28.0,
+            auth_y + bar_h * 0.5,
+            18.0,
+            255,
+            255,
+            255,
+            230,
+        );
     }
 
     // Zone control pips at top-center
@@ -1295,7 +1292,7 @@ fn draw_hud(
             let label = format!("{}", game.manpower[fi] as u32);
             assets
                 .text
-                .draw_text_centered(sprites, _gpu, &label, x, counter_y, 20.0, r, g, b, 255);
+                .draw_text_centered(sprites, gpu, &label, x, counter_y, 20.0, r, g, b, 255);
         }
     }
 }
@@ -1465,17 +1462,18 @@ fn draw_touch_controls(
     vh: f32,
     dpi_scale: f64,
 ) {
-    if !input.is_touch_device {
+    let touch = &input.touch;
+    if !touch.is_touch_device {
         return;
     }
 
     let dpr = dpi_scale as f32;
 
     // Ghost joystick hint (before first use)
-    if !input.has_used_joystick && !input.joystick.active {
+    if !touch.has_used_joystick && !touch.joystick.active {
         let ghost_x = 100.0 * dpr;
         let ghost_y = vh - 120.0 * dpr;
-        let radius = input.joystick.max_radius;
+        let radius = touch.joystick.max_radius;
         prim.fill_circle(ghost_x, ghost_y, radius, [1.0, 1.0, 1.0, 0.15]);
         prim.stroke_circle(ghost_x, ghost_y, radius, 1.0, [1.0, 1.0, 1.0, 0.2]);
         let font_size = 18.0 * dpr;
@@ -1485,21 +1483,21 @@ fn draw_touch_controls(
     }
 
     // Virtual joystick
-    if input.joystick.active {
-        let cx = input.joystick.center_x;
-        let cy = input.joystick.center_y;
-        let base_r = input.joystick.max_radius;
+    if touch.joystick.active {
+        let cx = touch.joystick.center_x;
+        let cy = touch.joystick.center_y;
+        let base_r = touch.joystick.max_radius;
         prim.fill_circle(cx, cy, base_r, [1.0, 1.0, 1.0, 0.25]);
         let knob_r = 22.0;
         prim.fill_circle(
-            input.joystick.stick_x,
-            input.joystick.stick_y,
+            touch.joystick.stick_x,
+            touch.joystick.stick_y,
             knob_r,
             [1.0, 1.0, 1.0, 0.6],
         );
         prim.stroke_circle(
-            input.joystick.stick_x,
-            input.joystick.stick_y,
+            touch.joystick.stick_x,
+            touch.joystick.stick_y,
             knob_r,
             1.5,
             [1.0, 1.0, 1.0, 0.5],
@@ -1507,7 +1505,7 @@ fn draw_touch_controls(
     }
 
     // Attack button
-    let atk = &input.attack_button;
+    let atk = &touch.attack;
     let atk_alpha = if atk.pressed { 0.6 } else { 0.35 };
     prim.fill_circle(
         atk.center_x,
@@ -1543,12 +1541,14 @@ fn draw_touch_controls(
     );
 
     // Order buttons
-    let order_btns: [(&crate::input::ActionButton, [f32; 3], &str); 3] = [
-        (&input.order_follow_btn, [0.63, 0.31, 0.78], "F"),
-        (&input.order_charge_btn, [0.86, 0.2, 0.2], "C"),
-        (&input.order_defend_btn, [0.2, 0.47, 0.78], "V"),
+    let order_btns = [
+        (&touch.charge, OrderRequest::Charge),
+        (&touch.defend, OrderRequest::Defend),
+        (&touch.dismiss, OrderRequest::Dismiss),
     ];
-    for (btn, rgb, label) in &order_btns {
+    for (btn, req) in order_btns {
+        let (r, g, b) = req.color();
+        let rgb = [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0];
         let a = if btn.pressed { 0.6 } else { 0.35 };
         prim.fill_circle(
             btn.center_x,
@@ -1562,6 +1562,15 @@ fn draw_touch_controls(
             btn.radius,
             [rgb[0], rgb[1], rgb[2], a],
         );
+        if req == OrderRequest::Dismiss && btn.pressed {
+            let frac = touch.dismiss_hold_frac();
+            prim.fill_circle(
+                btn.center_x,
+                btn.center_y,
+                btn.radius * frac,
+                [1.0, 1.0, 1.0, 0.45],
+            );
+        }
         prim.stroke_circle(
             btn.center_x,
             btn.center_y,
@@ -1573,7 +1582,7 @@ fn draw_touch_controls(
         assets.text.draw_text_centered(
             sprites,
             gpu,
-            label,
+            req.short_label(),
             btn.center_x,
             btn.center_y,
             btn_font,

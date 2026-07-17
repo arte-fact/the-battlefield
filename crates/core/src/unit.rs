@@ -203,6 +203,48 @@ pub enum OrderKind {
     },
 }
 
+/// Player order button/key command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrderRequest {
+    Charge,
+    Defend,
+    Dismiss,
+}
+
+impl OrderRequest {
+    pub fn label(self) -> &'static str {
+        match self {
+            OrderRequest::Charge => "Charge",
+            OrderRequest::Defend => "Defend",
+            OrderRequest::Dismiss => "Dismiss",
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            OrderRequest::Charge => "C",
+            OrderRequest::Defend => "D",
+            OrderRequest::Dismiss => "X",
+        }
+    }
+
+    pub fn color(self) -> (u8, u8, u8) {
+        match self {
+            OrderRequest::Charge => (220, 50, 50),
+            OrderRequest::Defend => (50, 120, 200),
+            OrderRequest::Dismiss => (170, 170, 170),
+        }
+    }
+}
+
+/// Result of a player order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrderOutcome {
+    Issued(usize),
+    NoFollowers,
+    NoPlayer,
+}
+
 /// Duration of the death fade-out animation in seconds.
 pub const DEATH_FADE_DURATION: f32 = 0.3;
 
@@ -241,8 +283,6 @@ pub struct Unit {
     pub order_timer: f32,
     /// Seconds remaining for order flash indicator ("!").
     pub order_flash: f32,
-    /// Seconds remaining for rejection flash indicator ("?").
-    pub reject_flash: f32,
     /// When true, unit idles at rally point instead of marching via flowfield.
     pub rally_hold: bool,
     /// Toggle for alternating between Attack and Attack2 animations (warrior only).
@@ -264,6 +304,12 @@ pub struct Unit {
     pub follow_arrived: bool,
     /// Cached defend formation slot — stable across ally deaths.
     pub defend_slot: Option<u8>,
+    /// True once a defending unit has reached its formation post.
+    pub defend_in_position: bool,
+    /// Seconds this unit refuses re-recruitment after being dismissed.
+    pub re_recruit_cooldown: f32,
+    /// Seconds a follower has been beyond the contact leash from the player.
+    pub lost_contact_timer: f32,
     /// EMA-smoothed separation steering X component.
     pub sep_smooth_x: f32,
     /// EMA-smoothed separation steering Y component.
@@ -303,7 +349,6 @@ impl Unit {
             order: None,
             order_timer: 0.0,
             order_flash: 0.0,
-            reject_flash: 0.0,
             rally_hold: false,
             attack_variant: false,
             assigned_zone: None,
@@ -314,6 +359,9 @@ impl Unit {
             is_backing_off: false,
             follow_arrived: false,
             defend_slot: None,
+            defend_in_position: false,
+            re_recruit_cooldown: 0.0,
+            lost_contact_timer: 0.0,
             sep_smooth_x: 0.0,
             sep_smooth_y: 0.0,
         }
@@ -348,6 +396,16 @@ impl Unit {
         }
     }
 
+    /// Committed while physically executing an order transition (charge in
+    /// flight, walking into a defend slot); steady states are re-taskable.
+    pub fn is_committed(&self) -> bool {
+        match self.order {
+            Some(OrderKind::Charge { .. }) => true,
+            Some(OrderKind::Defend { .. }) => !self.defend_in_position,
+            _ => false,
+        }
+    }
+
     /// Whether this unit is ready to act/attack (alive and attack cooldown expired).
     pub fn can_act(&self) -> bool {
         self.alive && self.attack_cooldown <= 0.0
@@ -362,19 +420,21 @@ impl Unit {
         }
         self.hit_flash = (self.hit_flash - dt).max(0.0);
         self.order_flash = (self.order_flash - dt).max(0.0);
-        self.reject_flash = (self.reject_flash - dt).max(0.0);
         self.zone_lock_timer = (self.zone_lock_timer - dt).max(0.0);
         self.combat_target_timer = (self.combat_target_timer - dt).max(0.0);
         if self.combat_target_timer <= 0.0 {
             self.combat_target = None;
         }
-        if self.order.is_some() {
+        self.re_recruit_cooldown = (self.re_recruit_cooldown - dt).max(0.0);
+        // Follow is sticky; timed orders expire back into Follow.
+        if self.order.is_some() && !matches!(self.order, Some(OrderKind::Follow)) {
             self.order_timer -= dt;
             if self.order_timer <= 0.0 {
-                self.order = None;
+                self.order = Some(OrderKind::Follow);
                 self.order_timer = 0.0;
                 self.follow_arrived = false;
                 self.defend_slot = None;
+                self.defend_in_position = false;
             }
         }
     }

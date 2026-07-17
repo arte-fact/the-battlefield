@@ -143,6 +143,22 @@ pub(super) fn draw_hud(
                 auth_h as u32,
             ));
         }
+
+        // Follower count next to the authority bar
+        let followers = format!(
+            "{}/{}",
+            game.follower_count(),
+            game.authority_max_followers()
+        );
+        assets.text.draw_text_centered(
+            canvas,
+            tc,
+            &followers,
+            (auth_x + auth_w + 28.0) as i32,
+            (auth_y + auth_h * 0.5) as i32,
+            18.0,
+            Color::RGBA(255, 255, 255, 230),
+        );
     }
 
     // Zone control indicators at top-center on paper panel

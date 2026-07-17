@@ -37,10 +37,6 @@ pub struct GameLoop {
 
     last_time: Instant,
     start_time: Instant,
-    /// Remaining seconds for the order-range pulse effect (0 = inactive).
-    order_pulse: f32,
-    /// The command radius captured when the pulse started.
-    order_pulse_radius: f32,
 
     #[cfg(not(target_arch = "wasm32"))]
     gilrs: Option<Gilrs>,
@@ -121,8 +117,6 @@ impl GameLoop {
             touch_dpr: sf as f32,
             last_time: now,
             start_time: now,
-            order_pulse: 0.0,
-            order_pulse_radius: 0.0,
             #[cfg(not(target_arch = "wasm32"))]
             gilrs,
             #[cfg(not(target_arch = "wasm32"))]
@@ -139,8 +133,7 @@ impl GameLoop {
             let sh = self.gpu.surface_config.height as f32;
             self.game.camera.resize(sw, sh);
             self.game.camera.zoom = self.game.camera.ideal_zoom_for_dpi(self.touch_dpr);
-            self.input_state.set_canvas_size(sw, sh);
-            self.input_state.update_layout(sw, sh, self.touch_dpr);
+            self.input_state.touch.update_layout(sw, sh, self.touch_dpr);
             // Scale touch/mouse coords from raw device pixels to surface pixels
             let sx = sw / width as f32;
             let sy = sh / height as f32;
@@ -278,26 +271,27 @@ impl GameLoop {
                 }
 
                 // Touch: pinch-to-zoom
-                let pinch = self.input_state.take_pinch_zoom();
+                let pinch = self.input_state.touch.take_pinch_zoom();
                 if pinch.abs() > f32::EPSILON {
                     self.game.camera.zoom_by(pinch);
                 }
 
                 // Touch: two-finger pan
-                let (pan_tx, pan_ty) = self.input_state.take_touch_pan();
+                let (pan_tx, pan_ty) = self.input_state.touch.take_touch_pan();
                 if pan_tx.abs() > f32::EPSILON || pan_ty.abs() > f32::EPSILON {
                     self.game.camera.x -= pan_tx / self.game.camera.zoom;
                     self.game.camera.y -= pan_ty / self.game.camera.zoom;
                 }
 
                 // Touch: single-finger camera drag
-                let (drag_dx, drag_dy) = self.input_state.take_camera_drag();
+                let (drag_dx, drag_dy) = self.input_state.touch.take_camera_drag();
                 if drag_dx.abs() > f32::EPSILON || drag_dy.abs() > f32::EPSILON {
                     self.game.camera.x -= drag_dx / self.game.camera.zoom;
                     self.game.camera.y -= drag_dy / self.game.camera.zoom;
                 }
 
                 // Build input and tick game
+                self.input_state.touch.tick(dt as f32);
                 let player_input = self.input_state.build_player_input();
 
                 if self.game.winner.is_none() {
@@ -306,27 +300,13 @@ impl GameLoop {
                     if player_input.attack {
                         self.game.player_attack();
                     }
-                    let any_order = player_input.order_follow
-                        || player_input.order_charge
-                        || player_input.order_defend;
-                    if player_input.order_follow {
-                        self.game.issue_order("follow");
-                    }
-                    if player_input.order_charge {
-                        self.game.issue_order("charge");
-                    }
-                    if player_input.order_defend {
-                        self.game.issue_order("defend");
-                    }
-                    if any_order {
-                        self.order_pulse = 0.6;
-                        self.order_pulse_radius = self.game.authority_command_radius();
+                    if let Some(req) = player_input.order {
+                        self.game.issue_order(req);
                     }
                 }
 
                 self.game.process_turn_events();
                 self.game.update(dt);
-                self.order_pulse = (self.order_pulse - dt as f32).max(0.0);
 
                 let world_size = GRID_SIZE as f32 * TILE_SIZE;
                 self.game.camera.clamp_to_world(world_size, world_size);
@@ -388,8 +368,8 @@ impl GameLoop {
             self.input_state.gamepad_connected,
             self.dpi_scale,
             &self.input_state,
-            self.order_pulse,
-            self.order_pulse_radius,
+            self.game.order_pulse,
+            self.game.order_pulse_radius,
         );
 
         // Handle mouse click on overlay buttons

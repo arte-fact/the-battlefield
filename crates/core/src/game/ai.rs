@@ -8,6 +8,13 @@ impl Game {
         // Rebuild spatial hash for O(1) neighbour queries (separation, enemy search)
         self.rebuild_spatial();
 
+        self.release_retinue_if_player_dead();
+        self.recruit_timer += dt;
+        if self.recruit_timer >= self.config.recruit_interval {
+            self.recruit_timer = 0.0;
+            self.recruitment_pass();
+        }
+
         // Recompute macro objectives periodically, staggering factions to avoid
         // both score_all_zones() calls landing on the same frame.
         self.objective_timer += dt;
@@ -87,12 +94,9 @@ impl Game {
         // Rally hold: walk to rally point (base center), then idle. Fight in self-defense.
         if self.units[ai_idx].rally_hold && self.units[ai_idx].order.is_none() {
             // Self-defense
-            if let Some((_ex, _ey, enemy_id, dist)) = self.find_nearest_enemy(ai_idx) {
-                let reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
-                let reach = reach.max(MELEE_RANGE);
-                if self.units[ai_idx].can_act() && dist <= reach {
-                    let ai_id = self.units[ai_idx].id;
-                    self.execute_attack(ai_id, enemy_id, None);
+            if let Some((ex, ey, enemy_id, dist)) = self.find_nearest_enemy(ai_idx) {
+                if self.units[ai_idx].can_act() && dist <= self.attack_reach(ai_idx) {
+                    self.attack_target(ai_idx, ex, ey, enemy_id);
                     return;
                 }
             }
@@ -207,8 +211,6 @@ impl Game {
     /// Real-time melee AI: attack if in range, else close distance to enemy.
     /// If no enemy visible, follow flow field toward zone objective.
     fn ai_melee_tick(&mut self, ai_idx: usize, dt: f32) {
-        let ai_id = self.units[ai_idx].id;
-
         let enemy = match self.resolve_combat_target(ai_idx) {
             Some(e) => e,
             None => {
@@ -218,11 +220,8 @@ impl Game {
         };
         let (ex, ey, enemy_id, dist) = enemy;
 
-        let reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
-        let reach = reach.max(MELEE_RANGE);
-
-        if self.units[ai_idx].can_act() && dist <= reach {
-            self.execute_attack(ai_id, enemy_id, None);
+        if self.units[ai_idx].can_act() && dist <= self.attack_reach(ai_idx) {
+            self.attack_target(ai_idx, ex, ey, enemy_id);
         } else {
             // Enemy visible — close distance
             self.ai_move_toward_continuous(ai_idx, ex, ey, dt);
@@ -275,8 +274,6 @@ impl Game {
     /// Real-time lancer AI: attack at reach distance, maintain standoff.
     /// If no enemy visible, follow flow field toward zone objective.
     fn ai_lancer_tick(&mut self, ai_idx: usize, dt: f32) {
-        let ai_id = self.units[ai_idx].id;
-
         let enemy = match self.resolve_combat_target(ai_idx) {
             Some(e) => e,
             None => {
@@ -287,8 +284,7 @@ impl Game {
         };
         let (ex, ey, enemy_id, dist) = enemy;
 
-        let reach = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
-        let reach = reach.max(MELEE_RANGE);
+        let reach = self.attack_reach(ai_idx);
 
         // Backoff hysteresis: enter at MELEE_RANGE*0.7, exit at that + margin
         let backoff_enter = MELEE_RANGE * 0.7;
@@ -300,7 +296,7 @@ impl Game {
         }
 
         if self.units[ai_idx].can_act() && dist <= reach {
-            self.execute_attack(ai_id, enemy_id, None);
+            self.attack_target(ai_idx, ex, ey, enemy_id);
         } else if self.units[ai_idx].is_backing_off {
             // Enemy inside melee range — back off to use reach advantage
             let ax = self.units[ai_idx].x;

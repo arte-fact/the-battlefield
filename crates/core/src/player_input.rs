@@ -1,3 +1,5 @@
+use crate::unit::OrderRequest;
+
 /// Platform-agnostic player input for one game tick.
 /// The wasm client converts browser events into this.
 /// A multiplayer server would decode it from a binary WebSocket message.
@@ -13,10 +15,6 @@ pub struct PlayerInput {
     /// Whether the aim-lock modifier is held (Ctrl on keyboard, left trigger on gamepad).
     /// When true, aim direction and facing are locked regardless of movement.
     pub aim_lock: bool,
-    /// Recruit nearby units into the follower list.
-    pub recruit: bool,
-    /// Order commands (at most one per frame). Apply to recruited units only.
-    pub order_follow: bool,
-    pub order_charge: bool,
-    pub order_defend: bool,
+    /// Order command, at most one per frame.
+    pub order: Option<OrderRequest>,
 }
