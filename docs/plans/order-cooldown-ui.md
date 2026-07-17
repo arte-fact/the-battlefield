@@ -220,6 +220,15 @@ by annihilation; 99 at 462s; 5 at 722s by sudden-death majority (16
 soldiers beating 35 on zone standing); 7 at 1921s by sudden death. The
 bench prints composition + zone standing for future probes.
 
+## Follow-up
+
+- **Seed 777 performance pathology**: healthy battle state but ~3.2ms
+  avg frame vs ~0.3ms on other seeds (10x). Within 60fps budget on
+  desktop but borderline on Pi-class hardware. Likely terrain-driven
+  (map has a zone that stays neutral at 300s — suspect failed-path A*
+  churn or flow-field recompute on awkward topology). Needs its own
+  profiling pass (`BENCH_SEED=777`, criterion `game_tick`).
+
 ## Decisions taken
 
 - **Vacuum stays** — pulling your own defenders off zones by walking past is
