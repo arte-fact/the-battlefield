@@ -182,18 +182,14 @@ impl GameLoop {
                         self.input_state.gamepad_connected = false;
                     }
                 }
-                EventType::ButtonPressed(btn, _) => {
-                    if self.active_gamepad == Some(id) {
-                        if let Some(gp) = gilrs_to_gp(btn) {
-                            self.input_state.gp_button_down(gp);
-                        }
+                EventType::ButtonPressed(btn, _) if self.active_gamepad == Some(id) => {
+                    if let Some(gp) = gilrs_to_gp(btn) {
+                        self.input_state.gp_button_down(gp);
                     }
                 }
-                EventType::ButtonReleased(btn, _) => {
-                    if self.active_gamepad == Some(id) {
-                        if let Some(gp) = gilrs_to_gp(btn) {
-                            self.input_state.gp_button_up(gp);
-                        }
+                EventType::ButtonReleased(btn, _) if self.active_gamepad == Some(id) => {
+                    if let Some(gp) = gilrs_to_gp(btn) {
+                        self.input_state.gp_button_up(gp);
                     }
                 }
                 _ => {}
