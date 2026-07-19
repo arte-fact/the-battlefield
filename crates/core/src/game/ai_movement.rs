@@ -421,11 +421,12 @@ impl Game {
             self.nearest_objective_pos(ai_idx)
         };
 
-        // Hold position once settled at the assigned zone. Any position
-        // inside the capture circle contests it, so arrival is generous
-        // (0.85r): with village buildings filling the ring band, a deeper
-        // settle point made units shove against walls forever at the
-        // boundary. The outer radius+margin boundary remains only as exit
+        // Hold ground at the assigned zone on a per-unit scattered point
+        // (golden-angle disc keyed by unit id). Settling everyone at the
+        // first ring they crossed crusted the army at the circle edge,
+        // where inbound traffic shoved the idle clump around — the visible
+        // boundary jitter. Distributed hold points fill the zone interior
+        // instead. The outer radius+margin boundary remains only as exit
         // hysteresis against collision jitter.
         if let Some(zi) = assigned_zone {
             let zi_usize = zi as usize;
@@ -435,15 +436,41 @@ impl Game {
                 let dy = uy - zone.center_wy;
                 let dist_sq = dx * dx + dy * dy;
                 let r = zone.radius as f32 * TILE_SIZE;
-                let enter = r * 0.85;
                 let exit = r + self.config.zone_idle_margin_tiles * TILE_SIZE;
-                if dist_sq <= enter * enter {
+
+                let id = self.units[ai_idx].id as f32;
+                let angle = id * 2.39996;
+                let rad_frac = ((id * 0.618034) % 1.0).sqrt();
+                let hold_r = r * (0.2 + 0.6 * rad_frac);
+                let mut hx = zone.center_wx + angle.cos() * hold_r;
+                let mut hy = zone.center_wy + angle.sin() * hold_r;
+                let (hgx, hgy) = grid::world_to_grid(hx, hy);
+                if !self.grid.in_bounds(hgx, hgy) || !self.grid.is_passable(hgx as u32, hgy as u32)
+                {
+                    // Blocked hold point (center tower etc.): hold in place
+                    // once anywhere inside the settle ring.
+                    hx = ux;
+                    hy = uy;
+                    if dist_sq > (r * 0.85) * (r * 0.85) {
+                        hx = zone.center_wx;
+                        hy = zone.center_wy;
+                    }
+                }
+
+                let hd_sq = (ux - hx) * (ux - hx) + (uy - hy) * (uy - hy);
+                if hd_sq <= TILE_SIZE * TILE_SIZE {
                     self.units[ai_idx].zone_arrived = true;
                 } else if dist_sq > exit * exit {
                     self.units[ai_idx].zone_arrived = false;
                 }
                 if self.units[ai_idx].zone_arrived {
                     self.units[ai_idx].set_anim(UnitAnim::Idle);
+                    return;
+                }
+                // Inside the circle but short of the hold point: walk to it
+                // directly instead of following the center-seeking flow.
+                if dist_sq <= r * r {
+                    self.steer_toward(ai_idx, hx, hy, dt);
                     return;
                 }
             }
