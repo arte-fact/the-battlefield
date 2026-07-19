@@ -432,7 +432,27 @@ impl Game {
         // Collect tiles already claimed by pawns (walking to or working)
         let claimed: Vec<(u32, u32)> = pawns.iter().filter_map(|p| p.claimed_target()).collect();
         let mut threats: Vec<(f32, f32)> = Vec::new();
+        let sheep_tiles: Vec<(u32, u32)> = self
+            .sheep
+            .iter()
+            .map(|s| {
+                let (gx, gy) = grid::world_to_grid(s.x, s.y);
+                (gx.max(0) as u32, gy.max(0) as u32)
+            })
+            .collect();
         for p in &mut pawns {
+            if p.job == crate::pawn::PawnJob::Herd {
+                let near_home: Vec<(u32, u32)> = sheep_tiles
+                    .iter()
+                    .copied()
+                    .filter(|&(gx, gy)| {
+                        let (wx, wy) = grid::grid_to_world(gx, gy);
+                        let (dx, dy) = (wx - p.home_x, wy - p.home_y);
+                        dx * dx + dy * dy < (TILE_SIZE * 12.0).powi(2)
+                    })
+                    .collect();
+                p.set_herd_targets(near_home);
+            }
             // A pawn panics near fighting units, or near enemies of its
             // owner (zone owner for village pawns, faction otherwise).
             let owner = match p.zone_id {

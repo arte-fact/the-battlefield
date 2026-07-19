@@ -8,8 +8,7 @@ const PAWN_WALK_SPEED: f32 = 60.0;
 const PAWN_WORK_TIME: f32 = 3.0;
 pub const PAWN_RADIUS: f32 = 20.0;
 const PAWN_ARRIVE_DIST_SQ: f32 = (TILE_SIZE * 0.4) * (TILE_SIZE * 0.4);
-/// How close the pawn walks to the work tile edge before working.
-const PAWN_WORK_DIST: f32 = TILE_SIZE * 0.6;
+
 /// Max A* path length (grid steps).
 const PAWN_PATH_MAX: u32 = 40;
 /// Seconds without progress before giving up and resetting.
@@ -57,6 +56,16 @@ impl PawnJob {
             PawnJob::Herd => 4,
         }
     }
+
+    /// Distance from the work tile center at which working starts.
+    /// Gold stones are impassable, so miners must be allowed to work
+    /// from the far side of their own collision circle.
+    fn work_dist(self) -> f32 {
+        match self {
+            PawnJob::Chop | PawnJob::Herd => TILE_SIZE * 0.6,
+            PawnJob::Mine => TILE_SIZE * 1.1,
+        }
+    }
 }
 
 pub struct Pawn {
@@ -77,6 +86,9 @@ pub struct Pawn {
     pub zone_id: Option<u8>,
     /// Herd pens have no terrain marker; the work tiles come from the spec.
     work_tiles: Vec<(u32, u32)>,
+    /// Live sheep positions near the pen, refreshed each tick; preferred
+    /// over the static pen tiles so herders work beside actual sheep.
+    herd_targets: Vec<(u32, u32)>,
     vel_x: f32,
     vel_y: f32,
     /// A* waypoints (grid coords), computed on state transition.
@@ -127,6 +139,7 @@ impl Pawn {
             carrying: false,
             delivered: false,
             job,
+            herd_targets: Vec::new(),
             zone_id,
             work_tiles,
             vel_x: 0.0,
@@ -270,19 +283,30 @@ impl Pawn {
         self.stuck_timer > STUCK_TIMEOUT
     }
 
+    /// Replace the live sheep targets (world of the game tick, not ours).
+    pub fn set_herd_targets(&mut self, targets: Vec<(u32, u32)>) {
+        self.herd_targets = targets;
+    }
+
     /// Find the nearest unclaimed work tile for this pawn's job.
     fn find_work_target(&mut self, grid: &Grid, claimed: &[(u32, u32)]) -> Option<(u32, u32)> {
         if self.job == PawnJob::Herd {
             let mut best: Option<((u32, u32), f32)> = None;
-            for &(ux, uy) in &self.work_tiles {
-                if claimed.contains(&(ux, uy)) {
-                    continue;
+            // Prefer tiles with an actual sheep; fall back to the pen.
+            for source in [&self.herd_targets, &self.work_tiles] {
+                for &(ux, uy) in source {
+                    if claimed.contains(&(ux, uy)) || !grid.is_passable(ux, uy) {
+                        continue;
+                    }
+                    let (wx, wy) = grid::grid_to_world(ux, uy);
+                    let (dx, dy) = (wx - self.x, wy - self.y);
+                    let d = dx * dx + dy * dy;
+                    if best.is_none() || d < best.unwrap().1 {
+                        best = Some(((ux, uy), d));
+                    }
                 }
-                let (wx, wy) = grid::grid_to_world(ux, uy);
-                let (dx, dy) = (wx - self.x, wy - self.y);
-                let d = dx * dx + dy * dy;
-                if best.is_none() || d < best.unwrap().1 {
-                    best = Some(((ux, uy), d));
+                if best.is_some() {
+                    break;
                 }
             }
             return best.map(|(pos, _)| pos);
@@ -473,7 +497,7 @@ impl Pawn {
                 let dy = twy - self.y;
                 let dist_to_work = (dx * dx + dy * dy).sqrt();
 
-                if dist_to_work <= PAWN_WORK_DIST {
+                if dist_to_work <= self.job.work_dist() {
                     self.vel_x = 0.0;
                     self.vel_y = 0.0;
                     self.state = PawnState::Working;
