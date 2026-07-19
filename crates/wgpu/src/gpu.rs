@@ -197,7 +197,9 @@ impl GpuContext {
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
+                // Prefer the discrete GPU on hybrid machines: integrated
+                // Mesa/ANV devices have hung mid-battle (DEVICE_LOST).
+                power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
@@ -229,6 +231,23 @@ impl GpuContext {
             )
             .await
             .expect("request device");
+
+        // A lost device (driver hang/reset) is unrecoverable for this
+        // context: report it and exit instead of panicking mid-unwind.
+        device.set_device_lost_callback(|reason, message| {
+            log::error!("GPU device lost ({reason:?}): {message}");
+            #[cfg(not(target_arch = "wasm32"))]
+            if !matches!(reason, wgpu::DeviceLostReason::Destroyed) {
+                eprintln!(
+                    "The GPU driver reset the device (often an integrated-GPU driver bug).\n\
+                     If this machine has a discrete GPU, it is now preferred automatically."
+                );
+                std::process::exit(1);
+            }
+        });
+        device.on_uncaptured_error(Box::new(|e| {
+            log::error!("wgpu uncaptured error: {e}");
+        }));
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
