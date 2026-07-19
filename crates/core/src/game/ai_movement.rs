@@ -691,6 +691,7 @@ mod tests {
             blue_home_zones: vec![0],
             red_home_zones: vec![2],
             connections: vec![vec![1], vec![0, 2], vec![1]],
+            villages: Vec::new(),
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
         game.blue_objective = grid::grid_to_world(138, 138);

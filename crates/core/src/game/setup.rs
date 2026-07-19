@@ -523,6 +523,7 @@ mod tests {
             blue_home_zones: vec![0],
             red_home_zones: vec![2],
             connections: vec![vec![1], vec![0, 2], vec![1]],
+            villages: Vec::new(),
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
         let z0gx = game.zone_manager.zones[0].center_gx;
@@ -638,6 +639,7 @@ mod tests {
             blue_home_zones: vec![0],
             red_home_zones: vec![2],
             connections: vec![vec![1], vec![0, 2], vec![1]],
+            villages: Vec::new(),
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
         game

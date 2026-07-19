@@ -1,4 +1,7 @@
 pub mod simplex;
+pub mod village;
+
+pub use village::{VillageSpec, VillageTheme};
 
 use crate::grid::{Decoration, Grid, TileKind, BORDER_SIZE, PLAYABLE_SIZE};
 use simplex::Simplex;
@@ -28,6 +31,8 @@ pub struct MapLayout {
     pub red_home_zones: Vec<u8>,
     /// Adjacency: connections[i] = list of zone indices connected to zone i.
     pub connections: Vec<Vec<u8>>,
+    /// One village per zone, same order as `zone_centers`.
+    pub villages: Vec<VillageSpec>,
 }
 
 /// A rectangle used during BSP partitioning.
@@ -107,18 +112,18 @@ fn bsp_split(rng: &mut Rng, rect: Rect, depth: u32, max_depth: u32, min_size: u3
 }
 
 /// Simple xorshift32 PRNG for deterministic terrain generation.
-struct Rng {
+pub(crate) struct Rng {
     state: u32,
 }
 
 impl Rng {
-    fn new(seed: u32) -> Self {
+    pub(crate) fn new(seed: u32) -> Self {
         Self {
             state: if seed == 0 { 1 } else { seed },
         }
     }
 
-    fn next(&mut self) -> u32 {
+    pub(crate) fn next(&mut self) -> u32 {
         self.state ^= self.state << 13;
         self.state ^= self.state >> 17;
         self.state ^= self.state << 5;
@@ -428,7 +433,7 @@ pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) 
         vec![3, 4, 5],          // 6 (R2) ↔ C2, C3, R1
     ];
 
-    let layout = MapLayout {
+    let mut layout = MapLayout {
         blue_base,
         red_base,
         zone_centers,
@@ -437,10 +442,14 @@ pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) 
         blue_home_zones: vec![0, 1], // B1, B2
         red_home_zones: vec![5, 6],  // R1, R2
         connections,
+        villages: Vec::new(),
     };
 
     // Generate 2-tile-wide roads connecting bases through capture zones
     generate_roads(&mut grid, &layout);
+
+    // Villages read painted roads for their entry-aware layout.
+    layout.villages = village::plan_villages(&mut grid, &layout.zone_centers, seed);
 
     (grid, layout)
 }
@@ -984,6 +993,45 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn every_zone_gets_a_livable_village() {
+        for seed in [42, 77, 123, 777, 1234, 5555, 9999] {
+            let (grid, layout) = generate_battlefield(seed, PLAYABLE_SIZE);
+            assert_eq!(layout.villages.len(), layout.zone_centers.len());
+            let mut themes = std::collections::HashSet::new();
+            for v in &layout.villages {
+                themes.insert(format!("{:?}", v.theme));
+                assert!(
+                    v.houses.len() >= 2,
+                    "seed {seed}: village {} has {} houses",
+                    v.zone_idx,
+                    v.houses.len()
+                );
+                assert!(
+                    !v.production.is_empty(),
+                    "seed {seed}: village {} has no production building",
+                    v.zone_idx
+                );
+                assert!(
+                    v.resources.len() >= 3,
+                    "seed {seed}: village {} has {} resource tiles",
+                    v.zone_idx,
+                    v.resources.len()
+                );
+                // Buildings must not sit on roads or water.
+                for &(x, y) in v.houses.iter().chain(v.production.iter().map(|(p, _)| p)) {
+                    let t = grid.get(x, y);
+                    assert!(
+                        t != TileKind::Road && t != TileKind::Water,
+                        "seed {seed}: village {} building on {t:?} at ({x},{y})",
+                        v.zone_idx
+                    );
+                }
+            }
+            assert_eq!(themes.len(), 3, "seed {seed}: themes missing: {themes:?}");
         }
     }
 

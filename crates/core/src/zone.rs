@@ -446,6 +446,7 @@ mod tests {
                 vec![2, 3, 6],
                 vec![3, 4, 5],
             ],
+            villages: Vec::new(),
         }
     }
 
