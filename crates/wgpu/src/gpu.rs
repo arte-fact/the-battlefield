@@ -139,6 +139,10 @@ impl CameraUniform {
 // GPU context
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Set from the device-lost callback; the game loop consumes it and
+/// rebuilds the GPU context.
+pub static DEVICE_LOST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -183,8 +187,10 @@ impl GpuContext {
 
         #[cfg(target_arch = "wasm32")]
         let backends = wgpu::Backends::GL;
+        // WGPU_BACKEND=gl|vulkan|... selects the API — an escape hatch for
+        // machines whose Vulkan driver hangs (Intel ANV).
         #[cfg(not(target_arch = "wasm32"))]
-        let backends = wgpu::Backends::all();
+        let backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all());
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends,
@@ -232,17 +238,13 @@ impl GpuContext {
             .await
             .expect("request device");
 
-        // A lost device (driver hang/reset) is unrecoverable for this
-        // context: report it and exit instead of panicking mid-unwind.
+        // A lost device (driver hang/reset) poisons this whole context.
+        // Flag it so the game loop can rebuild the context and continue —
+        // the simulation lives on the CPU and survives untouched.
         device.set_device_lost_callback(|reason, message| {
             log::error!("GPU device lost ({reason:?}): {message}");
-            #[cfg(not(target_arch = "wasm32"))]
             if !matches!(reason, wgpu::DeviceLostReason::Destroyed) {
-                eprintln!(
-                    "The GPU driver reset the device (often an integrated-GPU driver bug).\n\
-                     If this machine has a discrete GPU, it is now preferred automatically."
-                );
-                std::process::exit(1);
+                DEVICE_LOST.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         });
         device.on_uncaptured_error(Box::new(|e| {

@@ -28,6 +28,10 @@ pub struct GameLoop {
     pub gpu: GpuContext,
     pub game: Game,
     assets: Assets,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    window: Arc<winit::window::Window>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    gpu_rebuilds: u8,
     pub input_state: InputState,
     pub screen: GameScreen,
     pub seed: u32,
@@ -114,6 +118,8 @@ impl GameLoop {
             gpu,
             game,
             assets,
+            window,
+            gpu_rebuilds: 0,
             input_state,
             screen: GameScreen::MainMenu,
             seed,
@@ -233,6 +239,30 @@ impl GameLoop {
     /// Run one frame. Returns false if the application should exit.
     /// Input events have already been dispatched via handle_event() before this.
     pub fn step(&mut self) -> bool {
+        // Driver reset the GPU (integrated-GPU hangs): rebuild the whole
+        // context and keep playing — the simulation is untouched. Repeated
+        // resets mean the driver can't sustain the workload; give up then.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::gpu::DEVICE_LOST.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.gpu_rebuilds += 1;
+            if self.gpu_rebuilds > 3 {
+                log::error!("GPU device lost repeatedly; giving up");
+                eprintln!(
+                    "The GPU driver keeps resetting (integrated-GPU driver bug?).\n\
+                     Try running with WGPU_BACKEND=gl"
+                );
+                return false;
+            }
+            log::warn!(
+                "GPU device lost — rebuilding context (attempt {})",
+                self.gpu_rebuilds
+            );
+            self.gpu = GpuContext::new(self.window.clone());
+            self.assets = Assets::load(&self.gpu);
+            let size = self.window.inner_size();
+            self.resize(size.width.max(1), size.height.max(1));
+        }
+
         let now = Instant::now();
         let dt = now.duration_since(self.last_time).as_secs_f64().min(0.1);
         let elapsed = now.duration_since(self.start_time).as_secs_f64();
