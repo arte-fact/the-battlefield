@@ -4,6 +4,7 @@
 //! sorts by Y foot position, and draws via the [`DrawBackend`] trait.
 
 use crate::asset_manifest;
+use crate::building::BuildingKind;
 use crate::game::Game;
 use crate::grid::{Decoration, TileKind, TILE_SIZE};
 use crate::pawn::PAWN_FRAME_SIZE;
@@ -235,21 +236,40 @@ fn draw_building(
 
     let proximity_alpha = render_util::building_alpha(anchor_x, anchor_y, sw, sh, player_pos, ts);
 
-    // Zone-linked towers
+    // Zone-linked buildings recolor with zone ownership.
     if let Some(zid) = b.zone_id {
         let zone = &game.zone_manager.zones[zid as usize];
-        let color_idx = match zone.state {
-            ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => 1,
-            ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => 2,
-            _ => 0,
+        let owner = match zone.state {
+            ZoneState::Controlled(f) | ZoneState::Capturing(f) => Some(f),
+            _ => None,
         };
         let zone_alpha = match zone.state {
             ZoneState::Capturing(_) => (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0),
             _ => 1.0,
         };
         let alpha = proximity_alpha * zone_alpha;
+        let key = if b.kind == BuildingKind::DefenseTower {
+            let color_idx = match owner {
+                Some(Faction::Blue) => 1,
+                Some(Faction::Red) => 2,
+                None => 0,
+            };
+            SpriteKey::Tower(color_idx)
+        } else {
+            match owner {
+                Some(f) => SpriteKey::Building(asset_manifest::building_tex_index(
+                    b.kind,
+                    b.house_variant,
+                    f,
+                )),
+                None => SpriteKey::NeutralBuilding(asset_manifest::neutral_building_tex_index(
+                    b.kind,
+                    b.house_variant,
+                )),
+            }
+        };
         backend.draw_sprite(
-            SpriteKey::Tower(color_idx),
+            key,
             0,
             anchor_x - sw / 2.0,
             anchor_y - sh,

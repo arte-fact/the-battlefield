@@ -310,7 +310,9 @@ impl Game {
                 let (sx, sy) = self
                     .buildings
                     .iter()
-                    .find(|b| b.faction == faction && b.produces == Some(kind))
+                    .find(|b| {
+                        b.zone_id.is_none() && b.faction == faction && b.produces == Some(kind)
+                    })
                     .map(|b| (b.grid_x, b.grid_y))
                     .unwrap_or(match faction {
                         Faction::Blue => self.blue_gather,
@@ -391,6 +393,39 @@ impl Game {
                 house_variant: 0,
             });
         }
+        // Village buildings from the map plan; ownership follows the zone.
+        for v in &layout.villages {
+            for (i, &(hx, hy)) in v.houses.iter().enumerate() {
+                buildings.push(building::BaseBuilding {
+                    kind: building::BuildingKind::House,
+                    faction: Faction::Blue, // rendered/owned via zone state
+                    grid_x: hx,
+                    grid_y: hy,
+                    attack_cooldown: 0.0,
+                    zone_id: Some(v.zone_idx),
+                    produces: None,
+                    house_variant: (i % 3) as u8,
+                });
+            }
+            for &((bx, by), kind) in &v.production {
+                let unit = match kind {
+                    building::BuildingKind::Barracks => UnitKind::Warrior,
+                    building::BuildingKind::Archery => UnitKind::Archer,
+                    building::BuildingKind::Monastery => UnitKind::Monk,
+                    _ => continue,
+                };
+                buildings.push(building::BaseBuilding {
+                    kind,
+                    faction: Faction::Blue, // rendered/owned via zone state
+                    grid_x: bx,
+                    grid_y: by,
+                    attack_cooldown: 0.0,
+                    zone_id: Some(v.zone_idx),
+                    produces: Some(unit),
+                    house_variant: 0,
+                });
+            }
+        }
         for b in &buildings {
             for &(dx, dy) in b.kind.footprint_offsets() {
                 let fx = b.grid_x as i32 + dx;
@@ -400,8 +435,14 @@ impl Game {
                 }
             }
         }
-        // Paint road/dirt 1 tile around all building footprints
-        Self::paint_road_around_buildings(&mut self.grid, &buildings);
+        // Paint road/dirt around building footprints, sparing village
+        // resources (groves, gold stones, pen ground).
+        let protected: std::collections::HashSet<(u32, u32)> = layout
+            .villages
+            .iter()
+            .flat_map(|v| v.resources.iter().copied())
+            .collect();
+        Self::paint_road_around_buildings(&mut self.grid, &buildings, &protected);
         self.buildings = buildings;
 
         // Spawn ambient sheep in rear pasture of each base
@@ -451,7 +492,11 @@ impl Game {
     /// Spawn 10 sheep at random positions in the rear pasture (behind the houses).
     /// `fs` = front sign: 1 for Blue (front=+Y), -1 for Red (front=-Y).
     /// Paint a 1-tile road border around the bounding box of each building footprint.
-    fn paint_road_around_buildings(grid: &mut Grid, buildings: &[building::BaseBuilding]) {
+    fn paint_road_around_buildings(
+        grid: &mut Grid,
+        buildings: &[building::BaseBuilding],
+        protected: &std::collections::HashSet<(u32, u32)>,
+    ) {
         for b in buildings {
             // Compute bounding box of all footprint cells (absolute coords)
             let offsets = b.kind.footprint_offsets();
@@ -479,6 +524,9 @@ impl Game {
                     }
                     let ux = rx as u32;
                     let uy = ry as u32;
+                    if protected.contains(&(ux, uy)) {
+                        continue;
+                    }
                     let tile = grid.get(ux, uy);
                     if (tile == TileKind::Grass || tile == TileKind::Forest)
                         && grid.elevation(ux, uy) == 0

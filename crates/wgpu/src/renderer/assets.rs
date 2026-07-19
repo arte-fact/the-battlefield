@@ -44,6 +44,7 @@ pub struct Assets {
 
     /// Tower color variants: neutral, blue, red.
     tower_textures: Vec<TextureId>,
+    neutral_building_textures: Vec<Option<(TextureId, u32, u32)>>,
 
     /// Tree variants: (TextureId, frame_w, frame_h, frame_count).
     tree_textures: Vec<(TextureId, u32, u32, u32)>,
@@ -114,6 +115,7 @@ impl Assets {
             particle_textures: HashMap::new(),
             building_textures: Vec::new(),
             tower_textures: Vec::new(),
+            neutral_building_textures: Vec::new(),
             tree_textures: Vec::new(),
             bush_textures: Vec::new(),
             rock_textures: Vec::new(),
@@ -186,6 +188,12 @@ impl Assets {
                 .get(idx)
                 .and_then(|o| o.as_ref())
                 .map(|&(id, w, h)| (id, w, h, 1)),
+            SpriteKey::NeutralBuilding(idx) => self
+                .neutral_building_textures
+                .get(idx)
+                .copied()
+                .flatten()
+                .map(|(id, w, h)| (id, w, h, 1)),
             SpriteKey::Tower(idx) => self.tower_textures.get(idx).map(|&id| {
                 let t = &self.textures[id];
                 (id, t.width, t.height, 1)
@@ -436,6 +444,16 @@ impl Assets {
                 self.tower_textures.push(id);
             }
         }
+
+        // Neutral (Black) village buildings, BUILDING_SPECS order
+        let folder = asset_manifest::NEUTRAL_BUILDING_FOLDER;
+        self.neutral_building_textures = asset_manifest::BUILDING_SPECS
+            .iter()
+            .map(|&(sw, sh, filename)| {
+                let path = format!("{ASSET_BASE}/Buildings/{folder}/{filename}");
+                self.load_png(gpu, &path).map(|id| (id, sw, sh))
+            })
+            .collect();
     }
 
     // ── Load terrain (matches SDL assets.rs lines 308-324) ──────────────

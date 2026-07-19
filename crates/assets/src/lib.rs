@@ -147,6 +147,20 @@ pub fn get(path: &str) -> Option<&'static [u8]> {
         // ── Buildings — Black (Tower only) ──────────────────────────
         "assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/Tower.png" =>
             Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/Tower.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/Barracks.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/Barracks.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/Archery.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/Archery.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/Monastery.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/Monastery.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/Castle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/Castle.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/House1.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/House1.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/House2.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/House2.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/House3.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Black Buildings/House3.png")),
 
         // ── Terrain — Tileset ───────────────────────────────────────
         "assets/Tiny Swords (Free Pack)/Terrain/Tileset/Tilemap_color1.png" =>

@@ -24,6 +24,9 @@ pub enum SpriteKey {
     Building(usize),
     /// Tower color variant (0=neutral, 1=Blue, 2=Red).
     Tower(usize),
+    /// Neutral (Black) building texture (index from
+    /// `asset_manifest::neutral_building_tex_index`).
+    NeutralBuilding(usize),
     /// Tree variant index.
     Tree(usize),
     /// Rock variant index.

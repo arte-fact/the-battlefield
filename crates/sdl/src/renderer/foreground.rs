@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use battlefield_core::asset_manifest;
+use battlefield_core::building::BuildingKind;
 use battlefield_core::camera::Camera;
 use battlefield_core::game::Game;
 use battlefield_core::grid::{Decoration, TileKind, TILE_SIZE};
@@ -472,29 +473,50 @@ fn draw_base_building(
     let bldg_cy = wy as f64 - sh as f64 * 0.5;
     let proximity_alpha = render_util::tree_alpha(bldg_cx, bldg_cy, player_pos, ts_f64);
 
-    // Zone-linked towers use tower_textures (neutral/blue/red) with alpha modulation
+    // Zone-linked buildings recolor with zone ownership.
     if let Some(zid) = building.zone_id {
-        if assets.tower_textures.is_empty() {
-            return;
-        }
         let zone = &game.zone_manager.zones[zid as usize];
-        let color_idx = match zone.state {
-            ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => 1,
-            ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => 2,
-            _ => 0,
+        let owner = match zone.state {
+            ZoneState::Controlled(f) | ZoneState::Capturing(f) => Some(f),
+            _ => None,
         };
-        if color_idx >= assets.tower_textures.len() {
-            return;
-        }
         let zone_alpha = match zone.state {
             ZoneState::Capturing(_) => (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0),
             _ => 1.0,
         };
         let alpha = (proximity_alpha * zone_alpha * 255.0) as u8;
-        let tex = &mut assets.tower_textures[color_idx];
-        super::safe_set_alpha(tex, alpha);
-        let _ = canvas.copy(tex, Rect::new(0, 0, sw, sh), dst);
-        super::safe_set_alpha(tex, 255);
+        if building.kind == BuildingKind::DefenseTower {
+            let color_idx = match owner {
+                Some(Faction::Blue) => 1,
+                Some(Faction::Red) => 2,
+                None => 0,
+            };
+            if color_idx >= assets.tower_textures.len() {
+                return;
+            }
+            let tex = &mut assets.tower_textures[color_idx];
+            super::safe_set_alpha(tex, alpha);
+            let _ = canvas.copy(tex, Rect::new(0, 0, sw, sh), dst);
+            super::safe_set_alpha(tex, 255);
+        } else if let Some(f) = owner {
+            let tex_idx =
+                asset_manifest::building_tex_index(building.kind, building.house_variant, f);
+            if let Some(Some((ref mut tex, _, _))) = assets.building_textures.get_mut(tex_idx) {
+                super::safe_set_alpha(tex, alpha);
+                let _ = canvas.copy(tex, None, dst);
+                super::safe_set_alpha(tex, 255);
+            }
+        } else {
+            let tex_idx =
+                asset_manifest::neutral_building_tex_index(building.kind, building.house_variant);
+            if let Some(Some((ref mut tex, _, _))) =
+                assets.neutral_building_textures.get_mut(tex_idx)
+            {
+                super::safe_set_alpha(tex, alpha);
+                let _ = canvas.copy(tex, None, dst);
+                super::safe_set_alpha(tex, 255);
+            }
+        }
         return;
     }
 

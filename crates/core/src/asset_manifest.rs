@@ -95,6 +95,21 @@ pub fn building_tex_index(kind: BuildingKind, house_variant: u8, faction: Factio
 
 pub const BUILDING_FACTION_FOLDERS: &[&str] = &["Blue Buildings", "Red Buildings"];
 
+/// Folder for neutral (unowned village) building sprites.
+pub const NEUTRAL_BUILDING_FOLDER: &str = "Black Buildings";
+
+/// Texture index into the neutral building array (BUILDING_SPECS order).
+pub fn neutral_building_tex_index(kind: BuildingKind, house_variant: u8) -> usize {
+    match kind {
+        BuildingKind::Barracks => 0,
+        BuildingKind::Archery => 1,
+        BuildingKind::Monastery => 2,
+        BuildingKind::Castle => 3,
+        BuildingKind::DefenseTower => 4,
+        BuildingKind::House => 5 + house_variant as usize,
+    }
+}
+
 /// Tower color folders: 0=neutral, 1=Blue, 2=Red.
 pub const TOWER_COLOR_FOLDERS: &[&str] = &["Black Buildings", "Blue Buildings", "Red Buildings"];
 

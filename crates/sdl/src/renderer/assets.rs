@@ -34,6 +34,7 @@ pub struct Assets<'a> {
     pub(super) water_rock_textures: Vec<(Texture<'a>, u32, u32, u32)>,
     // Buildings
     pub(super) tower_textures: Vec<Texture<'a>>,
+    pub(super) neutral_building_textures: Vec<Option<(Texture<'a>, u32, u32)>>,
     // UI 9-slice panels
     pub(super) ui_special_paper: Option<(Texture<'a>, u32, u32)>,
     pub(super) ui_blue_btn: Option<(Texture<'a>, u32, u32)>,
@@ -385,6 +386,16 @@ impl<'a> Assets<'a> {
             }
         }
 
+        // Neutral (Black) village buildings, BUILDING_SPECS order
+        let neutral_building_textures = asset_manifest::BUILDING_SPECS
+            .iter()
+            .map(|&(sw, sh, filename)| {
+                let folder = asset_manifest::NEUTRAL_BUILDING_FOLDER;
+                let path = format!("{ASSET_BASE}/Buildings/{folder}/{filename}");
+                load_png_texture(tc, &path).map(|tex| (tex, sw, sh))
+            })
+            .collect();
+
         // UI 9-slice panels (pre-processed gapless atlases)
         let ui_base = format!("{ASSET_BASE}/UI Elements/UI Elements");
         let ui_special_paper = load_9slice_atlas(
@@ -543,6 +554,7 @@ impl<'a> Assets<'a> {
             rock_textures,
             water_rock_textures,
             tower_textures,
+            neutral_building_textures,
             ui_special_paper,
             ui_blue_btn,
             ui_red_btn,
