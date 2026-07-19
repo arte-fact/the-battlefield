@@ -421,11 +421,12 @@ impl Game {
             self.nearest_objective_pos(ai_idx)
         };
 
-        // Hold position once settled at the assigned zone. The settle point
-        // is ownership-aware and INSIDE the capture circle — halting outside
-        // it (the old radius+margin stop) left assaults ringing an enemy
-        // zone without ever contesting it. The outer radius+margin boundary
-        // remains only as exit hysteresis against collision jitter.
+        // Hold position once settled at the assigned zone. Any position
+        // inside the capture circle contests it, so arrival is generous
+        // (0.85r): with village buildings filling the ring band, a deeper
+        // settle point made units shove against walls forever at the
+        // boundary. The outer radius+margin boundary remains only as exit
+        // hysteresis against collision jitter.
         if let Some(zi) = assigned_zone {
             let zi_usize = zi as usize;
             if zi_usize < self.zone_manager.zones.len() {
@@ -434,8 +435,7 @@ impl Game {
                 let dy = uy - zone.center_wy;
                 let dist_sq = dx * dx + dy * dy;
                 let r = zone.radius as f32 * TILE_SIZE;
-                let owned = zone.state == crate::zone::ZoneState::Controlled(faction);
-                let enter = if owned { r * 0.8 } else { r * 0.6 };
+                let enter = r * 0.85;
                 let exit = r + self.config.zone_idle_margin_tiles * TILE_SIZE;
                 if dist_sq <= enter * enter {
                     self.units[ai_idx].zone_arrived = true;

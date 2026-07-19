@@ -231,9 +231,11 @@ fn fits(grid: &Grid, kind: BuildingKind, x: i32, y: i32, occupied: &[(i32, i32)]
                 }
             }
         }
+        // 2-tile gaps between structures: units are nearly a tile wide,
+        // single-tile corridors wedge and bump instead of flowing.
         if occupied
             .iter()
-            .any(|&(ox, oy)| (ox - tx).abs() <= 1 && (oy - ty).abs() <= 1)
+            .any(|&(ox, oy)| (ox - tx).abs() <= 2 && (oy - ty).abs() <= 2)
         {
             return false;
         }
