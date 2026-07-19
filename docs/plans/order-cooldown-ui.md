@@ -242,6 +242,34 @@ bench prints composition + zone standing for future probes.
   session: instrument which zone units are assigned to vs where they
   are, and inspect `FactionFlowState` coverage on this map.
 
+## Resolution log (2026-07-17 → 2026-07-19)
+
+- **A\* budget starvation (ffc887b)** — the true cause of the seed 777
+  no-contact stall: the 3-searches-per-tick budget was consumed in fixed
+  unit-vector order; starved units deferred forever with no waypoints and
+  froze mid-chase. Fixed with a direct-steer fallback while starved and
+  per-tick round-robin of AI iteration order. Chase-block added as
+  defense-in-depth for visible-but-unpathable targets.
+- **Endgame standoff (639e2cb)** — player report: with Blue holding all
+  zones, Red kept its distance. The zone-idle stop parked units at
+  radius+margin (7.5 tiles) — outside the 6-tile capture circle — so
+  assaults besieged zones without contesting them. Settle radius is now
+  ownership-aware and inside the circle (attackers 0.6r, garrisons 0.8r)
+  with the old boundary kept as exit hysteresis (`zone_arrived`).
+  Winner diversity returned to probes (Blue 3/7).
+- **Performance audit (444fe89)** — phase instrumentation showed
+  worst-case frames (3.2ms, seed 777) were 89% `find_path`: `max_len`
+  only truncated results, so unreachable/distant goals flooded all
+  25,600 cells (~900µs/search ×3 per frame), plus 200KB per-call
+  allocations and 5 passability lookups per candidate. Fixed with
+  bounded best-effort A\* (cap 8×max_len, partial path to closest
+  approach, None preserved when no progress — keeps chase-block
+  semantics), generation-stamped thread-local scratch, and a cached
+  `wide_passable` grid with incremental refresh. Seed 777: 3.20ms →
+  0.30ms avg (10.7×), P99 0.56ms; calm seeds 0.36 → 0.28ms; all seven
+  probe seeds end in 268–460s. Remaining costs, all healthy: combat
+  scan + LOS ~105µs, zones ~33µs, collisions ~16µs per frame.
+
 ## Decisions taken
 
 - **Vacuum stays** — pulling your own defenders off zones by walking past is
