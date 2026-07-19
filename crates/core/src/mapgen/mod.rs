@@ -394,21 +394,10 @@ pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) 
     let template = [b1, b2, c1, c2, c3, r1, r2];
     let zone_centers = nudge_zone_centers(&grid, &template, blue_base, red_base, w, h);
 
-    // Clear 24×28 rect around each base (wider for flank towers, deeper for rear village)
-    clear_rect(
-        &mut grid,
-        blue_base.0.saturating_sub(12),
-        blue_base.1.saturating_sub(14),
-        24,
-        28,
-    );
-    clear_rect(
-        &mut grid,
-        red_base.0.saturating_sub(12),
-        red_base.1.saturating_sub(14),
-        24,
-        28,
-    );
+    // Clear facing-agnostic base ground (band radius + 1 apron).
+    let base_clear = crate::building::BASE_BAND_RADIUS + 1;
+    clear_circle(&mut grid, blue_base.0, blue_base.1, base_clear);
+    clear_circle(&mut grid, red_base.0, red_base.1, base_clear);
 
     // Clear village ground around each zone center
     for &(cx, cy) in &zone_centers {
@@ -679,21 +668,6 @@ fn count_neighbors(grid: &[bool], w: u32, h: u32, x: u32, y: u32) -> u32 {
         }
     }
     count
-}
-
-/// Clear a rectangular zone back to grass with zero elevation and no decorations.
-fn clear_rect(grid: &mut Grid, x: u32, y: u32, w: u32, h: u32) {
-    for dy in 0..h {
-        for dx in 0..w {
-            let nx = x + dx;
-            let ny = y + dy;
-            if grid.in_bounds(nx as i32, ny as i32) {
-                grid.set(nx, ny, TileKind::Grass);
-                grid.set_elevation(nx, ny, 0);
-                grid.set_decoration(nx, ny, None);
-            }
-        }
-    }
 }
 
 /// Generate 2-tile-wide roads connecting objectives via a Minimum Spanning Tree.

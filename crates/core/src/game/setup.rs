@@ -361,14 +361,22 @@ impl Game {
         self.blue_gather = layout.blue_gather;
         self.red_gather = layout.red_gather;
 
+        // Bases face each other; every band rotates with this vector.
+        let dxf = red_cx as f32 - blue_cx as f32;
+        let dyf = red_cy as f32 - blue_cy as f32;
+        let len = (dxf * dxf + dyf * dyf).sqrt().max(1.0);
+        let blue_facing = (dxf / len, dyf / len);
+        let red_facing = (-blue_facing.0, -blue_facing.1);
+
         // Procedurally generate all base buildings (castle, towers, production, houses)
         let mut buildings =
-            building::generate_base_buildings(Faction::Blue, blue_cx, blue_cy, seed);
+            building::generate_base_buildings(Faction::Blue, blue_cx, blue_cy, seed, blue_facing);
         buildings.extend(building::generate_base_buildings(
             Faction::Red,
             red_cx,
             red_cy,
             seed.wrapping_add(0xBEEF),
+            red_facing,
         ));
         // Place defense towers at capture zone centers
         for zone in &self.zone_manager.zones {
@@ -397,8 +405,8 @@ impl Game {
         self.buildings = buildings;
 
         // Spawn ambient sheep in rear pasture of each base
-        self.spawn_base_sheep(blue_cx, blue_cy, 1, seed);
-        self.spawn_base_sheep(red_cx, red_cy, -1, seed.wrapping_add(7919));
+        self.spawn_base_sheep(blue_cx, blue_cy, blue_facing, seed);
+        self.spawn_base_sheep(red_cx, red_cy, red_facing, seed.wrapping_add(7919));
 
         // Spawn one pawn worker per house
         let mut pawn_seed = seed.wrapping_add(0xCAFE);
@@ -483,7 +491,7 @@ impl Game {
         }
     }
 
-    fn spawn_base_sheep(&mut self, cx: u32, cy: u32, fs: i32, base_seed: u32) {
+    fn spawn_base_sheep(&mut self, cx: u32, cy: u32, facing: (f32, f32), base_seed: u32) {
         let mut seed = if base_seed == 0 { 1 } else { base_seed };
         let mut next = || -> u32 {
             seed ^= seed << 13;
@@ -491,12 +499,14 @@ impl Game {
             seed ^= seed << 5;
             seed
         };
+        let (fx, fy) = facing;
+        let (px, py) = (-fy, fx);
         for _ in 0..10 {
-            // Random position in rear pasture: dx ∈ [-4,4], distance 11–14 behind center
-            let dx = (next() % 9) as i32 - 4;
-            let rear_dist = (next() % 4) as i32 + 11; // 11, 12, 13, or 14
-            let gx = (cx as i32 + dx).max(0) as u32;
-            let gy = (cy as i32 - rear_dist * fs).max(0) as u32;
+            // Rear pasture: lateral ∈ [-4,4], 11-14 tiles behind the center.
+            let lat = (next() % 9) as f32 - 4.0;
+            let rear = (next() % 4) as f32 + 11.0;
+            let gx = (cx as f32 - fx * rear + px * lat).round().max(0.0) as u32;
+            let gy = (cy as f32 - fy * rear + py * lat).round().max(0.0) as u32;
             if !self.grid.is_passable(gx, gy) {
                 continue;
             }

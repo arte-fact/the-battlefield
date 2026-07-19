@@ -191,8 +191,9 @@ impl BasePlacer {
     /// Try to place `kind` at grid position (bx, by).
     /// Returns false (no-op) if out of bounds or exclusion zone conflicts.
     fn try_place(&mut self, kind: BuildingKind, bx: i32, by: i32) -> bool {
-        // Must stay within base footprint (±11 sides, ±13 rear for village)
-        if bx < self.cx - 11 || bx > self.cx + 11 || by < self.cy - 13 || by > self.cy + 13 {
+        // Must stay within the cleared base ground (facing-agnostic circle).
+        let (dx, dy) = (bx - self.cx, by - self.cy);
+        if dx * dx + dy * dy > BASE_BAND_RADIUS * BASE_BAND_RADIUS {
             return false;
         }
         // Must stay within the playable area
@@ -229,105 +230,120 @@ impl BasePlacer {
     }
 }
 
+/// Buildings sit within this radius of the base center; the map
+/// generator clears one tile more.
+pub const BASE_BAND_RADIUS: i32 = 14;
+
 /// Procedurally generate all buildings for a faction base.
 ///
-/// Layout (front = direction toward battlefield):
-///   Center — Open gather zone (army rally point, no buildings)
-///   Front of gather zone — 1 Castle (guards the rally area)
-///   Front line — 4 DefenseTowers spread across width
-///   Flanking gather zone — 2 Barracks + 2 Archery + 1 Monastery (production)
-///   Periphery — up to 10 Houses (cycling 3 sprite variants)
+/// `facing` is the unit vector toward the enemy base. Functional bands,
+/// rotated to the facing:
+///   Front — Castle guarding the gather zone, 3-5 DefenseTowers on the
+///   front arc and flanks
+///   Flanks — production buildings, one per wave unit kind
+///   Rear — 8-12 Houses, pasture behind (sheep spawned by setup)
 ///
-/// `seed` drives the RNG; different seeds yield organically varied layouts.
-/// Blue front is +Y (toward map center); Red front is −Y.
-pub fn generate_base_buildings(faction: Faction, cx: u32, cy: u32, seed: u32) -> Vec<BaseBuilding> {
-    let fs: i32 = match faction {
-        Faction::Blue => 1,
-        Faction::Red => -1,
-    };
+/// `seed` drives counts and arc positions; layouts vary per battle.
+pub fn generate_base_buildings(
+    faction: Faction,
+    cx: u32,
+    cy: u32,
+    seed: u32,
+    facing: (f32, f32),
+) -> Vec<BaseBuilding> {
     let icx = cx as i32;
     let icy = cy as i32;
     let mut rng = Rng::new(seed);
     let mut p = BasePlacer::new(faction, icx, icy);
+    let (fx, fy) = facing;
+    let (px, py) = (-fy, fx);
+    let pos = |forward: f32, lateral: f32| -> (i32, i32) {
+        (
+            (icx as f32 + fx * forward + px * lateral).round() as i32,
+            (icy as f32 + fy * forward + py * lateral).round() as i32,
+        )
+    };
 
-    // --- Castle at front of gather zone (between rally area and battlefield) ---
-    p.try_place(BuildingKind::Castle, icx, icy + fs * 4);
+    // Castle at the front of the gather zone, facing the enemy.
+    let (x, y) = pos(4.0, 0.0);
+    p.try_place(BuildingKind::Castle, x, y);
 
-    // --- Production buildings flanking the castle / gather zone ---
-    // Placed BEFORE towers so they get priority on exclusion zones.
-
-    // Barracks (Warriors) — left flank near castle
-    if p.try_place(BuildingKind::Barracks, icx - 6, icy + fs * 2) {
-        if let Some(b) = p.out.last_mut() {
-            b.produces = Some(UnitKind::Warrior);
-        }
-    }
-    // Barracks (Lancers) — right flank near castle
-    if p.try_place(BuildingKind::Barracks, icx + 6, icy + fs * 2) {
-        if let Some(b) = p.out.last_mut() {
-            b.produces = Some(UnitKind::Lancer);
-        }
-    }
-    // Archery — left-rear of gather zone
-    if p.try_place(BuildingKind::Archery, icx - 6, icy - fs * 2) {
-        if let Some(b) = p.out.last_mut() {
-            b.produces = Some(UnitKind::Archer);
-        }
-    }
-    // Archery — right-rear of gather zone
-    if p.try_place(BuildingKind::Archery, icx + 6, icy - fs * 2) {
-        if let Some(b) = p.out.last_mut() {
-            b.produces = Some(UnitKind::Archer);
-        }
-    }
-    // Monastery — center rear
-    if p.try_place(BuildingKind::Monastery, icx, icy - fs * 5) {
-        if let Some(b) = p.out.last_mut() {
-            b.produces = Some(UnitKind::Monk);
-        }
-    }
-
-    // --- 2 front-flank towers + 2 mid-flank towers ---
-    // Placed after production buildings to avoid exclusion conflicts.
-    let tower_positions: [(i32, i32); 4] = [
-        (-7, fs * 7), // front-left
-        (7, fs * 7),  // front-right
-        (-10, 0),     // mid-left flank
-        (10, 0),      // mid-right flank
+    // Production band flanking the gather zone, one building per wave kind.
+    let prod: &[(BuildingKind, UnitKind, f32, f32)] = &[
+        (BuildingKind::Barracks, UnitKind::Warrior, 2.0, -6.0),
+        (BuildingKind::Barracks, UnitKind::Lancer, 2.0, 6.0),
+        (BuildingKind::Archery, UnitKind::Archer, -2.0, -6.0),
+        (BuildingKind::Archery, UnitKind::Archer, -2.0, 6.0),
+        (BuildingKind::Monastery, UnitKind::Monk, -5.0, 0.0),
     ];
-    for &(dx, dy) in &tower_positions {
-        let tx = icx + dx;
-        let ty = icy + dy;
-        if !p.try_place(BuildingKind::DefenseTower, tx, ty) {
-            for &delta in &[1i32, -1, 2, -2] {
-                if p.try_place(BuildingKind::DefenseTower, tx + delta, ty) {
-                    break;
-                }
+    // Wave production depends on every kind having a building: try the
+    // jittered spot first, then widen the search until one fits.
+    let mut deltas: Vec<(f32, f32)> = Vec::new();
+    for df in -2i32..=2 {
+        for dl in -4i32..=4 {
+            deltas.push((df as f32, dl as f32));
+        }
+    }
+    deltas.sort_by_key(|&(df, dl)| (df.abs() + dl.abs()) as i32);
+    for &(kind, unit, fw, lat) in prod {
+        let jf = (rng.next() % 3) as f32 - 1.0;
+        let placed = deltas.iter().any(|&(df, dl)| {
+            let (x, y) = pos(fw + jf + df, lat + dl);
+            p.try_place(kind, x, y)
+        });
+        if placed {
+            if let Some(b) = p.out.last_mut() {
+                b.produces = Some(unit);
             }
         }
     }
 
-    // --- Rear village: houses only behind production zone ---
-    // Build candidates row by row from the back, with X shuffled per row for organic layout.
-    let mut house_cands: Vec<(i32, i32)> = Vec::new();
-    for rear_dist in (3..=12).rev() {
-        let mut row: Vec<i32> = (-9..=9).collect();
-        rng.shuffle(&mut row);
-        for dx in row {
-            house_cands.push((icx + dx, icy - fs * rear_dist));
-        }
-    }
-
-    let mut placed = 0u8;
-    for &(hx, hy) in &house_cands {
-        if placed >= 10 {
+    // Defense towers: front pair first so coverage survives low rolls.
+    let tower_count = 3 + (rng.next() % 3) as usize;
+    let slots: [(f32, f32); 5] = [
+        (7.0, -7.0),
+        (7.0, 7.0),
+        (0.0, -10.0),
+        (0.0, 10.0),
+        (9.0, 0.0),
+    ];
+    let mut towers = 0usize;
+    for &(fw, lat) in slots.iter() {
+        if towers >= tower_count {
             break;
         }
-        if p.try_place(BuildingKind::House, hx, hy) {
+        let (x, y) = pos(fw, lat);
+        let placed = p.try_place(BuildingKind::DefenseTower, x, y)
+            || [1.0f32, -1.0, 2.0, -2.0].iter().any(|&d| {
+                let (x, y) = pos(fw, lat + d);
+                p.try_place(BuildingKind::DefenseTower, x, y)
+            });
+        if placed {
+            towers += 1;
+        }
+    }
+
+    // Living band: houses row by row from the back, shuffled per row.
+    let house_target = 8 + (rng.next() % 5) as u8;
+    let mut cands: Vec<(f32, f32)> = Vec::new();
+    for rear in (4..=13).rev() {
+        let mut row: Vec<i32> = (-9..=9).collect();
+        rng.shuffle(&mut row);
+        for lat in row {
+            cands.push((-(rear as f32), lat as f32));
+        }
+    }
+    let mut houses = 0u8;
+    for (fw, lat) in cands {
+        if houses >= house_target {
+            break;
+        }
+        let (x, y) = pos(fw, lat);
+        if p.try_place(BuildingKind::House, x, y) {
             if let Some(b) = p.out.last_mut() {
-                b.house_variant = placed % 3;
+                b.house_variant = houses % 3;
             }
-            placed += 1;
+            houses += 1;
         }
     }
 
@@ -346,17 +362,20 @@ mod tests {
         assert_eq!(building_for_unit(UnitKind::Monk), BuildingKind::Monastery);
     }
 
+    const F_DOWN: (f32, f32) = (0.0, 1.0);
+    const F_UP: (f32, f32) = (0.0, -1.0);
+
     #[test]
     fn generate_base_buildings_in_playable_area() {
         let b = BORDER_SIZE;
         let p = PLAYABLE_SIZE;
-        let cx_blue = b + 10;
-        let cy_blue = b + 10;
-        let cx_red = b + p - 11;
-        let cy_red = b + p - 11;
-        for building in generate_base_buildings(Faction::Blue, cx_blue, cy_blue, 42)
+        let cx_blue = b + 15;
+        let cy_blue = b + 15;
+        let cx_red = b + p - 16;
+        let cy_red = b + p - 16;
+        for building in generate_base_buildings(Faction::Blue, cx_blue, cy_blue, 42, F_DOWN)
             .iter()
-            .chain(generate_base_buildings(Faction::Red, cx_red, cy_red, 42).iter())
+            .chain(generate_base_buildings(Faction::Red, cx_red, cy_red, 42, F_UP).iter())
         {
             assert!(
                 building.grid_x >= b && building.grid_x < b + p,
@@ -375,22 +394,68 @@ mod tests {
 
     #[test]
     fn generate_base_buildings_has_required_types() {
+        for seed in [1, 42, 777, 31337] {
+            let b = BORDER_SIZE;
+            let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, seed, F_DOWN);
+            let count = |k: BuildingKind| buildings.iter().filter(|b| b.kind == k).count();
+            assert_eq!(count(BuildingKind::Castle), 1, "must have 1 castle");
+            let towers = count(BuildingKind::DefenseTower);
+            assert!((3..=5).contains(&towers), "3-5 towers, got {towers}");
+            assert_eq!(count(BuildingKind::Barracks), 2, "must have 2 barracks");
+            assert_eq!(count(BuildingKind::Archery), 2, "must have 2 archery");
+            assert_eq!(count(BuildingKind::Monastery), 1, "must have 1 monastery");
+            let houses = count(BuildingKind::House);
+            assert!((8..=12).contains(&houses), "8-12 houses, got {houses}");
+        }
+    }
+
+    #[test]
+    fn base_defense_covers_the_front() {
+        for seed in [1, 42, 777, 31337] {
+            let b = BORDER_SIZE;
+            let (cx, cy) = (b + 20, b + 20);
+            let buildings = generate_base_buildings(Faction::Blue, cx, cy, seed, F_DOWN);
+            let front_towers = buildings
+                .iter()
+                .filter(|bl| bl.kind == BuildingKind::DefenseTower && bl.grid_y as i32 > cy as i32)
+                .count();
+            assert!(
+                front_towers >= 2,
+                "seed {seed}: only {front_towers} towers guard the front approach"
+            );
+            let castle = buildings
+                .iter()
+                .find(|bl| bl.kind == BuildingKind::Castle)
+                .expect("castle");
+            assert!(
+                castle.grid_y as i32 > cy as i32,
+                "castle must face the enemy"
+            );
+        }
+    }
+
+    #[test]
+    fn base_production_covers_every_wave_kind() {
         let b = BORDER_SIZE;
-        let buildings = generate_base_buildings(Faction::Blue, b + 10, b + 10, 42);
-        let count = |k: BuildingKind| buildings.iter().filter(|b| b.kind == k).count();
-        assert_eq!(count(BuildingKind::Castle), 1, "must have 1 castle");
-        assert_eq!(count(BuildingKind::DefenseTower), 4, "must have 4 towers");
-        assert_eq!(count(BuildingKind::Barracks), 2, "must have 2 barracks");
-        assert_eq!(count(BuildingKind::Archery), 2, "must have 2 archery");
-        assert_eq!(count(BuildingKind::Monastery), 1, "must have 1 monastery");
-        assert_eq!(count(BuildingKind::House), 10, "must have 10 houses");
+        let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, 42, F_DOWN);
+        for kind in [
+            UnitKind::Warrior,
+            UnitKind::Lancer,
+            UnitKind::Archer,
+            UnitKind::Monk,
+        ] {
+            assert!(
+                buildings.iter().any(|bl| bl.produces == Some(kind)),
+                "no building produces {kind:?}"
+            );
+        }
     }
 
     #[test]
     fn generate_base_buildings_is_deterministic() {
         let b = BORDER_SIZE;
-        let a = generate_base_buildings(Faction::Blue, b + 10, b + 10, 1337);
-        let c = generate_base_buildings(Faction::Blue, b + 10, b + 10, 1337);
+        let a = generate_base_buildings(Faction::Blue, b + 20, b + 20, 1337, F_DOWN);
+        let c = generate_base_buildings(Faction::Blue, b + 20, b + 20, 1337, F_DOWN);
         assert_eq!(a.len(), c.len());
         for (x, y) in a.iter().zip(c.iter()) {
             assert_eq!(x.kind, y.kind);
@@ -402,13 +467,13 @@ mod tests {
     #[test]
     fn house_variants_distributed() {
         let b = BORDER_SIZE;
-        let buildings = generate_base_buildings(Faction::Blue, b + 10, b + 10, 42);
+        let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, 42, F_DOWN);
         let houses: Vec<u8> = buildings
             .iter()
             .filter(|b| b.kind == BuildingKind::House)
             .map(|b| b.house_variant)
             .collect();
-        assert_eq!(houses.len(), 10);
+        assert!(houses.len() >= 8);
         // All 3 variants should appear
         for v in 0..3u8 {
             assert!(
@@ -421,7 +486,7 @@ mod tests {
     #[test]
     fn production_buildings_have_produces() {
         let b = BORDER_SIZE;
-        let buildings = generate_base_buildings(Faction::Blue, b + 10, b + 10, 42);
+        let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, 42, F_DOWN);
         let warriors: Vec<_> = buildings
             .iter()
             .filter(|b| b.produces == Some(UnitKind::Warrior))
