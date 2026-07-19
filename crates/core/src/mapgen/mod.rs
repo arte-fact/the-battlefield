@@ -6,10 +6,11 @@ pub use village::{VillageSpec, VillageTheme};
 use crate::grid::{Decoration, Grid, TileKind, BORDER_SIZE, PLAYABLE_SIZE};
 use simplex::Simplex;
 
-/// Village layout ring around each zone center (tiles). Starts outside
-/// the central plaza so armies can settle without threading buildings.
-pub const VILLAGE_RING_MIN: u32 = 4;
-pub const VILLAGE_RING_MAX: u32 = 6;
+/// Village layout ring around each zone center (tiles). Starts beyond
+/// the capture circle (zone_radius 6) so the fighting ground stays
+/// open and the village spreads around it.
+pub const VILLAGE_RING_MIN: u32 = 7;
+pub const VILLAGE_RING_MAX: u32 = 10;
 /// Largest building footprint half-extent placed on the ring.
 pub const VILLAGE_MAX_FOOTPRINT: u32 = 2;
 /// Cleared ground radius required by a village.

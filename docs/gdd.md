@@ -87,7 +87,7 @@ Every zone is a small **village** with one worked resource, themed per seed (all
 | Lumber camp | Tree grove | Axe, carry wood | Archery (archers) |
 | Pasture | Sheep pen | Knife, carry meat | Monastery (monks) |
 
-Each village has 2-3 houses (one peon each), its production building (the center zone rolls a second), and the defense tower at its heart. Buildings and peons are **Black (neutral) until captured**, then recolor to the owner's faction.
+Each village has 3-4 houses (one peon each), its production building (the center zone rolls a second), and the defense tower at its heart. Buildings ring the **outside** of the capture circle, keeping the fighting ground open. Buildings and peons are **Black (neutral) until captured**, then recolor to the owner's faction.
 
 **Village economy:** each peon delivery banks 1 stock (cap 5). A controlled village adds its building's units to the owner's reinforcement wave, **spawned at the village** -- front-line reinforcements are the payoff of holding it. Village units cost normal manpower and 1 stock each; peons **flee combat**, so marching an army through a village scatters its workers and stalls its output without capturing it.
 

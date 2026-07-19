@@ -121,7 +121,7 @@ fn plan_one(
         }
     }
 
-    let house_count = 2 + (rng.next() % 2) as usize;
+    let house_count = 3 + (rng.next() % 2) as usize;
     let mut houses = Vec::new();
     for _ in 0..house_count {
         if let Some(pos) = place_on_ring(
