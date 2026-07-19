@@ -93,22 +93,26 @@ Ship the menu first with the row greyed to Blue if this drags.
 
 ## Roadmap (checkable)
 
-- [ ] 1. Core score model: kill/capture/survival counters on `Game`,
+- [x] 1. Core score model: kill/capture/survival counters on `Game`,
   `RunScore` + total formula (+ config values), tests.
-- [ ] 2. Core `MenuModel` + `SkirmishConfig` (rows, clamps, apply-to-
+- [x] 2. Core `MenuModel` + `SkirmishConfig` (rows, clamps, apply-to-
   GameConfig), `ScoreBoard` + initials entry model + JSON round-trip,
   tests (navigation, clamping, top-10 insertion, serde).
-- [ ] 3. Screens: extend `GameScreen` + flows (arcade vs skirmish end
+- [x] 3. Screens: extend `GameScreen` + flows (arcade vs skirmish end
   screens), input routing (stick/keys/touch) through the shared model.
-- [ ] 4. Rendering in both renderers via the UI kit (setup page,
+- [x] 4. Rendering in both renderers via the UI kit (setup page,
   tally, initials, scoreboard); wgpu web verified headlessly with
   screenshots like the UI-kit pass.
-- [ ] 5. Persistence shims: wasm_bindgen scoreboard get/set + page
+- [x] 5. Persistence shims: wasm_bindgen scoreboard get/set + page
   localStorage; native file. Config-panel pattern reused.
-- [ ] 6. Playable Red (de-hardcode Blue in rep/zone events) — or ship
-  greyed.
-- [ ] 7. Verify: tests, clippy, fmt, probes unaffected (menus don't
-  touch sim), GDD screens/UI sections, this roadmap.
+- [ ] 6. Playable Red (de-hardcode Blue in rep/zone events) —
+  deferred; the faction row is omitted for now.
+- [x] 7. Verify: tests/clippy/fmt green; headless browser confirms
+  menu, skirmish page (focus/adjust/back), scoreboard empty state and
+  arcade launch. Caught a real bug: core generated seeds via
+  SystemTime, which panics on wasm and froze the menu after the first
+  transition — core is now clock-free (next_seed mixer), hosts supply
+  time-based entropy.
 
 ## Decisions taken (flag if you disagree)
 
