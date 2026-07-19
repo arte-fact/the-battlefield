@@ -5,11 +5,11 @@ use crate::unit::{Facing, Faction};
 pub const PAWN_FRAME_SIZE: u32 = 192;
 
 const PAWN_WALK_SPEED: f32 = 60.0;
-const PAWN_CHOP_TIME: f32 = 3.0;
+const PAWN_WORK_TIME: f32 = 3.0;
 pub const PAWN_RADIUS: f32 = 20.0;
 const PAWN_ARRIVE_DIST_SQ: f32 = (TILE_SIZE * 0.4) * (TILE_SIZE * 0.4);
-/// How close the pawn walks to the tree edge before chopping.
-const PAWN_CHOP_DIST: f32 = TILE_SIZE * 0.6;
+/// How close the pawn walks to the work tile edge before working.
+const PAWN_WORK_DIST: f32 = TILE_SIZE * 0.6;
 /// Max A* path length (grid steps).
 const PAWN_PATH_MAX: u32 = 40;
 /// Seconds without progress before giving up and resetting.
@@ -17,14 +17,39 @@ const STUCK_TIMEOUT: f32 = 4.0;
 
 const IDLE_FRAMES: u32 = 8;
 const RUN_FRAMES: u32 = 6;
-const CHOP_FRAMES: u32 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PawnState {
     Idle,
-    WalkingToTree,
-    Chopping,
+    WalkingToWork,
+    Working,
     WalkingHome,
+}
+
+/// What this pawn works: picks targets, sprites and work animation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PawnJob {
+    Chop,
+    Mine,
+    Herd,
+}
+
+impl PawnJob {
+    /// (walk_to_work, working, idle_carrying, carrying_home) sprite rows.
+    fn sprite_rows(self) -> (usize, usize, usize, usize) {
+        match self {
+            PawnJob::Chop => (5, 2, 3, 4),
+            PawnJob::Mine => (9, 6, 7, 8),
+            PawnJob::Herd => (13, 10, 11, 12),
+        }
+    }
+
+    fn work_frames(self) -> u32 {
+        match self {
+            PawnJob::Chop | PawnJob::Mine => 6,
+            PawnJob::Herd => 4,
+        }
+    }
 }
 
 pub struct Pawn {
@@ -37,13 +62,18 @@ pub struct Pawn {
     pub state: PawnState,
     pub animation: AnimationState,
     pub state_timer: f32,
-    pub carrying_wood: bool,
+    pub carrying: bool,
+    pub job: PawnJob,
+    /// Village pawns belong to a zone and recolor with its owner.
+    pub zone_id: Option<u8>,
+    /// Herd pens have no terrain marker; the work tiles come from the spec.
+    work_tiles: Vec<(u32, u32)>,
     vel_x: f32,
     vel_y: f32,
     /// A* waypoints (grid coords), computed on state transition.
     waypoints: Vec<(u32, u32)>,
     waypoint_idx: usize,
-    /// Target tree tile (grid coords).
+    /// Target work tile (grid coords).
     target_gx: u32,
     target_gy: u32,
     /// Stuck detection: resets when pawn moves more than 1 tile.
@@ -55,6 +85,26 @@ pub struct Pawn {
 
 impl Pawn {
     pub fn new(home_x: f32, home_y: f32, faction: Faction, seed: u32) -> Self {
+        Self::with_job(
+            home_x,
+            home_y,
+            faction,
+            PawnJob::Chop,
+            None,
+            Vec::new(),
+            seed,
+        )
+    }
+
+    pub fn with_job(
+        home_x: f32,
+        home_y: f32,
+        faction: Faction,
+        job: PawnJob,
+        zone_id: Option<u8>,
+        work_tiles: Vec<(u32, u32)>,
+        seed: u32,
+    ) -> Self {
         let mut p = Self {
             x: home_x,
             y: home_y,
@@ -65,7 +115,10 @@ impl Pawn {
             state: PawnState::Idle,
             animation: AnimationState::new(IDLE_FRAMES, 8.0),
             state_timer: 0.0,
-            carrying_wood: false,
+            carrying: false,
+            job,
+            zone_id,
+            work_tiles,
             vel_x: 0.0,
             vel_y: 0.0,
             waypoints: Vec::new(),
@@ -97,20 +150,21 @@ impl Pawn {
     }
 
     pub fn sprite_index(&self) -> usize {
-        match (self.state, self.carrying_wood) {
+        let (walk_to, working, idle_carry, carry_home) = self.job.sprite_rows();
+        match (self.state, self.carrying) {
             (PawnState::Idle, false) => 0,
-            (PawnState::WalkingToTree, _) => 1,
-            (PawnState::Chopping, _) => 2,
-            (PawnState::Idle, true) => 3,
-            (PawnState::WalkingHome, _) => 4,
+            (PawnState::WalkingToWork, _) => walk_to,
+            (PawnState::Working, _) => working,
+            (PawnState::Idle, true) => idle_carry,
+            (PawnState::WalkingHome, _) => carry_home,
         }
     }
 
     pub fn anim_frame_count(&self) -> u32 {
         match self.state {
             PawnState::Idle => IDLE_FRAMES,
-            PawnState::WalkingToTree | PawnState::WalkingHome => RUN_FRAMES,
-            PawnState::Chopping => CHOP_FRAMES,
+            PawnState::WalkingToWork | PawnState::WalkingHome => RUN_FRAMES,
+            PawnState::Working => self.job.work_frames(),
         }
     }
 
@@ -205,11 +259,26 @@ impl Pawn {
         self.stuck_timer > STUCK_TIMEOUT
     }
 
-    /// Find nearest Forest tile not claimed by another pawn. Returns grid coords.
-    fn find_nearest_tree(&mut self, grid: &Grid, claimed: &[(u32, u32)]) -> Option<(u32, u32)> {
+    /// Find the nearest unclaimed work tile for this pawn's job.
+    fn find_work_target(&mut self, grid: &Grid, claimed: &[(u32, u32)]) -> Option<(u32, u32)> {
+        if self.job == PawnJob::Herd {
+            let mut best: Option<((u32, u32), f32)> = None;
+            for &(ux, uy) in &self.work_tiles {
+                if claimed.contains(&(ux, uy)) {
+                    continue;
+                }
+                let (wx, wy) = grid::grid_to_world(ux, uy);
+                let (dx, dy) = (wx - self.x, wy - self.y);
+                let d = dx * dx + dy * dy;
+                if best.is_none() || d < best.unwrap().1 {
+                    best = Some(((ux, uy), d));
+                }
+            }
+            return best.map(|(pos, _)| pos);
+        }
+
         let (gx, gy) = grid::world_to_grid(self.x, self.y);
         let mut best: Option<((u32, u32), f32)> = None;
-
         for dy in -20i32..=20 {
             for dx in -20i32..=20 {
                 let nx = gx + dx;
@@ -219,11 +288,15 @@ impl Pawn {
                 }
                 let ux = nx as u32;
                 let uy = ny as u32;
-                if grid.get(ux, uy) != TileKind::Forest {
-                    continue;
-                }
-                // Skip trees already targeted by another pawn
-                if claimed.contains(&(ux, uy)) {
+                let is_target = match self.job {
+                    PawnJob::Chop => grid.get(ux, uy) == TileKind::Forest,
+                    PawnJob::Mine => matches!(
+                        grid.decoration(ux, uy),
+                        Some(crate::grid::Decoration::GoldStone(_))
+                    ),
+                    PawnJob::Herd => unreachable!(),
+                };
+                if !is_target || claimed.contains(&(ux, uy)) {
                     continue;
                 }
                 let d = (dx * dx + dy * dy) as f32;
@@ -235,7 +308,7 @@ impl Pawn {
         best.map(|(pos, _)| pos)
     }
 
-    /// Find the nearest passable tile adjacent to the target tree (for pathfinding goal).
+    /// Find the nearest passable tile adjacent to the work tile (for pathfinding goal).
     fn passable_near(&self, gx: u32, gy: u32, grid: &Grid) -> Option<(u32, u32)> {
         // Check the 8 neighbors of the tree tile for a passable one
         let mut best: Option<((u32, u32), f32)> = None;
@@ -272,18 +345,16 @@ impl Pawn {
         self.vel_y = 0.0;
         self.waypoints.clear();
         self.waypoint_idx = 0;
-        self.carrying_wood = false;
+        self.carrying = false;
         self.state = PawnState::Idle;
         self.state_timer = self.rand_range(2.0, 5.0);
         self.set_anim(IDLE_FRAMES, 8.0);
     }
 
-    /// Returns the tree tile this pawn is currently targeting (for claim tracking).
-    pub fn claimed_tree(&self) -> Option<(u32, u32)> {
+    /// Returns the work tile this pawn is currently targeting (for claim tracking).
+    pub fn claimed_target(&self) -> Option<(u32, u32)> {
         match self.state {
-            PawnState::WalkingToTree | PawnState::Chopping => {
-                Some((self.target_gx, self.target_gy))
-            }
+            PawnState::WalkingToWork | PawnState::Working => Some((self.target_gx, self.target_gy)),
             _ => None,
         }
     }
@@ -293,14 +364,18 @@ impl Pawn {
             PawnState::Idle => {
                 self.state_timer -= dt;
                 if self.state_timer <= 0.0 {
-                    if let Some((tree_gx, tree_gy)) = self.find_nearest_tree(grid, claimed) {
-                        // Path to a passable tile adjacent to the tree
-                        let goal = self.passable_near(tree_gx, tree_gy, grid);
+                    if let Some((tgx, tgy)) = self.find_work_target(grid, claimed) {
+                        // Path to a passable tile adjacent to the work tile
+                        let goal = if grid.is_passable(tgx, tgy) {
+                            Some((tgx, tgy))
+                        } else {
+                            self.passable_near(tgx, tgy, grid)
+                        };
                         if let Some((pgx, pgy)) = goal {
                             if self.compute_path(pgx, pgy, grid) {
-                                self.target_gx = tree_gx;
-                                self.target_gy = tree_gy;
-                                self.state = PawnState::WalkingToTree;
+                                self.target_gx = tgx;
+                                self.target_gy = tgy;
+                                self.state = PawnState::WalkingToWork;
                                 self.set_anim(RUN_FRAMES, 10.0);
                             } else {
                                 self.state_timer = self.rand_range(3.0, 6.0);
@@ -313,34 +388,33 @@ impl Pawn {
                     }
                 }
             }
-            PawnState::WalkingToTree => {
+            PawnState::WalkingToWork => {
                 if self.check_stuck(dt) {
                     self.reset_to_idle();
                     return;
                 }
                 let waypoints_done = self.follow_waypoints(dt, grid);
-                // After waypoints, walk directly toward tree edge for realistic proximity
+                // After waypoints, walk directly toward the work tile edge
                 let (twx, twy) = grid::grid_to_world(self.target_gx, self.target_gy);
                 let dx = twx - self.x;
                 let dy = twy - self.y;
-                let dist_to_tree = (dx * dx + dy * dy).sqrt();
+                let dist_to_work = (dx * dx + dy * dy).sqrt();
 
-                if dist_to_tree <= PAWN_CHOP_DIST {
-                    // Close enough to chop
+                if dist_to_work <= PAWN_WORK_DIST {
                     self.vel_x = 0.0;
                     self.vel_y = 0.0;
-                    self.state = PawnState::Chopping;
-                    self.state_timer = PAWN_CHOP_TIME;
-                    self.set_anim(CHOP_FRAMES, 10.0);
+                    self.state = PawnState::Working;
+                    self.state_timer = PAWN_WORK_TIME;
+                    self.set_anim(self.job.work_frames(), 10.0);
                     if dx > 0.5 {
                         self.facing = Facing::Right;
                     } else if dx < -0.5 {
                         self.facing = Facing::Left;
                     }
                 } else if waypoints_done {
-                    // Waypoints exhausted but still too far — walk directly toward tree
-                    let vx = (dx / dist_to_tree) * PAWN_WALK_SPEED;
-                    let vy = (dy / dist_to_tree) * PAWN_WALK_SPEED;
+                    // Waypoints exhausted but still too far — walk directly
+                    let vx = (dx / dist_to_work) * PAWN_WALK_SPEED;
+                    let vy = (dy / dist_to_work) * PAWN_WALK_SPEED;
                     let new_x = self.x + vx * dt;
                     let new_y = self.y + vy * dt;
                     if grid.is_circle_passable(new_x, new_y, PAWN_RADIUS) {
@@ -354,10 +428,10 @@ impl Pawn {
                     }
                 }
             }
-            PawnState::Chopping => {
+            PawnState::Working => {
                 self.state_timer -= dt;
                 if self.state_timer <= 0.0 {
-                    self.carrying_wood = true;
+                    self.carrying = true;
                     // Path home
                     let (hgx, hgy) = grid::world_to_grid(self.home_x, self.home_y);
                     if hgx >= 0 && hgy >= 0 && self.compute_path(hgx as u32, hgy as u32, grid) {
@@ -380,7 +454,7 @@ impl Pawn {
                     return;
                 }
                 if self.follow_waypoints(dt, grid) {
-                    self.carrying_wood = false;
+                    self.carrying = false;
                     self.state = PawnState::Idle;
                     self.state_timer = self.rand_range(1.0, 2.0);
                     self.set_anim(IDLE_FRAMES, 8.0);
@@ -399,7 +473,7 @@ mod tests {
     fn pawn_initializes_idle() {
         let p = Pawn::new(500.0, 500.0, Faction::Blue, 42);
         assert_eq!(p.state, PawnState::Idle);
-        assert!(!p.carrying_wood);
+        assert!(!p.carrying);
         assert!(p.state_timer > 0.0);
     }
 
@@ -410,7 +484,7 @@ mod tests {
         let mut p = Pawn::new(500.0, 500.0, Faction::Blue, 42);
         p.state_timer = 0.0;
         p.update(0.016, &grid, &[]);
-        assert_eq!(p.state, PawnState::WalkingToTree);
+        assert_eq!(p.state, PawnState::WalkingToWork);
         assert!(!p.waypoints.is_empty());
     }
 
@@ -436,7 +510,7 @@ mod tests {
         let mut p = Pawn::new(wx, wy, Faction::Blue, 42);
         p.state_timer = 0.0;
         p.update(0.016, &grid, &[]);
-        assert_eq!(p.state, PawnState::WalkingToTree);
+        assert_eq!(p.state, PawnState::WalkingToWork);
         // Path should route around the building wall
         for &(gx, gy) in &p.waypoints {
             assert!(

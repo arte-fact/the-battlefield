@@ -386,11 +386,8 @@ fn draw_sheep(backend: &mut impl DrawBackend, game: &Game, idx: usize) {
 
 fn draw_pawn(backend: &mut impl DrawBackend, game: &Game, idx: usize) {
     let pawn = &game.pawns[idx];
-    let faction_offset = match pawn.faction {
-        Faction::Blue => 0,
-        Faction::Red => asset_manifest::PAWN_SPECS.len(),
-    };
-    let key = SpriteKey::Pawn(faction_offset + pawn.sprite_index());
+    let color = super::pawn_color_index(pawn, &game.zone_manager);
+    let key = SpriteKey::Pawn(color * asset_manifest::PAWN_SPECS.len() + pawn.sprite_index());
     if backend.sprite_info(key).is_none() {
         return;
     }

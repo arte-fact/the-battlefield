@@ -43,7 +43,8 @@ pub enum SpriteKey {
     Arrow,
     /// Sheep animation (0=Idle, 1=Move, 2=Grass).
     Sheep(usize),
-    /// Pawn worker: faction_index * PAWN_SPECS.len() + sprite_index.
+    /// Pawn worker: color_index * PAWN_SPECS.len() + sprite_index
+    /// (colors from `asset_manifest::PAWN_COLOR_FOLDERS`).
     Pawn(usize),
     /// Unit avatar portrait (index from `asset_manifest::avatar_index`).
     Avatar(usize),
@@ -97,6 +98,25 @@ pub trait DrawBackend {
 // ---------------------------------------------------------------------------
 
 /// A drawable entity tag for Y-sorted rendering.
+/// Sprite color for a pawn: village pawns follow their zone's owner
+/// (2 = neutral Black), base pawns their faction.
+pub fn pawn_color_index(pawn: &crate::pawn::Pawn, zones: &crate::zone::ZoneManager) -> usize {
+    use crate::unit::Faction;
+    use crate::zone::ZoneState;
+    let faction = match pawn.zone_id {
+        None => Some(pawn.faction),
+        Some(zid) => match zones.zones.get(zid as usize).map(|z| z.state) {
+            Some(ZoneState::Controlled(f)) | Some(ZoneState::Capturing(f)) => Some(f),
+            _ => None,
+        },
+    };
+    match faction {
+        Some(Faction::Blue) => 0,
+        Some(Faction::Red) => 1,
+        None => 2,
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum Drawable {
     Unit(usize),

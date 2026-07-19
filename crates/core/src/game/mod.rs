@@ -427,7 +427,7 @@ impl Game {
     fn tick_pawns(&mut self, dt: f32) {
         let mut pawns = std::mem::take(&mut self.pawns);
         // Collect trees already claimed by pawns (walking to or chopping)
-        let claimed: Vec<(u32, u32)> = pawns.iter().filter_map(|p| p.claimed_tree()).collect();
+        let claimed: Vec<(u32, u32)> = pawns.iter().filter_map(|p| p.claimed_target()).collect();
         for p in &mut pawns {
             p.update(dt, &self.grid, &claimed);
         }

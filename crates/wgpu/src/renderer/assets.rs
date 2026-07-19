@@ -559,8 +559,7 @@ impl Assets {
 
     fn load_pawns(&mut self, gpu: &GpuContext) {
         let pawn_frame_size = battlefield_core::pawn::PAWN_FRAME_SIZE;
-        let faction_folders = ["Blue Units", "Red Units"];
-        for folder in &faction_folders {
+        for folder in asset_manifest::PAWN_COLOR_FOLDERS {
             for &(filename, frame_count) in asset_manifest::PAWN_SPECS {
                 let path = format!("{ASSET_BASE}/Units/{folder}/Pawn/{filename}");
                 let fc = if frame_count > 0 {

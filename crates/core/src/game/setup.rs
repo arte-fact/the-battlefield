@@ -475,13 +475,42 @@ impl Game {
             }
         }
 
-        // Spawn one pawn worker per house
+        // Spawn one pawn worker per house; village pawns work their
+        // zone's resource and recolor with its owner.
         let mut pawn_seed = seed.wrapping_add(0xCAFE);
         for b in &self.buildings {
-            if b.kind == building::BuildingKind::House {
-                let (wx, wy) = grid::grid_to_world(b.grid_x, b.grid_y);
-                pawn_seed = pawn_seed.wrapping_mul(1103515245).wrapping_add(12345);
-                self.pawns.push(Pawn::new(wx, wy, b.faction, pawn_seed));
+            if b.kind != building::BuildingKind::House {
+                continue;
+            }
+            let (wx, wy) = grid::grid_to_world(b.grid_x, b.grid_y);
+            pawn_seed = pawn_seed.wrapping_mul(1103515245).wrapping_add(12345);
+            match b.zone_id {
+                None => self.pawns.push(Pawn::new(wx, wy, b.faction, pawn_seed)),
+                Some(zid) => {
+                    let Some(v) = layout.villages.iter().find(|v| v.zone_idx == zid) else {
+                        continue;
+                    };
+                    let (job, work_tiles) = match v.theme {
+                        crate::mapgen::VillageTheme::Gold => {
+                            (crate::pawn::PawnJob::Mine, Vec::new())
+                        }
+                        crate::mapgen::VillageTheme::Wood => {
+                            (crate::pawn::PawnJob::Chop, Vec::new())
+                        }
+                        crate::mapgen::VillageTheme::Meat => {
+                            (crate::pawn::PawnJob::Herd, v.resources.clone())
+                        }
+                    };
+                    self.pawns.push(Pawn::with_job(
+                        wx,
+                        wy,
+                        b.faction,
+                        job,
+                        Some(zid),
+                        work_tiles,
+                        pawn_seed,
+                    ));
+                }
             }
         }
 

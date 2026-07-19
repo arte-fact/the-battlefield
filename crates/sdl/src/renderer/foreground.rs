@@ -654,11 +654,8 @@ fn draw_pawn(
     idx: usize,
 ) {
     let pawn = &game.pawns[idx];
-    let faction_offset = match pawn.faction {
-        Faction::Blue => 0,
-        Faction::Red => asset_manifest::PAWN_SPECS.len(),
-    };
-    let tex_idx = faction_offset + pawn.sprite_index();
+    let color = battlefield_core::rendering::pawn_color_index(pawn, &game.zone_manager);
+    let tex_idx = color * asset_manifest::PAWN_SPECS.len() + pawn.sprite_index();
     if tex_idx >= assets.pawn_textures.len() {
         return;
     }

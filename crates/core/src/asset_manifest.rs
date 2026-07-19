@@ -194,14 +194,26 @@ pub const SHEEP_SPECS: &[(&str, u32)] = &[
 // ---------------------------------------------------------------------------
 
 /// Pawn animation specs: (filename, frame_count). Frame size = 192×192.
-/// Index: sprite_index * 2 + faction_index (Blue=0, Red=1).
+/// Texture index: color_index * PAWN_SPECS.len() + sprite_index.
 pub const PAWN_SPECS: &[(&str, u32)] = &[
-    ("Pawn_Idle.png", 8),         // 0: idle empty-handed
-    ("Pawn_Run.png", 6),          // 1: walking empty
-    ("Pawn_Interact Axe.png", 6), // 2: chopping
-    ("Pawn_Idle Wood.png", 8),    // 3: idle carrying wood
-    ("Pawn_Run Wood.png", 6),     // 4: walking with wood
+    ("Pawn_Idle.png", 8),             // 0: idle empty-handed
+    ("Pawn_Run.png", 6),              // 1: running empty (fleeing)
+    ("Pawn_Interact Axe.png", 6),     // 2: chopping
+    ("Pawn_Idle Wood.png", 8),        // 3: idle carrying wood
+    ("Pawn_Run Wood.png", 6),         // 4: carrying wood
+    ("Pawn_Run Axe.png", 6),          // 5: walking to the grove
+    ("Pawn_Interact Pickaxe.png", 6), // 6: mining
+    ("Pawn_Idle Gold.png", 8),        // 7: idle carrying gold
+    ("Pawn_Run Gold.png", 6),         // 8: carrying gold
+    ("Pawn_Run Pickaxe.png", 6),      // 9: walking to the outcrop
+    ("Pawn_Interact Knife.png", 4),   // 10: butchering
+    ("Pawn_Idle Meat.png", 8),        // 11: idle carrying meat
+    ("Pawn_Run Meat.png", 6),         // 12: carrying meat
+    ("Pawn_Run Knife.png", 6),        // 13: walking to the pen
 ];
+
+/// Pawn color folders: 0=Blue, 1=Red, 2=neutral (Black, unowned villages).
+pub const PAWN_COLOR_FOLDERS: &[&str] = &["Blue Units", "Red Units", "Black Units"];
 
 // ---------------------------------------------------------------------------
 // Unit avatars (portraits for HUD)

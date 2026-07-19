@@ -260,6 +260,71 @@ pub fn get(path: &str) -> Option<&'static [u8]> {
         "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Human Avatars/Avatars_04.png" =>
             Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Human Avatars/Avatars_04.png")),
 
+        // ── Pawn job/neutral sheets ─────────────────────────────────
+        "assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Axe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Axe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Interact Pickaxe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Interact Pickaxe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Idle Gold.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Idle Gold.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Gold.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Gold.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Pickaxe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Pickaxe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Interact Knife.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Interact Knife.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Idle Meat.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Idle Meat.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Meat.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Meat.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Knife.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Knife.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Run Axe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Run Axe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Interact Pickaxe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Interact Pickaxe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Idle Gold.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Idle Gold.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Run Gold.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Run Gold.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Run Pickaxe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Run Pickaxe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Interact Knife.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Interact Knife.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Idle Meat.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Idle Meat.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Run Meat.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Run Meat.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Run Knife.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Red Units/Pawn/Pawn_Run Knife.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Interact Axe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Interact Axe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Idle Wood.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Idle Wood.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Wood.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Wood.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Axe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Axe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Interact Pickaxe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Interact Pickaxe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Idle Gold.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Idle Gold.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Gold.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Gold.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Pickaxe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Pickaxe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Interact Knife.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Interact Knife.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Idle Meat.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Idle Meat.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Meat.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Meat.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Knife.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Pawn/Pawn_Run Knife.png")),
         // ── Gold stones ─────────────────────────────────────────────
         "assets/Tiny Swords (Free Pack)/Terrain/Resources/Gold/Gold Stones/Gold Stone 1.png" =>
             Some(embed!("assets/Tiny Swords (Free Pack)/Terrain/Resources/Gold/Gold Stones/Gold Stone 1.png")),
