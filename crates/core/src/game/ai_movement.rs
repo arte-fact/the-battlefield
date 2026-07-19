@@ -531,53 +531,6 @@ impl Game {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ai_melee_marches_to_objective() {
-        let mut game = Game::new(960.0, 640.0);
-        // Set up objective to the right
-        game.blue_objective = grid::grid_to_world(50, 5);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, false);
-        // No enemies at all — AI should march toward objective
-        let start_x = game.units[0].x;
-        for _ in 0..60 {
-            game.tick_ai(0.016);
-        }
-        assert!(
-            game.units[0].x > start_x,
-            "AI should march toward objective when no enemy in sight"
-        );
-    }
-
-    #[test]
-    fn ai_targets_zone_not_spawn() {
-        use crate::mapgen::MapLayout;
-        let mut game = Game::new(960.0, 640.0);
-        let layout = MapLayout {
-            blue_base: (21, 21),
-            red_base: (138, 138),
-            zone_centers: vec![(50, 50), (80, 80), (110, 110)],
-            blue_gather: (21, 21),
-            red_gather: (138, 138),
-            blue_home_zones: vec![0],
-            red_home_zones: vec![2],
-            connections: vec![vec![1], vec![0, 2], vec![1]],
-        };
-        game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
-        game.blue_objective = grid::grid_to_world(138, 138);
-        let obj = game.faction_objective(Faction::Blue);
-        let (base_wx, _) = grid::grid_to_world(138, 138);
-        assert!(
-            obj.0 < base_wx,
-            "Blue should target a zone (x < {base_wx}), got x={}",
-            obj.0
-        );
-    }
-}
-
 impl Game {
     /// Diagnostic snapshot of unit movement state (bench/debug tooling).
     pub fn flow_diagnostics(&self) -> String {
@@ -701,5 +654,52 @@ impl Game {
             ));
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ai_melee_marches_to_objective() {
+        let mut game = Game::new(960.0, 640.0);
+        // Set up objective to the right
+        game.blue_objective = grid::grid_to_world(50, 5);
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, false);
+        // No enemies at all — AI should march toward objective
+        let start_x = game.units[0].x;
+        for _ in 0..60 {
+            game.tick_ai(0.016);
+        }
+        assert!(
+            game.units[0].x > start_x,
+            "AI should march toward objective when no enemy in sight"
+        );
+    }
+
+    #[test]
+    fn ai_targets_zone_not_spawn() {
+        use crate::mapgen::MapLayout;
+        let mut game = Game::new(960.0, 640.0);
+        let layout = MapLayout {
+            blue_base: (21, 21),
+            red_base: (138, 138),
+            zone_centers: vec![(50, 50), (80, 80), (110, 110)],
+            blue_gather: (21, 21),
+            red_gather: (138, 138),
+            blue_home_zones: vec![0],
+            red_home_zones: vec![2],
+            connections: vec![vec![1], vec![0, 2], vec![1]],
+        };
+        game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
+        game.blue_objective = grid::grid_to_world(138, 138);
+        let obj = game.faction_objective(Faction::Blue);
+        let (base_wx, _) = grid::grid_to_world(138, 138);
+        assert!(
+            obj.0 < base_wx,
+            "Blue should target a zone (x < {base_wx}), got x={}",
+            obj.0
+        );
     }
 }

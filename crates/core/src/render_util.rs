@@ -815,6 +815,54 @@ pub fn round_button_quads(cx: f64, cy: f64, radius: f64, pressed: bool) -> (SrcD
     (base, icon)
 }
 
+/// 3-slice bar frame quads for the pre-processed BigBar atlas
+/// (left cap | stretchable center | right cap; caps are `BAR_LEFT.2` px).
+pub fn bar_base_quads(
+    atlas_w: f64,
+    atlas_h: f64,
+    dx: f64,
+    dy: f64,
+    dw: f64,
+    dh: f64,
+    cap_w: f64,
+) -> [SrcDst; 3] {
+    let src_cap = BAR_LEFT.2;
+    let cap = cap_w.min(dw / 2.0);
+    let mid_w = (dw - cap * 2.0).max(0.0);
+    [
+        SrcDst {
+            sx: 0.0,
+            sy: 0.0,
+            sw: src_cap,
+            sh: atlas_h,
+            dx,
+            dy,
+            dw: cap,
+            dh,
+        },
+        SrcDst {
+            sx: src_cap,
+            sy: 0.0,
+            sw: atlas_w - src_cap * 2.0,
+            sh: atlas_h,
+            dx: dx + cap,
+            dy,
+            dw: mid_w,
+            dh,
+        },
+        SrcDst {
+            sx: atlas_w - src_cap,
+            sy: 0.0,
+            sw: src_cap,
+            sh: atlas_h,
+            dx: dx + cap + mid_w,
+            dy,
+            dw: cap,
+            dh,
+        },
+    ]
+}
+
 #[cfg(test)]
 mod ui_assembly_tests {
     use super::*;
@@ -870,52 +918,4 @@ mod ui_assembly_tests {
         assert!(icon_dn.dy > icon_up.dy);
         assert_eq!(icon_up.sw, 64.0);
     }
-}
-
-/// 3-slice bar frame quads for the pre-processed BigBar atlas
-/// (left cap | stretchable center | right cap; caps are `BAR_LEFT.2` px).
-pub fn bar_base_quads(
-    atlas_w: f64,
-    atlas_h: f64,
-    dx: f64,
-    dy: f64,
-    dw: f64,
-    dh: f64,
-    cap_w: f64,
-) -> [SrcDst; 3] {
-    let src_cap = BAR_LEFT.2;
-    let cap = cap_w.min(dw / 2.0);
-    let mid_w = (dw - cap * 2.0).max(0.0);
-    [
-        SrcDst {
-            sx: 0.0,
-            sy: 0.0,
-            sw: src_cap,
-            sh: atlas_h,
-            dx,
-            dy,
-            dw: cap,
-            dh,
-        },
-        SrcDst {
-            sx: src_cap,
-            sy: 0.0,
-            sw: atlas_w - src_cap * 2.0,
-            sh: atlas_h,
-            dx: dx + cap,
-            dy,
-            dw: mid_w,
-            dh,
-        },
-        SrcDst {
-            sx: atlas_w - src_cap,
-            sy: 0.0,
-            sw: src_cap,
-            sh: atlas_h,
-            dx: dx + cap + mid_w,
-            dy,
-            dw: cap,
-            dh,
-        },
-    ]
 }

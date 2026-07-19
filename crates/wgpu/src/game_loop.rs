@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 #[cfg(target_arch = "wasm32")]
-use web_time::Instant;
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use battlefield_core::game::Game;
 use battlefield_core::grid::{GRID_SIZE, TILE_SIZE};
@@ -516,10 +516,12 @@ impl GameLoop {
     }
 }
 
-/// Generate a seed using Instant (works on both native and web via web-time).
+/// Time-based seed; web-time backs SystemTime with Date.now on wasm.
 fn generate_seed() -> u32 {
-    let elapsed = Instant::now().elapsed();
-    elapsed.as_nanos() as u32
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
+        .unwrap_or(42)
 }
 
 /// Convert a gilrs button to our platform-agnostic GpButton.

@@ -7,12 +7,13 @@ use crate::config::GameConfig;
 use crate::game::Game;
 use serde::{Deserialize, Serialize};
 
-/// Generate a seed from the current system time.
-pub fn generate_seed() -> u32 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as u32)
-        .unwrap_or(42)
+/// Derive a fresh seed from the previous one (splitmix32 step).
+/// Core stays clock-free; hosts inject time-based entropy at startup.
+pub fn next_seed(state: u32) -> u32 {
+    let mut z = state.wrapping_add(0x9E37_79B9);
+    z = (z ^ (z >> 16)).wrapping_mul(0x21F0_AAAD);
+    z = (z ^ (z >> 15)).wrapping_mul(0x735A_2D97);
+    z ^ (z >> 15)
 }
 
 /// Apply a UI button action to game/screen/menu state.
@@ -30,7 +31,7 @@ pub fn handle_button_action(
 ) {
     match action {
         ButtonAction::Play => {
-            *seed = generate_seed();
+            *seed = next_seed(*seed);
             ui.mode = GameMode::Arcade;
             start_battle(
                 game,
@@ -56,7 +57,7 @@ pub fn handle_button_action(
             log::info!("Retrying with seed {} ({source})", *seed);
         }
         ButtonAction::NewGame => {
-            *seed = generate_seed();
+            *seed = next_seed(*seed);
             start_battle(
                 game,
                 screen,
@@ -87,7 +88,8 @@ pub fn handle_button_action(
         }
         ButtonAction::AdjustRow(row) => {
             ui.focused_row = row as usize;
-            ui.skirmish.adjust(row as usize, 1, generate_seed());
+            ui.skirmish
+                .adjust(row as usize, 1, next_seed(ui.skirmish.seed));
         }
         ButtonAction::ConfirmInitials => {
             if let Some(score) = ui.pending_score.take() {

@@ -11,7 +11,7 @@ use sdl2::event::Event;
 use sdl2::keyboard::Scancode;
 use sdl2::render::{Canvas, TextureCreator};
 use sdl2::video::{Window, WindowContext};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub const WINDOW_W: u32 = 960;
 pub const WINDOW_H: u32 = 640;
@@ -85,7 +85,7 @@ impl GameLoop {
 
         let (output_w, output_h) = canvas.output_size().unwrap_or((WINDOW_W, WINDOW_H));
         let mut game = Game::new(output_w as f32, output_h as f32);
-        let seed = ui::generate_seed();
+        let seed = generate_seed();
         game.setup_demo_battle_with_seed(seed);
         log::info!("Game initialized ({}x{} grid)", GRID_SIZE, GRID_SIZE);
 
@@ -395,7 +395,7 @@ impl GameLoop {
                 if left || right {
                     let dir = if left { -1 } else { 1 };
                     let row = self.ui.focused_row;
-                    self.ui.skirmish.adjust(row, dir, ui::generate_seed());
+                    self.ui.skirmish.adjust(row, dir, generate_seed());
                 }
                 if self.input_state.pressed_this_frame(Scancode::Return) {
                     ui::handle_button_action(
@@ -618,4 +618,11 @@ impl GameLoop {
             }
         }
     }
+}
+
+fn generate_seed() -> u32 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
+        .unwrap_or(42)
 }
