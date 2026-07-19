@@ -53,6 +53,8 @@ pub struct Grid {
     pub decorations: Vec<Option<Decoration>>,
     /// Tiles occupied by buildings (impassable).
     building_occupied: Vec<bool>,
+    /// Cached wide passability (tile + 4 cardinal neighbors all passable).
+    wide_passable: Vec<bool>,
     /// Precomputed: true if tile blocks line-of-sight (Forest or elevation >= 2).
     pub vision_blocked: Vec<bool>,
     /// Precomputed: true if tile is passable (has movement cost and not building-occupied).
@@ -71,6 +73,7 @@ impl Grid {
             building_occupied: vec![false; size],
             vision_blocked: vec![false; size],
             passable: vec![true; size], // Grass is passable, no buildings
+            wide_passable: vec![true; size],
             width,
             height,
         }
@@ -90,6 +93,7 @@ impl Grid {
         // Keep caches in sync
         self.passable[idx] = kind.movement_cost().is_some() && !self.building_occupied[idx];
         self.vision_blocked[idx] = kind == TileKind::Forest || self.elevations[idx] >= 2;
+        self.refresh_wide_around(x, y);
     }
 
     pub fn is_passable(&self, x: u32, y: u32) -> bool {
@@ -107,6 +111,7 @@ impl Grid {
         let idx = (y * self.width + x) as usize;
         self.building_occupied[idx] = true;
         self.passable[idx] = false;
+        self.refresh_wide_around(x, y);
     }
 
     /// Recompute `vision_blocked` and `passable` caches from tile/elevation/building data.
@@ -119,6 +124,38 @@ impl Grid {
             self.vision_blocked[i] = tile == TileKind::Forest || elev >= 2;
             self.passable[i] = tile.movement_cost().is_some() && !self.building_occupied[i];
         }
+        for y in 0..self.height {
+            for x in 0..self.width {
+                self.wide_passable[(y * self.width + x) as usize] = self.compute_wide_at(x, y);
+            }
+        }
+    }
+
+    fn compute_wide_at(&self, x: u32, y: u32) -> bool {
+        if !self.is_passable(x, y) {
+            return false;
+        }
+        for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+            let nx = x as i32 + dx;
+            let ny = y as i32 + dy;
+            if !self.in_bounds(nx, ny) || !self.is_passable(nx as u32, ny as u32) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Refresh the wide-passability cache for a tile and its cardinal
+    /// neighbors after a local passability change.
+    fn refresh_wide_around(&mut self, x: u32, y: u32) {
+        for &(dx, dy) in &[(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let nx = x as i32 + dx;
+            let ny = y as i32 + dy;
+            if self.in_bounds(nx, ny) {
+                let i = (ny as u32 * self.width + nx as u32) as usize;
+                self.wide_passable[i] = self.compute_wide_at(nx as u32, ny as u32);
+            }
+        }
     }
 
     /// Check if a tile is occupied by a building.
@@ -130,23 +167,7 @@ impl Grid {
     /// A wide unit at tile (x,y) overlaps into all 4 cardinal neighbors,
     /// so those must also be passable for the unit to stand there.
     pub fn is_wide_passable(&self, x: u32, y: u32) -> bool {
-        if !self.is_passable(x, y) {
-            return false;
-        }
-        // Check cardinal neighbors — a unit centered on this tile
-        // extends into adjacent tiles due to its radius
-        for &(dx, dy) in &[(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
-            let nx = x as i32 + dx;
-            let ny = y as i32 + dy;
-            if self.in_bounds(nx, ny) {
-                if !self.is_passable(nx as u32, ny as u32) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-        true
+        self.wide_passable[(y * self.width + x) as usize]
     }
 
     /// Check if diagonal movement from (fx, fy) by (dx, dy) is allowed.
@@ -271,104 +292,187 @@ impl Grid {
         let w = self.width;
         let h = self.height;
         let size = (w * h) as usize;
-        let mut g_score = vec![u32::MAX; size];
-        let mut came_from = vec![u32::MAX; size]; // flat index of parent
         let idx = |x: u32, y: u32| (y * w + x) as usize;
 
-        g_score[idx(sx, sy)] = 0;
+        // Generation-stamped scratch: reused across calls so each search
+        // avoids allocating and zeroing two grid-sized vectors.
+        thread_local! {
+            static SCRATCH: std::cell::RefCell<PathScratch> =
+                std::cell::RefCell::new(PathScratch::default());
+        }
 
-        // Octile heuristic for 8-directional movement (scaled by cost_mult 2/3)
-        let heuristic = |x: u32, y: u32| -> u32 {
-            let dx = (x as i32 - gx as i32).unsigned_abs();
-            let dy = (y as i32 - gy as i32).unsigned_abs();
-            let (min, max) = if dx < dy { (dx, dy) } else { (dy, dx) };
-            // cardinal steps * 2 + diagonal steps * 3
-            min * 3 + (max - min) * 2
-        };
+        SCRATCH.with(|scratch| {
+            let mut scratch = scratch.borrow_mut();
+            scratch.begin(size);
+            scratch.set_g(idx(sx, sy), 0);
 
-        let mut open = BinaryHeap::new();
-        open.push(AStarNode {
-            f: heuristic(sx, sy),
-            g: 0,
-            x: sx,
-            y: sy,
-        });
+            // Octile heuristic for 8-directional movement (scaled by cost_mult 2/3)
+            let heuristic = |x: u32, y: u32| -> u32 {
+                let dx = (x as i32 - gx as i32).unsigned_abs();
+                let dy = (y as i32 - gy as i32).unsigned_abs();
+                let (min, max) = if dx < dy { (dx, dy) } else { (dy, dx) };
+                // cardinal steps * 2 + diagonal steps * 3
+                min * 3 + (max - min) * 2
+            };
 
-        // 8-directional: cardinal + diagonal
-        // cost_mult: cardinal = 2, diagonal = 3 (approximates √2 ratio)
-        const DIRS: [(i32, i32, u32); 8] = [
-            (0, -1, 2),
-            (1, 0, 2),
-            (0, 1, 2),
-            (-1, 0, 2),
-            (1, -1, 3),
-            (1, 1, 3),
-            (-1, 1, 3),
-            (-1, -1, 3),
-        ];
+            let mut open = BinaryHeap::new();
+            open.push(AStarNode {
+                f: heuristic(sx, sy),
+                g: 0,
+                x: sx,
+                y: sy,
+            });
 
-        while let Some(node) = open.pop() {
-            if node.x == gx && node.y == gy {
-                // Reconstruct path
+            // 8-directional: cardinal + diagonal
+            // cost_mult: cardinal = 2, diagonal = 3 (approximates √2 ratio)
+            const DIRS: [(i32, i32, u32); 8] = [
+                (0, -1, 2),
+                (1, 0, 2),
+                (0, 1, 2),
+                (-1, 0, 2),
+                (1, -1, 3),
+                (1, 1, 3),
+                (-1, 1, 3),
+                (-1, -1, 3),
+            ];
+
+            // Search is bounded: an unreachable or distant goal must not flood
+            // the whole grid (a full-map exhaustion costs ~1ms; the AI issues
+            // several searches per frame). On hitting the cap, return a partial
+            // path toward the closest approach found so far — callers truncate
+            // to max_len anyway. A search exhausted below the cap (or a closest
+            // approach identical to the start) is a genuine None.
+            let expansion_cap = (max_len as usize).saturating_mul(8).max(64);
+            let mut expansions = 0usize;
+            let mut best_h = heuristic(sx, sy);
+            let mut best_pos = (sx, sy);
+
+            let reconstruct = |scratch: &PathScratch, tx: u32, ty: u32| -> Vec<(u32, u32)> {
                 let mut path = Vec::new();
-                let mut ci = idx(gx, gy);
+                let mut ci = idx(tx, ty);
                 while ci != idx(sx, sy) {
                     let cx = (ci as u32) % w;
                     let cy = (ci as u32) / w;
                     path.push((cx, cy));
-                    ci = came_from[ci] as usize;
+                    ci = scratch.parent(ci) as usize;
                 }
                 path.reverse();
                 if path.len() > max_len as usize {
                     path.truncate(max_len as usize);
                 }
-                return Some(path);
+                path
+            };
+
+            while let Some(node) = open.pop() {
+                if node.x == gx && node.y == gy {
+                    return Some(reconstruct(&scratch, gx, gy));
+                }
+
+                if node.g > scratch.g(idx(node.x, node.y)) {
+                    continue; // stale entry
+                }
+
+                let h = heuristic(node.x, node.y);
+                if h < best_h {
+                    best_h = h;
+                    best_pos = (node.x, node.y);
+                }
+                expansions += 1;
+                if expansions >= expansion_cap {
+                    if best_pos == (sx, sy) {
+                        return None;
+                    }
+                    return Some(reconstruct(&scratch, best_pos.0, best_pos.1));
+                }
+
+                for &(dx, dy, dir_cost) in &DIRS {
+                    let nx = node.x as i32 + dx;
+                    let ny = node.y as i32 + dy;
+                    if !self.in_bounds(nx, ny) {
+                        continue;
+                    }
+                    let nx = nx as u32;
+                    let ny = ny as u32;
+                    if !is_node_passable(nx, ny) {
+                        continue;
+                    }
+                    // Block movement across elevation cliffs
+                    if self.is_cliff_between(node.x, node.y, nx, ny) {
+                        continue;
+                    }
+                    // Prevent corner-cutting for diagonal moves
+                    if !self.can_move_diagonal(node.x, node.y, dx, dy) {
+                        continue;
+                    }
+                    // Skip occupied tiles unless it's the goal
+                    if (nx != gx || ny != gy) && occupied(nx, ny) {
+                        continue;
+                    }
+                    let tile_cost = self.get(nx, ny).movement_cost().unwrap_or(1);
+                    let new_g = node.g + tile_cost * dir_cost;
+                    let ni = idx(nx, ny);
+                    if new_g < scratch.g(ni) {
+                        scratch.set_g(ni, new_g);
+                        scratch.set_parent(ni, idx(node.x, node.y) as u32);
+                        open.push(AStarNode {
+                            f: new_g + heuristic(nx, ny),
+                            g: new_g,
+                            x: nx,
+                            y: ny,
+                        });
+                    }
+                }
             }
 
-            if node.g > g_score[idx(node.x, node.y)] {
-                continue; // stale entry
-            }
+            None
+        })
+    }
+}
 
-            for &(dx, dy, dir_cost) in &DIRS {
-                let nx = node.x as i32 + dx;
-                let ny = node.y as i32 + dy;
-                if !self.in_bounds(nx, ny) {
-                    continue;
-                }
-                let nx = nx as u32;
-                let ny = ny as u32;
-                if !is_node_passable(nx, ny) {
-                    continue;
-                }
-                // Block movement across elevation cliffs
-                if self.is_cliff_between(node.x, node.y, nx, ny) {
-                    continue;
-                }
-                // Prevent corner-cutting for diagonal moves
-                if !self.can_move_diagonal(node.x, node.y, dx, dy) {
-                    continue;
-                }
-                // Skip occupied tiles unless it's the goal
-                if (nx != gx || ny != gy) && occupied(nx, ny) {
-                    continue;
-                }
-                let tile_cost = self.get(nx, ny).movement_cost().unwrap_or(1);
-                let new_g = node.g + tile_cost * dir_cost;
-                let ni = idx(nx, ny);
-                if new_g < g_score[ni] {
-                    g_score[ni] = new_g;
-                    came_from[ni] = idx(node.x, node.y) as u32;
-                    open.push(AStarNode {
-                        f: new_g + heuristic(nx, ny),
-                        g: new_g,
-                        x: nx,
-                        y: ny,
-                    });
-                }
-            }
+/// Reusable A* scratch: generation stamps avoid re-zeroing grid-sized
+/// buffers on every search.
+#[derive(Default)]
+struct PathScratch {
+    stamp: Vec<u32>,
+    g_score: Vec<u32>,
+    parents: Vec<u32>,
+    generation: u32,
+}
+
+impl PathScratch {
+    fn begin(&mut self, size: usize) {
+        if self.stamp.len() != size {
+            self.stamp = vec![0; size];
+            self.g_score = vec![u32::MAX; size];
+            self.parents = vec![u32::MAX; size];
+            self.generation = 0;
         }
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            self.stamp.fill(0);
+            self.generation = 1;
+        }
+    }
 
-        None
+    fn g(&self, i: usize) -> u32 {
+        if self.stamp[i] == self.generation {
+            self.g_score[i]
+        } else {
+            u32::MAX
+        }
+    }
+
+    fn set_g(&mut self, i: usize, v: u32) {
+        self.stamp[i] = self.generation;
+        self.g_score[i] = v;
+    }
+
+    fn parent(&self, i: usize) -> u32 {
+        self.parents[i]
+    }
+
+    fn set_parent(&mut self, i: usize, v: u32) {
+        self.parents[i] = v;
     }
 }
 
@@ -521,6 +625,32 @@ mod tests {
         for &(x, y) in &path {
             assert!(grid.is_passable(x, y));
         }
+    }
+
+    #[test]
+    fn find_path_far_goal_is_bounded_best_effort() {
+        let grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
+        // Goal ~120 tiles away: the search must return a truncated partial
+        // path without flooding the map.
+        let path = grid.find_path(5, 5, 125, 125, 40, |_, _| false).unwrap();
+        assert!(!path.is_empty() && path.len() <= 40);
+        // Path must make real progress toward the goal
+        let (lx, ly) = *path.last().unwrap();
+        let d0 = (125 - 5) + (125 - 5);
+        let d1 = (125 - lx as i32).unsigned_abs() + (125 - ly as i32).unsigned_abs();
+        assert!((d1 as i32) < d0 - 20);
+    }
+
+    #[test]
+    fn find_path_none_when_pressed_against_barrier() {
+        let mut grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
+        for y in 0..GRID_SIZE {
+            grid.set(30, y, TileKind::Water);
+        }
+        grid.recompute_caches();
+        // Start right at the wall, goal across it: no approach is closer
+        // than the start, so the search reports unreachable.
+        assert!(grid.find_path(28, 20, 33, 20, 40, |_, _| false).is_none());
     }
 
     #[test]
