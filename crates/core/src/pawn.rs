@@ -70,6 +70,8 @@ pub struct Pawn {
     pub animation: AnimationState,
     pub state_timer: f32,
     pub carrying: bool,
+    /// Set on arriving home with a carry; consumed by the game tick.
+    pub delivered: bool,
     pub job: PawnJob,
     /// Village pawns belong to a zone and recolor with its owner.
     pub zone_id: Option<u8>,
@@ -123,6 +125,7 @@ impl Pawn {
             animation: AnimationState::new(IDLE_FRAMES, 8.0),
             state_timer: 0.0,
             carrying: false,
+            delivered: false,
             job,
             zone_id,
             work_tiles,
@@ -525,6 +528,7 @@ impl Pawn {
                 }
                 if self.follow_waypoints(dt, grid) {
                     self.carrying = false;
+                    self.delivered = true;
                     self.state = PawnState::Idle;
                     self.state_timer = self.rand_range(1.0, 2.0);
                     self.set_anim(IDLE_FRAMES, 8.0);

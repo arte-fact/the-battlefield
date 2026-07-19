@@ -276,7 +276,38 @@ impl Game {
                         Self::WAVE.len() * 2
                     };
                     let wave_size = slots.min(max_wave).min(self.manpower[fi] as usize);
-                    self.spawn_queue[fi] = self.build_wave(faction, wave_size);
+                    let mut queue: Vec<(UnitKind, Option<u8>)> = self
+                        .build_wave(faction, wave_size)
+                        .into_iter()
+                        .map(|k| (k, None))
+                        .collect();
+                    // Controlled villages with banked stock reinforce at the
+                    // front: their building's kind joins the wave.
+                    let mut extra_slots = slots.saturating_sub(queue.len());
+                    for zone in &self.zone_manager.zones {
+                        if zone.state != crate::zone::ZoneState::Controlled(faction) {
+                            continue;
+                        }
+                        let stock = self
+                            .village_stock
+                            .get(zone.id as usize)
+                            .copied()
+                            .unwrap_or(0) as usize;
+                        let bonus = self.config.village_wave_bonus.min(stock).min(extra_slots);
+                        let kinds: Vec<UnitKind> = self
+                            .buildings
+                            .iter()
+                            .filter(|b| b.zone_id == Some(zone.id))
+                            .filter_map(|b| b.produces)
+                            .collect();
+                        for i in 0..bonus {
+                            if let Some(&kind) = kinds.get(i % kinds.len().max(1)) {
+                                queue.push((kind, Some(zone.id)));
+                                extra_slots -= 1;
+                            }
+                        }
+                    }
+                    self.spawn_queue[fi] = queue;
                     self.spawn_timer[fi] = 0.0;
                     // Skip rally when dominating — reinforcements march out immediately
                     self.skip_rally[fi] = zone_count > 0 && controlled == zone_count;
@@ -304,14 +335,30 @@ impl Game {
                     continue;
                 }
 
-                let kind = self.spawn_queue[fi].remove(0);
+                let (kind, origin_zone) = self.spawn_queue[fi].remove(0);
+                // Village spawns need the zone still held and stock banked;
+                // a scattered or lost village silently stalls instead.
+                if let Some(zid) = origin_zone {
+                    let held =
+                        self.zone_manager.zones.get(zid as usize).is_some_and(|z| {
+                            z.state == crate::zone::ZoneState::Controlled(faction)
+                        });
+                    let stock = self.village_stock.get(zid as usize).copied().unwrap_or(0);
+                    if !held || stock == 0 {
+                        continue;
+                    }
+                    self.village_stock[zid as usize] -= 1;
+                }
                 self.manpower[fi] -= 1.0;
                 // Spawn at the production building that trains this unit kind
                 let (sx, sy) = self
                     .buildings
                     .iter()
-                    .find(|b| {
-                        b.zone_id.is_none() && b.faction == faction && b.produces == Some(kind)
+                    .find(|b| match origin_zone {
+                        Some(zid) => b.zone_id == Some(zid) && b.produces == Some(kind),
+                        None => {
+                            b.zone_id.is_none() && b.faction == faction && b.produces == Some(kind)
+                        }
                     })
                     .map(|b| (b.grid_x, b.grid_y))
                     .unwrap_or(match faction {
@@ -320,8 +367,9 @@ impl Game {
                     });
                 let id = self.spawn_unit(kind, faction, sx, sy, false);
                 // Rally hold — unit waits at base until wave is complete.
-                // Skip when dominating (all zones held) — just reinforce.
-                if !self.skip_rally[fi] {
+                // Skip when dominating (all zones held); village reinforcements
+                // are already at the front and march immediately.
+                if !self.skip_rally[fi] && origin_zone.is_none() {
                     if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
                         u.rally_hold = true;
                     }
@@ -358,6 +406,8 @@ impl Game {
 
         // Create capture zones from BSP layout
         self.zone_manager = ZoneManager::create_from_layout(&layout, self.config.zone_radius);
+        // Villages start with a small banked stock so early captures pay off.
+        self.village_stock = vec![2; self.zone_manager.zones.len()];
 
         // Store gather points for unit rallying
         self.blue_gather = layout.blue_gather;
@@ -647,6 +697,65 @@ mod tests {
             game.zone_manager.zones[0].progress > 0.0,
             "Zone progress should advance with a Blue unit inside"
         );
+    }
+
+    #[test]
+    fn village_production_spawns_at_village_and_consumes_stock() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.retain(|u| u.is_player);
+        // Hand zone 3's village to Blue with full stock.
+        game.zone_manager.zones[3].state = crate::zone::ZoneState::Controlled(Faction::Blue);
+        game.village_stock[3] = 5;
+        let village_buildings: Vec<(u32, u32)> = game
+            .buildings
+            .iter()
+            .filter(|b| b.zone_id == Some(3) && b.produces.is_some())
+            .map(|b| (b.grid_x, b.grid_y))
+            .collect();
+        assert!(!village_buildings.is_empty());
+
+        for _ in 0..600 {
+            game.tick_production(0.1);
+        }
+
+        assert!(
+            game.village_stock[3] < 5,
+            "village production must consume stock, still at {}",
+            game.village_stock[3]
+        );
+        // Some Blue unit spawned within a few tiles of the village building.
+        let near_village = game.units.iter().any(|u| {
+            let (gx, gy) = u.grid_cell();
+            u.faction == Faction::Blue
+                && !u.is_player
+                && village_buildings
+                    .iter()
+                    .any(|&(bx, by)| gx.abs_diff(bx) <= 4 && gy.abs_diff(by) <= 4)
+        });
+        assert!(
+            near_village,
+            "village reinforcements must spawn at the village"
+        );
+    }
+
+    #[test]
+    fn village_production_stalls_without_stock() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.retain(|u| u.is_player);
+        game.zone_manager.zones[3].state = crate::zone::ZoneState::Controlled(Faction::Blue);
+        for st in game.village_stock.iter_mut() {
+            *st = 0;
+        }
+        let manpower_before = game.manpower[0];
+        for _ in 0..600 {
+            game.tick_production(0.1);
+        }
+        // Base wave still spawns; but no unit consumed village stock and
+        // stock stayed at zero (no free reinforcements).
+        assert!(game.village_stock.iter().all(|&s| s == 0));
+        assert!(game.manpower[0] < manpower_before, "base wave still flows");
     }
 
     #[test]

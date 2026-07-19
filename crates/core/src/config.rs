@@ -101,6 +101,12 @@ pub struct GameConfig {
     /// Side length of the playable map area in tiles (border added on top).
     #[serde(default = "default_playable_size")]
     pub playable_size: u32,
+    /// Max peon deliveries a village can bank.
+    #[serde(default = "default_village_stock_cap")]
+    pub village_stock_cap: u8,
+    /// Units a controlled village adds to its owner's wave (stock permitting).
+    #[serde(default = "default_village_wave_bonus")]
+    pub village_wave_bonus: usize,
 
     // ── Retinue / Recruitment ───────────────────────────────────────
     /// Seconds between auto-recruitment passes.
@@ -134,6 +140,14 @@ fn default_chase_block_secs() -> f32 {
 
 fn default_playable_size() -> u32 {
     crate::grid::PLAYABLE_SIZE
+}
+
+fn default_village_stock_cap() -> u8 {
+    5
+}
+
+fn default_village_wave_bonus() -> usize {
+    2
 }
 
 fn default_recruit_interval() -> f32 {
@@ -260,6 +274,8 @@ impl Default for GameConfig {
             zone_radius: 6,
             victory_hold_time: 60.0,
             playable_size: default_playable_size(),
+            village_stock_cap: default_village_stock_cap(),
+            village_wave_bonus: default_village_wave_bonus(),
 
             // Retinue / Recruitment
             recruit_interval: default_recruit_interval(),

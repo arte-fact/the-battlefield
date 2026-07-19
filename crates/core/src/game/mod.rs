@@ -123,12 +123,14 @@ pub struct Game {
     pub pawns: Vec<Pawn>,
     /// Capture zone manager.
     pub zone_manager: ZoneManager,
+    /// Banked peon deliveries per zone (fuels village production).
+    pub village_stock: Vec<u8>,
     /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
     pub winner: Option<Faction>,
     /// Remaining reinforcement manpower per faction [Blue, Red].
     pub manpower: [f32; 2],
     /// Spawn queue per faction [Blue, Red] — units to spawn one-by-one.
-    spawn_queue: [Vec<UnitKind>; 2],
+    spawn_queue: [Vec<(UnitKind, Option<u8>)>; 2],
     /// Timer between individual unit spawns per faction [Blue, Red].
     spawn_timer: [f32; 2],
     /// Per-faction flag: skip rally_hold when dominating (all zones held).
@@ -205,6 +207,7 @@ impl Game {
             sheep: Vec::new(),
             pawns: Vec::new(),
             zone_manager: ZoneManager::empty(),
+            village_stock: Vec::new(),
             winner: None,
             manpower: [config.manpower_start; 2],
             spawn_queue: [Vec::new(), Vec::new()],
@@ -455,6 +458,14 @@ impl Game {
                 }
             }
             p.update(dt, &self.grid, &claimed, &threats);
+            if p.delivered {
+                p.delivered = false;
+                if let Some(zid) = p.zone_id {
+                    if let Some(stock) = self.village_stock.get_mut(zid as usize) {
+                        *stock = (*stock + 1).min(self.config.village_stock_cap);
+                    }
+                }
+            }
         }
         // Pawn-to-pawn collision: push overlapping pawns apart
         let radius = crate::pawn::PAWN_RADIUS;
