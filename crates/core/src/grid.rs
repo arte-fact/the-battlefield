@@ -44,6 +44,8 @@ pub const GRID_SIZE: u32 = PLAYABLE_SIZE + 2 * BORDER_SIZE; // 192
 pub enum Decoration {
     Bush,
     WaterRock,
+    /// Mineable gold outcrop (impassable), sprite variant 0-5.
+    GoldStone(u8),
 }
 
 /// The battlefield grid: a GRID_SIZE x GRID_SIZE array of tiles.
@@ -122,7 +124,9 @@ impl Grid {
             let tile = self.tiles[i];
             let elev = self.elevations[i];
             self.vision_blocked[i] = tile == TileKind::Forest || elev >= 2;
-            self.passable[i] = tile.movement_cost().is_some() && !self.building_occupied[i];
+            self.passable[i] = tile.movement_cost().is_some()
+                && !self.building_occupied[i]
+                && !matches!(self.decorations[i], Some(Decoration::GoldStone(_)));
         }
         for y in 0..self.height {
             for x in 0..self.width {

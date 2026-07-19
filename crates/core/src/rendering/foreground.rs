@@ -59,6 +59,11 @@ pub fn draw_foreground(
             {
                 drawables.push((foot_y, Drawable::WaterRock(gx, gy)));
             }
+            if matches!(game.grid.decoration(gx, gy), Some(Decoration::GoldStone(_)))
+                && backend.sprite_info(SpriteKey::GoldStone(0)).is_some()
+            {
+                drawables.push((foot_y, Drawable::GoldStone(gx, gy)));
+            }
             if game.grid.elevation(gx, gy) >= 2 {
                 // Sort slightly before trees/units so the elevated surface
                 // draws behind entities standing on top of it.
@@ -98,6 +103,7 @@ pub fn draw_foreground(
             Drawable::Unit(idx) => draw_unit(backend, game, idx, elapsed),
             Drawable::Tree(gx, gy) => draw_tree(backend, gx, gy, elapsed, player_pos),
             Drawable::WaterRock(gx, gy) => draw_water_rock(backend, gx, gy, elapsed),
+            Drawable::GoldStone(gx, gy) => draw_gold_stone(backend, game, gx, gy),
             Drawable::BaseBuilding(idx) => draw_building(backend, game, idx, player_pos),
             Drawable::Particle(idx) => draw_particle(backend, game, idx),
             Drawable::Sheep(idx) => draw_sheep(backend, game, idx),
@@ -216,6 +222,26 @@ fn draw_water_rock(backend: &mut impl DrawBackend, gx: u32, gy: u32, elapsed: f6
         ts,
         ts,
         flip,
+        1.0,
+    );
+}
+
+fn draw_gold_stone(backend: &mut impl DrawBackend, game: &Game, gx: u32, gy: u32) {
+    let Some(Decoration::GoldStone(variant)) = game.grid.decoration(gx, gy) else {
+        return;
+    };
+    let ts = TILE_SIZE as f64;
+    let size = 128.0;
+    let x = gx as f64 * ts + ts / 2.0 - size / 2.0;
+    let y = (gy + 1) as f64 * ts - size;
+    backend.draw_sprite(
+        SpriteKey::GoldStone(variant as usize),
+        0,
+        x,
+        y,
+        size,
+        size,
+        false,
         1.0,
     );
 }

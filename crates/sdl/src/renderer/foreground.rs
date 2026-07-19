@@ -232,6 +232,13 @@ pub(super) fn draw_foreground(
                     .drawable_buf
                     .push((foot_y, Drawable::WaterRock(gx, gy)));
             }
+            if matches!(game.grid.decoration(gx, gy), Some(Decoration::GoldStone(_)))
+                && !assets.gold_stone_textures.is_empty()
+            {
+                assets
+                    .drawable_buf
+                    .push((foot_y, Drawable::GoldStone(gx, gy)));
+            }
             if game.grid.elevation(gx, gy) >= 2 {
                 // Sort slightly before trees/units at the same row so the
                 // elevated surface draws behind entities standing on top of it.
@@ -290,6 +297,9 @@ pub(super) fn draw_foreground(
             }
             Drawable::WaterRock(gx, gy) => {
                 draw_water_rock(canvas, assets, cam, ts, *gx, *gy, elapsed);
+            }
+            Drawable::GoldStone(gx, gy) => {
+                draw_gold_stone(canvas, game, assets, cam, *gx, *gy);
             }
             Drawable::BaseBuilding(idx) => {
                 draw_base_building(canvas, game, assets, cam, ts, *idx, player_pos);
@@ -442,6 +452,34 @@ fn draw_water_rock(
     let dst = Rect::new(screen_x, screen_y, tsi, tsi);
     let flip_h = render_util::tile_flip(gx, gy);
     let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip_h, false);
+}
+
+fn draw_gold_stone(
+    canvas: &mut Canvas<Window>,
+    game: &Game,
+    assets: &mut Assets,
+    cam: &Camera,
+    gx: u32,
+    gy: u32,
+) {
+    let Some(Decoration::GoldStone(variant)) = game.grid.decoration(gx, gy) else {
+        return;
+    };
+    let Some(tex) = assets.gold_stone_textures.get(variant as usize) else {
+        return;
+    };
+    let ts = TILE_SIZE * cam.zoom;
+    let size = 128.0 * cam.zoom;
+    let wx = gx as f32 * TILE_SIZE + TILE_SIZE / 2.0;
+    let wy = (gy + 1) as f32 * TILE_SIZE;
+    let (sx, sy) = world_to_screen(wx, wy, cam);
+    let dst = Rect::new(
+        (sx as f32 - size / 2.0) as i32,
+        (sy as f32 - size + ts * 0.0) as i32,
+        size as u32,
+        size as u32,
+    );
+    let _ = canvas.copy(tex, None, dst);
 }
 
 fn draw_base_building(

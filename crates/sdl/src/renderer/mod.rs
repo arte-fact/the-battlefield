@@ -82,6 +82,7 @@ enum Drawable {
     Unit(usize),
     Tree(u32, u32),
     WaterRock(u32, u32),
+    GoldStone(u32, u32),
     BaseBuilding(usize),
     Particle(usize),
     Sheep(usize),

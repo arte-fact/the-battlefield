@@ -164,6 +164,21 @@ pub fn particle_sprite_index(kind: ParticleKind) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// Gold stones
+// ---------------------------------------------------------------------------
+
+/// Gold stone decoration sprites (128x128), one file per variant.
+pub const GOLD_STONE_DIR: &str = "Terrain/Resources/Gold/Gold Stones";
+pub const GOLD_STONE_FILES: &[&str] = &[
+    "Gold Stone 1.png",
+    "Gold Stone 2.png",
+    "Gold Stone 3.png",
+    "Gold Stone 4.png",
+    "Gold Stone 5.png",
+    "Gold Stone 6.png",
+];
+
+// ---------------------------------------------------------------------------
 // Sheep
 // ---------------------------------------------------------------------------
 

@@ -35,6 +35,8 @@ pub enum SpriteKey {
     Bush(usize),
     /// Water rock variant index.
     WaterRock(usize),
+    /// Gold stone variant index.
+    GoldStone(usize),
     /// Particle effect (index from `asset_manifest::particle_sprite_index`).
     Particle(usize),
     /// Arrow projectile.
@@ -100,6 +102,7 @@ pub enum Drawable {
     Unit(usize),
     Tree(u32, u32),
     WaterRock(u32, u32),
+    GoldStone(u32, u32),
     BaseBuilding(usize),
     Particle(usize),
     Sheep(usize),

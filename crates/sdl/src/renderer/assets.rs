@@ -32,6 +32,7 @@ pub struct Assets<'a> {
     pub(super) bush_textures: Vec<(Texture<'a>, u32, u32, u32)>,
     pub(super) rock_textures: Vec<Texture<'a>>,
     pub(super) water_rock_textures: Vec<(Texture<'a>, u32, u32, u32)>,
+    pub(super) gold_stone_textures: Vec<Texture<'a>>,
     // Buildings
     pub(super) tower_textures: Vec<Texture<'a>>,
     pub(super) neutral_building_textures: Vec<Option<(Texture<'a>, u32, u32)>>,
@@ -377,6 +378,16 @@ impl<'a> Assets<'a> {
             }
         }
 
+        // Gold stone decorations (variant files)
+        let mut gold_stone_textures = Vec::new();
+        for filename in asset_manifest::GOLD_STONE_FILES {
+            let dir = asset_manifest::GOLD_STONE_DIR;
+            let path = format!("{ASSET_BASE}/{dir}/{filename}");
+            if let Some(tex) = load_png_texture(tc, &path) {
+                gold_stone_textures.push(tex);
+            }
+        }
+
         // Tower textures (neutral, blue, red)
         let mut tower_textures = Vec::new();
         for color_folder in &["Black Buildings", "Blue Buildings", "Red Buildings"] {
@@ -553,6 +564,7 @@ impl<'a> Assets<'a> {
             bush_textures,
             rock_textures,
             water_rock_textures,
+            gold_stone_textures,
             tower_textures,
             neutral_building_textures,
             ui_special_paper,

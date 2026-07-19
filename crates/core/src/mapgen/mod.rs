@@ -1223,6 +1223,13 @@ mod tests {
                             "Water rock on non-water at ({x},{y})"
                         );
                     }
+                    Some(Decoration::GoldStone(_)) => {
+                        assert_eq!(
+                            grid.get(x, y),
+                            TileKind::Grass,
+                            "Gold stone on non-grass at ({x},{y})"
+                        );
+                    }
                     None => {}
                 }
             }

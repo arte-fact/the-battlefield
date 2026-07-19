@@ -45,6 +45,7 @@ pub struct Assets {
     /// Tower color variants: neutral, blue, red.
     tower_textures: Vec<TextureId>,
     neutral_building_textures: Vec<Option<(TextureId, u32, u32)>>,
+    gold_stone_textures: Vec<TextureId>,
 
     /// Tree variants: (TextureId, frame_w, frame_h, frame_count).
     tree_textures: Vec<(TextureId, u32, u32, u32)>,
@@ -116,6 +117,7 @@ impl Assets {
             building_textures: Vec::new(),
             tower_textures: Vec::new(),
             neutral_building_textures: Vec::new(),
+            gold_stone_textures: Vec::new(),
             tree_textures: Vec::new(),
             bush_textures: Vec::new(),
             rock_textures: Vec::new(),
@@ -205,6 +207,10 @@ impl Assets {
             }),
             SpriteKey::Bush(idx) => self.bush_textures.get(idx).copied(),
             SpriteKey::WaterRock(idx) => self.water_rock_textures.get(idx).copied(),
+            SpriteKey::GoldStone(idx) => self
+                .gold_stone_textures
+                .get(idx)
+                .map(|&id| (id, 128, 128, 1)),
             SpriteKey::Particle(idx) => {
                 // Map particle sprite index back to ParticleKind for lookup
                 let kind = match idx {
@@ -442,6 +448,15 @@ impl Assets {
             let path = format!("{ASSET_BASE}/Buildings/{color_folder}/Tower.png");
             if let Some(id) = self.load_png(gpu, &path) {
                 self.tower_textures.push(id);
+            }
+        }
+
+        // Gold stone decorations (variant files)
+        for filename in asset_manifest::GOLD_STONE_FILES {
+            let dir = asset_manifest::GOLD_STONE_DIR;
+            let path = format!("{ASSET_BASE}/{dir}/{filename}");
+            if let Some(id) = self.load_png(gpu, &path) {
+                self.gold_stone_textures.push(id);
             }
         }
 

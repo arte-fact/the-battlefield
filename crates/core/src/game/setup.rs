@@ -449,6 +449,32 @@ impl Game {
         self.spawn_base_sheep(blue_cx, blue_cy, blue_facing, seed);
         self.spawn_base_sheep(red_cx, red_cy, red_facing, seed.wrapping_add(7919));
 
+        // Village resources: gold outcrops as impassable decorations,
+        // pasture sheep grazing the pen tiles (groves are already terrain).
+        for v in &layout.villages {
+            match v.theme {
+                crate::mapgen::VillageTheme::Gold => {
+                    for &(x, y) in &v.resources {
+                        let variant =
+                            ((x.wrapping_mul(31).wrapping_add(y.wrapping_mul(17))) % 6) as u8;
+                        self.grid
+                            .set_decoration(x, y, Some(grid::Decoration::GoldStone(variant)));
+                    }
+                }
+                crate::mapgen::VillageTheme::Meat => {
+                    let mut sheep_seed = seed
+                        .wrapping_mul(0x0065_B0A5)
+                        .wrapping_add(v.zone_idx as u32);
+                    for &(x, y) in &v.resources {
+                        sheep_seed = sheep_seed.wrapping_mul(1103515245).wrapping_add(12345);
+                        let (wx, wy) = grid::grid_to_world(x, y);
+                        self.sheep.push(Sheep::new(wx, wy, sheep_seed));
+                    }
+                }
+                crate::mapgen::VillageTheme::Wood => {}
+            }
+        }
+
         // Spawn one pawn worker per house
         let mut pawn_seed = seed.wrapping_add(0xCAFE);
         for b in &self.buildings {
