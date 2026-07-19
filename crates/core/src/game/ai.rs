@@ -502,11 +502,27 @@ mod tests {
                 false,
             );
         }
-        for _ in 0..3600 {
+        // March until the army holds every zone, then give it a settle grace.
+        let mut all_held_at = None;
+        for t in 0..36000 {
             game.tick_ai(1.0 / 60.0);
             game.tick_cooldowns(1.0 / 60.0);
             game.tick_zones(1.0 / 60.0);
+            if all_held_at.is_none()
+                && game.zone_manager.all_zones_controlled_by() == Some(Faction::Red)
+            {
+                all_held_at = Some(t);
+            }
+            if let Some(t0) = all_held_at {
+                if t >= t0 + 3600 {
+                    break;
+                }
+            }
         }
+        assert!(
+            all_held_at.is_some(),
+            "6-unit army should capture every zone within 10 simulated minutes"
+        );
         let inside = game
             .units
             .iter()

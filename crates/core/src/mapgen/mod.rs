@@ -3,6 +3,16 @@ pub mod simplex;
 use crate::grid::{Decoration, Grid, TileKind, BORDER_SIZE, PLAYABLE_SIZE};
 use simplex::Simplex;
 
+/// Village layout ring around each zone center (tiles).
+pub const VILLAGE_RING_MIN: u32 = 3;
+pub const VILLAGE_RING_MAX: u32 = 5;
+/// Largest building footprint half-extent placed on the ring.
+pub const VILLAGE_MAX_FOOTPRINT: u32 = 2;
+/// Cleared ground radius required by a village.
+pub const VILLAGE_CLEAR_RADIUS: u32 = VILLAGE_RING_MAX + VILLAGE_MAX_FOOTPRINT + 1;
+/// Local-search window for terrain-aware zone nudging.
+const ZONE_NUDGE_RANGE: i32 = 6;
+
 /// BSP layout data returned from map generation.
 pub struct MapLayout {
     pub blue_base: (u32, u32),
@@ -376,7 +386,8 @@ pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) 
     );
 
     // Order: B1, B2, C1, C2, C3, R1, R2 (indices 0-6)
-    let zone_centers = vec![b1, b2, c1, c2, c3, r1, r2];
+    let template = [b1, b2, c1, c2, c3, r1, r2];
+    let zone_centers = nudge_zone_centers(&grid, &template, blue_base, red_base, w, h);
 
     // Clear 24×28 rect around each base (wider for flank towers, deeper for rear village)
     clear_rect(
@@ -394,9 +405,9 @@ pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) 
         28,
     );
 
-    // Clear 6-tile radius around each zone center
+    // Clear village ground around each zone center
     for &(cx, cy) in &zone_centers {
-        clear_circle(&mut grid, cx, cy, 6);
+        clear_circle(&mut grid, cx, cy, VILLAGE_CLEAR_RADIUS as i32);
     }
 
     // Gather points: base center (open rally zone where units congregate).
@@ -432,6 +443,136 @@ pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) 
     generate_roads(&mut grid, &layout);
 
     (grid, layout)
+}
+
+/// Water/cliff tiles a village clearing at (cx, cy) would bulldoze.
+fn terrain_damage(grid: &Grid, cx: i32, cy: i32) -> u32 {
+    let r = VILLAGE_CLEAR_RADIUS as i32;
+    let mut damage = 0;
+    for dy in -r..=r {
+        for dx in -r..=r {
+            if dx * dx + dy * dy > r * r {
+                continue;
+            }
+            let (x, y) = (cx + dx, cy + dy);
+            if !grid.in_bounds(x, y) {
+                damage += 1;
+                continue;
+            }
+            let (x, y) = (x as u32, y as u32);
+            if grid.get(x, y) == TileKind::Water || grid.elevation(x, y) > 0 {
+                damage += 1;
+            }
+        }
+    }
+    damage
+}
+
+/// Terrain-aware zone placement: nudge each template center within a small
+/// window to minimize bulldozed water/cliff, keeping the layout fair by
+/// applying identical offsets to point-mirrored zone pairs (B1/R2, B2/R1,
+/// C1/C3 mirror about the base midpoint; C2 slides along the axis only).
+fn nudge_zone_centers(
+    grid: &Grid,
+    template: &[(u32, u32); 7],
+    blue_base: (u32, u32),
+    red_base: (u32, u32),
+    w: u32,
+    h: u32,
+) -> Vec<(u32, u32)> {
+    let sum = (
+        (blue_base.0 + red_base.0) as i32,
+        (blue_base.1 + red_base.1) as i32,
+    );
+    let mirror = |p: (i32, i32)| (sum.0 - p.0, sum.1 - p.1);
+    let margin = VILLAGE_CLEAR_RADIUS as i32 + BORDER_SIZE as i32;
+    let in_playable = |p: (i32, i32)| {
+        p.0 >= margin && p.1 >= margin && p.0 < w as i32 - margin && p.1 < h as i32 - margin
+    };
+    let min_zone_dist_sq = {
+        let d = (2 * VILLAGE_CLEAR_RADIUS + 2) as i32;
+        d * d
+    };
+    let min_base_dist_sq = {
+        let d = VILLAGE_CLEAR_RADIUS as i32 + 14 + 2;
+        d * d
+    };
+    let dist_sq = |a: (i32, i32), b: (i32, i32)| {
+        let (dx, dy) = (a.0 - b.0, a.1 - b.1);
+        dx * dx + dy * dy
+    };
+    let bases = [
+        (blue_base.0 as i32, blue_base.1 as i32),
+        (red_base.0 as i32, red_base.1 as i32),
+    ];
+
+    let t = |i: usize| (template[i].0 as i32, template[i].1 as i32);
+    let mut placed: Vec<(i32, i32)> = vec![(0, 0); 7];
+
+    let valid = |cand: (i32, i32), fixed: &[(i32, i32)]| {
+        in_playable(cand)
+            && bases.iter().all(|&b| dist_sq(cand, b) >= min_base_dist_sq)
+            && fixed.iter().all(|&z| dist_sq(cand, z) >= min_zone_dist_sq)
+    };
+
+    // Mirrored pairs, then C2 along the axis.
+    let mut fixed: Vec<(i32, i32)> = Vec::new();
+    for &(a, b) in &[(0usize, 6usize), (1, 5), (2, 4)] {
+        let (ta, tb) = (t(a), t(b));
+        let mut best = (ta, tb);
+        let mut best_score = u32::MAX;
+        for oy in -ZONE_NUDGE_RANGE..=ZONE_NUDGE_RANGE {
+            for ox in -ZONE_NUDGE_RANGE..=ZONE_NUDGE_RANGE {
+                let ca = (ta.0 + ox, ta.1 + oy);
+                let cb = mirror(ca);
+                if !valid(ca, &fixed) || !valid(cb, &fixed) || dist_sq(ca, cb) < min_zone_dist_sq {
+                    continue;
+                }
+                let score = (terrain_damage(grid, ca.0, ca.1) + terrain_damage(grid, cb.0, cb.1))
+                    * 10
+                    + (ox.unsigned_abs() + oy.unsigned_abs());
+                if score < best_score {
+                    best_score = score;
+                    best = (ca, cb);
+                }
+            }
+        }
+        placed[a] = best.0;
+        placed[b] = best.1;
+        fixed.push(best.0);
+        fixed.push(best.1);
+    }
+
+    // C2: slide along the base axis only, preferring the template midpoint.
+    let tc = t(3);
+    let axis = (
+        red_base.0 as f32 - blue_base.0 as f32,
+        red_base.1 as f32 - blue_base.1 as f32,
+    );
+    let axis_len = (axis.0 * axis.0 + axis.1 * axis.1).sqrt().max(1.0);
+    let (ax, ay) = (axis.0 / axis_len, axis.1 / axis_len);
+    let mut best = tc;
+    let mut best_score = u32::MAX;
+    for k in -ZONE_NUDGE_RANGE..=ZONE_NUDGE_RANGE {
+        let cand = (
+            tc.0 + (ax * k as f32).round() as i32,
+            tc.1 + (ay * k as f32).round() as i32,
+        );
+        if !valid(cand, &fixed) {
+            continue;
+        }
+        let score = terrain_damage(grid, cand.0, cand.1) * 10 + k.unsigned_abs();
+        if score < best_score {
+            best_score = score;
+            best = cand;
+        }
+    }
+    placed[3] = best;
+
+    placed
+        .into_iter()
+        .map(|(x, y)| (x.max(0) as u32, y.max(0) as u32))
+        .collect()
 }
 
 /// Clear a circular area to grass.
@@ -808,6 +949,64 @@ fn paint_road_path(grid: &mut Grid, path: &[(u32, u32)]) {
 mod tests {
     use super::*;
     use crate::grid::GRID_SIZE;
+
+    #[test]
+    fn zone_spacing_and_bounds_invariants() {
+        for seed in [42, 77, 123, 777, 1234, 5555, 9999] {
+            let (_, layout) = generate_battlefield(seed, PLAYABLE_SIZE);
+            let zones = &layout.zone_centers;
+            assert_eq!(zones.len(), 7);
+            let margin = VILLAGE_CLEAR_RADIUS + BORDER_SIZE;
+            let min_zone = (2 * VILLAGE_CLEAR_RADIUS + 2).pow(2) as i64;
+            let min_base = (VILLAGE_CLEAR_RADIUS + 14 + 2).pow(2) as i64;
+            let d2 = |a: (u32, u32), b: (u32, u32)| {
+                let (dx, dy) = (a.0 as i64 - b.0 as i64, a.1 as i64 - b.1 as i64);
+                dx * dx + dy * dy
+            };
+            for (i, &z) in zones.iter().enumerate() {
+                assert!(
+                    z.0 >= margin
+                        && z.1 >= margin
+                        && z.0 < GRID_SIZE - margin
+                        && z.1 < GRID_SIZE - margin,
+                    "seed {seed}: zone {i} at {z:?} too close to map edge"
+                );
+                for &base in &[layout.blue_base, layout.red_base] {
+                    assert!(
+                        d2(z, base) >= min_base,
+                        "seed {seed}: zone {i} at {z:?} overlaps base at {base:?}"
+                    );
+                }
+                for (j, &other) in zones.iter().enumerate().skip(i + 1) {
+                    assert!(
+                        d2(z, other) >= min_zone,
+                        "seed {seed}: zones {i} and {j} too close ({z:?} vs {other:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zone_placement_is_mirror_fair() {
+        for seed in [42, 77, 123, 777, 1234, 5555, 9999] {
+            let (_, layout) = generate_battlefield(seed, PLAYABLE_SIZE);
+            let z = &layout.zone_centers;
+            let d = |a: (u32, u32), b: (u32, u32)| {
+                let (dx, dy) = (a.0 as f64 - b.0 as f64, a.1 as f64 - b.1 as f64);
+                (dx * dx + dy * dy).sqrt()
+            };
+            // Mirrored pairs must sit at matching distances from their bases.
+            for &(bi, ri) in &[(0usize, 6usize), (1, 5), (2, 4)] {
+                let db = d(z[bi], layout.blue_base);
+                let dr = d(z[ri], layout.red_base);
+                assert!(
+                    (db - dr).abs() <= 2.0,
+                    "seed {seed}: zone {bi} is {db:.1} from Blue but mirror {ri} is {dr:.1} from Red"
+                );
+            }
+        }
+    }
 
     #[test]
     fn all_zones_reachable_from_bases() {
