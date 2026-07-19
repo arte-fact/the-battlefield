@@ -126,17 +126,19 @@ impl TextRenderer {
         if glyphs.is_empty() {
             return (0, 0);
         }
-        let min_x = glyphs
-            .first()
-            .and_then(|g| g.pixel_bounding_box())
-            .map(|bb| bb.min.x)
-            .unwrap_or(0);
-        let max_x = glyphs
-            .last()
-            .and_then(|g| g.pixel_bounding_box())
-            .map(|bb| bb.max.x)
-            .unwrap_or(0);
-        ((max_x - min_x) as u32, (v.ascent - v.descent).ceil() as u32)
+        let (mut min_x, mut max_x) = (i32::MAX, i32::MIN);
+        for g in &glyphs {
+            if let Some(bb) = g.pixel_bounding_box() {
+                min_x = min_x.min(bb.min.x);
+                max_x = max_x.max(bb.max.x);
+            }
+        }
+        let text_w = if min_x <= max_x {
+            (max_x - min_x) as u32
+        } else {
+            0
+        };
+        (text_w, (v.ascent - v.descent).ceil() as u32)
     }
 
     /// Get all cache textures for rendering (the sprite batch references these by TextureId).
@@ -208,17 +210,20 @@ impl TextRenderer {
             return None;
         }
 
-        let min_x = glyphs
-            .first()
-            .and_then(|g| g.pixel_bounding_box())
-            .map(|bb| bb.min.x)
-            .unwrap_or(0);
-        let max_x = glyphs
-            .last()
-            .and_then(|g| g.pixel_bounding_box())
-            .map(|bb| bb.max.x)
-            .unwrap_or(0);
-        let text_w = (max_x - min_x) as u32;
+        // Extents across ALL glyph bounding boxes: whitespace glyphs have
+        // none, and first/last-based math underflows on trailing spaces.
+        let (mut min_x, mut max_x) = (i32::MAX, i32::MIN);
+        for g in &glyphs {
+            if let Some(bb) = g.pixel_bounding_box() {
+                min_x = min_x.min(bb.min.x);
+                max_x = max_x.max(bb.max.x);
+            }
+        }
+        let text_w = if min_x <= max_x {
+            (max_x - min_x) as u32
+        } else {
+            0
+        };
         let text_h = (v.ascent - v.descent).ceil() as u32;
         if text_w == 0 || text_h == 0 {
             return None;
