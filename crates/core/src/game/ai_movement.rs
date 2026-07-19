@@ -233,6 +233,15 @@ impl Game {
         self.update_per_zone_fields(faction);
     }
 
+    /// Assign a unit to a zone, resetting arrival state when the target changes.
+    fn assign_zone(&mut self, ui: usize, target: u8, lock_dur: f32) {
+        if self.units[ui].assigned_zone != Some(target) {
+            self.units[ui].zone_arrived = false;
+        }
+        self.units[ui].assigned_zone = Some(target);
+        self.units[ui].zone_lock_timer = lock_dur;
+    }
+
     /// Faction-level objective planner: picks 1-2 target zones and assigns
     /// all units in bulk. Concentrates force instead of spreading thin.
     pub(super) fn assign_unit_objectives(&mut self) {
@@ -316,24 +325,21 @@ impl Game {
                     });
 
                     // Nearest n_defend → defend, rest → attack
-                    for (i, &ui) in available.iter().enumerate() {
+                    for (i, ui) in available.clone().into_iter().enumerate() {
                         let target = if i < n_defend { def_zi } else { atk_zi };
-                        self.units[ui].assigned_zone = Some(target);
-                        self.units[ui].zone_lock_timer = lock_dur;
+                        self.assign_zone(ui, target, lock_dur);
                     }
                 }
                 (None, Some(atk_zi)) => {
                     // All-in attack
-                    for &ui in &available {
-                        self.units[ui].assigned_zone = Some(atk_zi);
-                        self.units[ui].zone_lock_timer = lock_dur;
+                    for ui in available.clone() {
+                        self.assign_zone(ui, atk_zi, lock_dur);
                     }
                 }
                 (Some(def_zi), None) => {
                     // Only defending — all to defend target
-                    for &ui in &available {
-                        self.units[ui].assigned_zone = Some(def_zi);
-                        self.units[ui].zone_lock_timer = lock_dur;
+                    for ui in available.clone() {
+                        self.assign_zone(ui, def_zi, lock_dur);
                     }
                 }
                 (None, None) => {
@@ -379,16 +385,14 @@ impl Game {
                                     .map(|(i, _)| i)
                             });
                         if let Some(zi) = fallback_zi {
-                            for &ui in &available {
-                                self.units[ui].assigned_zone = Some(zi as u8);
-                                self.units[ui].zone_lock_timer = lock_dur;
+                            for ui in available.clone() {
+                                self.assign_zone(ui, zi as u8, lock_dur);
                             }
                         }
                     } else {
                         // Distribute evenly by round-robin
-                        for (i, &ui) in available.iter().enumerate() {
-                            self.units[ui].assigned_zone = Some(owned[i % owned.len()]);
-                            self.units[ui].zone_lock_timer = lock_dur;
+                        for (i, ui) in available.clone().into_iter().enumerate() {
+                            self.assign_zone(ui, owned[i % owned.len()], lock_dur);
                         }
                     }
                 }
@@ -417,8 +421,11 @@ impl Game {
             self.nearest_objective_pos(ai_idx)
         };
 
-        // If inside our assigned zone (with margin to absorb separation jitter),
-        // hold position. Units still fight enemies (resolve_combat_target runs before this).
+        // Hold position once settled at the assigned zone. The settle point
+        // is ownership-aware and INSIDE the capture circle — halting outside
+        // it (the old radius+margin stop) left assaults ringing an enemy
+        // zone without ever contesting it. The outer radius+margin boundary
+        // remains only as exit hysteresis against collision jitter.
         if let Some(zi) = assigned_zone {
             let zi_usize = zi as usize;
             if zi_usize < self.zone_manager.zones.len() {
@@ -426,9 +433,16 @@ impl Game {
                 let dx = ux - zone.center_wx;
                 let dy = uy - zone.center_wy;
                 let dist_sq = dx * dx + dy * dy;
-                let margin = self.config.zone_idle_margin_tiles * TILE_SIZE;
-                let stop_radius = zone.radius as f32 * TILE_SIZE + margin;
-                if dist_sq <= stop_radius * stop_radius {
+                let r = zone.radius as f32 * TILE_SIZE;
+                let owned = zone.state == crate::zone::ZoneState::Controlled(faction);
+                let enter = if owned { r * 0.8 } else { r * 0.6 };
+                let exit = r + self.config.zone_idle_margin_tiles * TILE_SIZE;
+                if dist_sq <= enter * enter {
+                    self.units[ai_idx].zone_arrived = true;
+                } else if dist_sq > exit * exit {
+                    self.units[ai_idx].zone_arrived = false;
+                }
+                if self.units[ai_idx].zone_arrived {
                     self.units[ai_idx].set_anim(UnitAnim::Idle);
                     return;
                 }

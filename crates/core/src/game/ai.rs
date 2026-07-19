@@ -438,6 +438,96 @@ mod tests {
     use super::*;
 
     #[test]
+    fn assault_captures_undefended_enemy_zone() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.clear();
+        for z in &mut game.zone_manager.zones {
+            z.state = crate::zone::ZoneState::Controlled(Faction::Blue);
+            z.progress = 1.0;
+        }
+        let z = (
+            game.zone_manager.zones[3].center_gx,
+            game.zone_manager.zones[3].center_gy,
+        );
+        for i in 0..8 {
+            game.spawn_unit(
+                UnitKind::Warrior,
+                Faction::Red,
+                z.0.saturating_sub(15),
+                z.1.saturating_sub(2) + i % 4,
+                false,
+            );
+        }
+        for _ in 0..3600 {
+            game.tick_ai(1.0 / 60.0);
+            game.tick_cooldowns(1.0 / 60.0);
+            game.tick_zones(1.0 / 60.0);
+        }
+        // The old radius+margin stop parked assaults outside the capture
+        // circle forever; with the ownership-aware settle they must take
+        // at least their focused target within a minute.
+        let red_zones = game
+            .zone_manager
+            .zones
+            .iter()
+            .filter(|z| z.state == crate::zone::ZoneState::Controlled(Faction::Red))
+            .count();
+        assert!(
+            red_zones >= 1,
+            "an unopposed 8-warrior assault must capture a zone, states: {:?}",
+            game.zone_manager
+                .zones
+                .iter()
+                .map(|z| z.state)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn settled_units_sit_inside_capture_radius() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.clear();
+        let z = (
+            game.zone_manager.zones[3].center_gx,
+            game.zone_manager.zones[3].center_gy,
+        );
+        for i in 0..6 {
+            game.spawn_unit(
+                UnitKind::Warrior,
+                Faction::Red,
+                z.0.saturating_sub(12),
+                z.1.saturating_sub(1) + i % 3,
+                false,
+            );
+        }
+        for _ in 0..3600 {
+            game.tick_ai(1.0 / 60.0);
+            game.tick_cooldowns(1.0 / 60.0);
+            game.tick_zones(1.0 / 60.0);
+        }
+        let inside = game
+            .units
+            .iter()
+            .filter(|u| {
+                u.alive
+                    && u.assigned_zone
+                        .map(|zi| {
+                            let z = &game.zone_manager.zones[zi as usize];
+                            z.contains_world(u.x, u.y)
+                        })
+                        .unwrap_or(false)
+            })
+            .count();
+        let alive = game.units.iter().filter(|u| u.alive).count();
+        assert!(
+            inside * 2 >= alive,
+            "settled units must hold ground inside their zone's capture radius ({inside}/{alive})"
+        );
+    }
+
+    #[test]
     fn unreachable_visible_enemy_triggers_chase_block() {
         let mut game = Game::new(960.0, 640.0);
         // Full-height water wall: enemy is visible across it but unpathable

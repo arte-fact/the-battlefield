@@ -302,6 +302,8 @@ pub struct Unit {
     pub is_backing_off: bool,
     /// Follow order dead-band state (true = close enough to idle).
     pub follow_arrived: bool,
+    /// Assigned-zone dead-band state (true = settled at the objective).
+    pub zone_arrived: bool,
     /// Cached defend formation slot — stable across ally deaths.
     pub defend_slot: Option<u8>,
     /// True once a defending unit has reached its formation post.
@@ -363,6 +365,7 @@ impl Unit {
             is_kiting: false,
             is_backing_off: false,
             follow_arrived: false,
+            zone_arrived: false,
             defend_slot: None,
             defend_in_position: false,
             re_recruit_cooldown: 0.0,
