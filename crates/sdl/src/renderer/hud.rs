@@ -401,6 +401,7 @@ pub(super) fn draw_screen_overlay(
     focused_button: usize,
     gamepad_connected: bool,
     dpi_scale: f64,
+    ui_state: &battlefield_core::ui::UiState,
 ) -> Vec<ClickableButton> {
     let (w, h) = canvas.output_size().unwrap_or((960, 640));
     canvas.set_blend_mode(BlendMode::Blend);
@@ -408,9 +409,12 @@ pub(super) fn draw_screen_overlay(
     let layout = match screen {
         GameScreen::Playing => return Vec::new(),
         GameScreen::MainMenu => battlefield_core::ui::main_menu_layout(),
+        GameScreen::SkirmishSetup => battlefield_core::ui::skirmish_layout(ui_state),
         GameScreen::PlayerDeath => battlefield_core::ui::death_layout(),
         GameScreen::GameWon => battlefield_core::ui::result_layout(true),
         GameScreen::GameLost => battlefield_core::ui::result_layout(false),
+        GameScreen::ScoreEntry => battlefield_core::ui::score_entry_layout(ui_state),
+        GameScreen::ScoreBoard => battlefield_core::ui::scoreboard_layout(ui_state),
     };
 
     draw_layout_overlay(
@@ -553,7 +557,7 @@ fn draw_layout_overlay(
         assets.text.draw_text_centered(
             canvas,
             tc,
-            btn.label,
+            &btn.label,
             bx as i32,
             by as i32,
             24.0 * dpi_scale as f32,

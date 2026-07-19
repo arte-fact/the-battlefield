@@ -20,7 +20,9 @@ fn main() {
                     .with_title("The Battlefield")
                     .with_inner_size(winit::dpi::LogicalSize::new(WINDOW_W, WINDOW_H));
                 let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-                self.game_loop = Some(GameLoop::new(window.clone()));
+                let mut gl = GameLoop::new(window.clone());
+                gl.load_scores();
+                self.game_loop = Some(gl);
                 window.request_redraw();
                 self.window = Some(window);
                 log::info!("Window created, wgpu initialized");

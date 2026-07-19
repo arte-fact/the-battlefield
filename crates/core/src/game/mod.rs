@@ -165,6 +165,12 @@ pub struct Game {
     pub(crate) spatial: UnitSpatialGrid,
     /// Frame counter for throttling expensive per-frame operations (e.g. FOV).
     fov_frame_counter: u8,
+    /// Run scoring: player kills, zone captures witnessed, peak authority,
+    /// seconds survived.
+    pub score_kills: u32,
+    pub score_zone_caps: u32,
+    pub score_peak_authority: f32,
+    pub survival_secs: f32,
 }
 
 impl Game {
@@ -220,6 +226,10 @@ impl Game {
             order_pulse_radius: 0.0,
             spatial: UnitSpatialGrid::new(),
             fov_frame_counter: 0,
+            score_kills: 0,
+            score_zone_caps: 0,
+            score_peak_authority: 0.0,
+            survival_secs: 0.0,
         }
     }
 
@@ -364,6 +374,13 @@ impl Game {
         }
 
         let old_positions: Vec<(f32, f32)> = self.units.iter().map(|u| (u.x, u.y)).collect();
+
+        if self.is_player_alive() {
+            self.survival_secs += dt;
+        }
+        if self.authority > self.score_peak_authority {
+            self.score_peak_authority = self.authority;
+        }
 
         self.tick_cooldowns(dt);
         self.tick_ai(dt);

@@ -50,6 +50,7 @@ pub struct GameLoop {
     pub screen: GameScreen,
     pub seed: u32,
     player_was_alive: bool,
+    pub ui: ui::UiState,
     pub dpi_scale: f64,
     /// Actual device pixel ratio (for touch button sizing on mobile).
     pub touch_dpr: f32,
@@ -124,6 +125,7 @@ impl GameLoop {
             screen: GameScreen::MainMenu,
             seed,
             player_was_alive: true,
+            ui: ui::UiState::default(),
             dpi_scale: config.dpi_scale,
             touch_dpr: config.touch_dpr,
             quit_on_escape: config.quit_on_escape,
@@ -221,8 +223,17 @@ impl GameLoop {
                     || self.input_state.gamepad_pressed(Button::A)
                     || self.input_state.gamepad_pressed(Button::Start)
                 {
-                    self.screen = GameScreen::Playing;
-                    log::info!("Game started");
+                    ui::handle_button_action(
+                        ui::ButtonAction::Play,
+                        &mut self.screen,
+                        &mut self.game,
+                        &mut self.seed,
+                        &mut self.player_was_alive,
+                        cur_w,
+                        cur_h,
+                        &mut self.ui,
+                        "key",
+                    );
                 }
             }
             GameScreen::Playing => {
@@ -310,7 +321,7 @@ impl GameLoop {
                 // Check for player death
                 let player_alive = self.game.player_unit().is_some();
                 if self.player_was_alive && !player_alive {
-                    self.screen = GameScreen::PlayerDeath;
+                    self.screen = self.end_screen(false, GameScreen::PlayerDeath);
                     log::info!("Player died");
                 }
                 self.player_was_alive = player_alive;
@@ -318,9 +329,9 @@ impl GameLoop {
                 // Check for game end
                 if let Some(winner) = self.game.winner {
                     if winner == Faction::Blue {
-                        self.screen = GameScreen::GameWon;
+                        self.screen = self.end_screen(true, GameScreen::GameWon);
                     } else {
-                        self.screen = GameScreen::GameLost;
+                        self.screen = self.end_screen(false, GameScreen::GameLost);
                     }
                     log::info!("Game ended: {:?} wins", winner);
                 }
@@ -344,20 +355,98 @@ impl GameLoop {
                 if self.input_state.pressed_this_frame(Scancode::Return)
                     || self.input_state.gamepad_pressed(Button::A)
                 {
-                    self.game = Game::new(cur_w as f32, cur_h as f32);
-                    self.game.setup_demo_battle_with_seed(self.seed);
-                    self.screen = GameScreen::Playing;
-                    self.player_was_alive = true;
-                    log::info!("Retrying with seed {}", self.seed);
+                    ui::handle_button_action(
+                        ui::ButtonAction::Retry,
+                        &mut self.screen,
+                        &mut self.game,
+                        &mut self.seed,
+                        &mut self.player_was_alive,
+                        cur_w,
+                        cur_h,
+                        &mut self.ui,
+                        "key",
+                    );
                 } else if self.input_state.pressed_this_frame(Scancode::Space)
                     || self.input_state.gamepad_pressed(Button::X)
                 {
-                    self.seed = ui::generate_seed();
-                    self.game = Game::new(cur_w as f32, cur_h as f32);
-                    self.game.setup_demo_battle_with_seed(self.seed);
-                    self.screen = GameScreen::Playing;
-                    self.player_was_alive = true;
-                    log::info!("New game with seed {}", self.seed);
+                    ui::handle_button_action(
+                        ui::ButtonAction::NewGame,
+                        &mut self.screen,
+                        &mut self.game,
+                        &mut self.seed,
+                        &mut self.player_was_alive,
+                        cur_w,
+                        cur_h,
+                        &mut self.ui,
+                        "key",
+                    );
+                }
+            }
+            GameScreen::SkirmishSetup => {
+                let rows = ui::SkirmishConfig::ROWS;
+                if self.input_state.pressed_this_frame(Scancode::Up) {
+                    self.ui.focused_row = (self.ui.focused_row + rows - 1) % rows;
+                }
+                if self.input_state.pressed_this_frame(Scancode::Down) {
+                    self.ui.focused_row = (self.ui.focused_row + 1) % rows;
+                }
+                let left = self.input_state.pressed_this_frame(Scancode::Left);
+                let right = self.input_state.pressed_this_frame(Scancode::Right);
+                if left || right {
+                    let dir = if left { -1 } else { 1 };
+                    let row = self.ui.focused_row;
+                    self.ui.skirmish.adjust(row, dir, ui::generate_seed());
+                }
+                if self.input_state.pressed_this_frame(Scancode::Return) {
+                    ui::handle_button_action(
+                        ui::ButtonAction::StartSkirmish,
+                        &mut self.screen,
+                        &mut self.game,
+                        &mut self.seed,
+                        &mut self.player_was_alive,
+                        cur_w,
+                        cur_h,
+                        &mut self.ui,
+                        "key",
+                    );
+                }
+                if self.input_state.pressed_this_frame(Scancode::Escape) {
+                    self.screen = GameScreen::MainMenu;
+                }
+            }
+            GameScreen::ScoreEntry => {
+                if self.input_state.pressed_this_frame(Scancode::Up) {
+                    self.ui.initials.cycle(1);
+                }
+                if self.input_state.pressed_this_frame(Scancode::Down) {
+                    self.ui.initials.cycle(-1);
+                }
+                if self.input_state.pressed_this_frame(Scancode::Left) {
+                    self.ui.initials.move_slot(-1);
+                }
+                if self.input_state.pressed_this_frame(Scancode::Right) {
+                    self.ui.initials.move_slot(1);
+                }
+                if self.input_state.pressed_this_frame(Scancode::Return) {
+                    ui::handle_button_action(
+                        ui::ButtonAction::ConfirmInitials,
+                        &mut self.screen,
+                        &mut self.game,
+                        &mut self.seed,
+                        &mut self.player_was_alive,
+                        cur_w,
+                        cur_h,
+                        &mut self.ui,
+                        "key",
+                    );
+                    let _ = std::fs::write("battlefield_scores.json", self.ui.scoreboard.to_json());
+                }
+            }
+            GameScreen::ScoreBoard => {
+                if self.input_state.pressed_this_frame(Scancode::Return)
+                    || self.input_state.pressed_this_frame(Scancode::Escape)
+                {
+                    self.screen = GameScreen::MainMenu;
                 }
             }
         }
@@ -378,6 +467,7 @@ impl GameLoop {
             self.dpi_scale,
             &self.input_state,
             self.touch_dpr as f64,
+            &self.ui,
         );
 
         if self.profiling {
@@ -456,8 +546,13 @@ impl GameLoop {
                         &mut self.player_was_alive,
                         cur_w,
                         cur_h,
+                        &mut self.ui,
                         "click",
                     );
+                    if matches!(btn.action, ui::ButtonAction::ConfirmInitials) {
+                        let _ =
+                            std::fs::write("battlefield_scores.json", self.ui.scoreboard.to_json());
+                    }
                     break;
                 }
             }
@@ -492,11 +587,35 @@ impl GameLoop {
                     &mut self.player_was_alive,
                     cur_w,
                     cur_h,
+                    &mut self.ui,
                     "gamepad",
                 );
             }
         }
 
         true
+    }
+
+    /// Arcade runs route into the score flow; skirmish keeps result screens.
+    fn end_screen(&mut self, victory: bool, fallback: GameScreen) -> GameScreen {
+        if self.ui.mode != ui::GameMode::Arcade {
+            return fallback;
+        }
+        let score = ui::RunScore::from_game(&self.game, victory);
+        if self.ui.scoreboard.rank_for(score.total()).is_some() {
+            self.ui.pending_score = Some(score);
+            self.ui.initials = ui::InitialsEntry::default();
+            GameScreen::ScoreEntry
+        } else {
+            GameScreen::ScoreBoard
+        }
+    }
+
+    pub fn load_scores(&mut self) {
+        if let Ok(json) = std::fs::read_to_string("battlefield_scores.json") {
+            if let Some(b) = ui::ScoreBoard::from_json(&json) {
+                self.ui.scoreboard = b;
+            }
+        }
     }
 }

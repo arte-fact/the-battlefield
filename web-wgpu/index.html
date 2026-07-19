@@ -661,12 +661,12 @@
         window.__canInstallPWA = function() { return !!deferredInstallPrompt; };
     </script>
     <script type="module">
-        import init, { get_ai_config, set_ai_config } from './battlefield_wgpu_native.js';
+        import init, { get_ai_config, set_ai_config, get_scores, set_scores } from './battlefield_wgpu_native.js';
         await init();
         document.getElementById('loading').style.display = 'none';
 
         // Expose wasm functions for the config panel
-        window.wasmModule = { get_ai_config: get_ai_config, set_ai_config: set_ai_config };
+        window.wasmModule = { get_ai_config, set_ai_config, get_scores, set_scores };
         wasmModule = window.wasmModule;
 
         // Cache defaults from the actual wasm module at startup
@@ -680,6 +680,28 @@
         } catch (err) {
             console.warn('Initial get_ai_config failed, using schema defaults:', err);
         }
+    
+        // High-score persistence: restore at boot, sync periodically
+        try {
+            const stored = localStorage.getItem('battlefield_scores');
+            const syncScores = () => {
+                try {
+                    if (window.wasmModule && window.wasmModule.get_scores) {
+                        const j = window.wasmModule.get_scores();
+                        if (j && j !== '{}') localStorage.setItem('battlefield_scores', j);
+                    }
+                } catch (e) {}
+            };
+            const restore = () => {
+                try {
+                    if (stored && window.wasmModule && window.wasmModule.set_scores) {
+                        window.wasmModule.set_scores(stored);
+                    }
+                } catch (e) {}
+            };
+            setTimeout(restore, 3000);
+            setInterval(syncScores, 5000);
+        } catch (e) {}
     </script>
 </body>
 </html>

@@ -123,6 +123,7 @@ pub fn render_frame(
     input_state: &crate::input::InputState,
     order_pulse: f32,
     order_pulse_radius: f32,
+    ui_state: &battlefield_core::ui::UiState,
 ) -> Vec<ClickableButton> {
     let cam = &game.camera;
     let (min_gx, min_gy, max_gx, max_gy) =
@@ -304,6 +305,7 @@ pub fn render_frame(
         focused_button,
         gamepad_connected,
         dpi_scale,
+        ui_state,
     );
 
     hud_bg.finish(gpu);
@@ -1708,15 +1710,19 @@ fn draw_screen_overlay(
     focused_button: usize,
     gamepad_connected: bool,
     _dpi_scale: f64,
+    ui_state: &battlefield_core::ui::UiState,
 ) -> Vec<ClickableButton> {
     use battlefield_core::ui;
 
     let layout = match screen {
         GameScreen::Playing => return Vec::new(),
         GameScreen::MainMenu => ui::main_menu_layout(),
+        GameScreen::SkirmishSetup => ui::skirmish_layout(ui_state),
         GameScreen::PlayerDeath => ui::death_layout(),
         GameScreen::GameWon => ui::result_layout(true),
         GameScreen::GameLost => ui::result_layout(false),
+        GameScreen::ScoreEntry => ui::score_entry_layout(ui_state),
+        GameScreen::ScoreBoard => ui::scoreboard_layout(ui_state),
     };
 
     let cx = vw as f64 / 2.0;
@@ -1863,7 +1869,7 @@ fn draw_screen_overlay(
         assets.text.draw_text_centered(
             sprites,
             gpu,
-            btn.label,
+            &btn.label,
             bx,
             by + 2.0,
             text_size,

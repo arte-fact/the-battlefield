@@ -75,6 +75,7 @@ impl Game {
 
         // Collect (delta, unit_id) pairs first to avoid borrow conflicts.
         let mut deltas: Vec<(f32, UnitId)> = Vec::new();
+        let mut kills = 0u32;
 
         for event in &self.turn_events {
             match event {
@@ -91,6 +92,7 @@ impl Game {
                     ..
                 } => {
                     if *attacker_id == player_id {
+                        kills += 1;
                         deltas.push((self.config.rep_kill, *defender_id));
                     } else if self
                         .units
@@ -144,6 +146,7 @@ impl Game {
             }
         }
 
+        self.score_kills += kills;
         for (delta, uid) in deltas {
             self.apply_authority(delta, uid);
         }
@@ -185,6 +188,7 @@ impl Game {
     /// Called when a zone is captured by Blue.
     pub(super) fn on_zone_captured(&mut self, in_fov: bool, x: f32, y: f32) {
         if in_fov {
+            self.score_zone_caps += 1;
             self.apply_authority_at(self.config.rep_zone_cap, x, y);
         }
     }

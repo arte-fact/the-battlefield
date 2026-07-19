@@ -123,6 +123,7 @@ pub fn render_frame(
     dpi_scale: f64,
     input_state: &crate::input::InputState,
     touch_dpr: f64,
+    ui_state: &battlefield_core::ui::UiState,
 ) -> Vec<ClickableButton> {
     let ts = TILE_SIZE * game.camera.zoom;
     let cam = &game.camera;
@@ -204,6 +205,7 @@ pub fn render_frame(
         focused_button,
         gamepad_connected,
         dpi_scale,
+        ui_state,
     );
 
     canvas.present();

@@ -204,6 +204,28 @@ pub fn get_ai_config() -> String {
 }
 
 #[wasm_bindgen]
+pub fn get_scores() -> String {
+    let ptr = GAME_LOOP_PTR.load(std::sync::atomic::Ordering::SeqCst);
+    if ptr == 0 {
+        return "{}".to_string();
+    }
+    let game_loop = unsafe { &*(ptr as *const battlefield_wgpu::game_loop::GameLoop) };
+    game_loop.ui.scoreboard.to_json()
+}
+
+#[wasm_bindgen]
+pub fn set_scores(json: &str) {
+    let ptr = GAME_LOOP_PTR.load(std::sync::atomic::Ordering::SeqCst);
+    if ptr == 0 {
+        return;
+    }
+    let game_loop = unsafe { &mut *(ptr as *mut battlefield_wgpu::game_loop::GameLoop) };
+    if let Some(b) = battlefield_core::ui::ScoreBoard::from_json(json) {
+        game_loop.ui.scoreboard = b;
+    }
+}
+
+#[wasm_bindgen]
 pub fn set_ai_config(json: &str) {
     let ptr = GAME_LOOP_PTR.load(std::sync::atomic::Ordering::SeqCst);
     if ptr == 0 {
