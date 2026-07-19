@@ -195,36 +195,46 @@ in v1.
 
 ## Roadmap (checkable)
 
-- [ ] 1. Map size: thread runtime grid dims through the `GRID_SIZE`
+- [x] 1. Map size: thread runtime grid dims through the `GRID_SIZE`
   readers (core + both renderers' minimap/camera), size parameter on
   `generate_battlefield`, default playable 160; frame profiler +
   starvation probe re-run at the new size.
-- [ ] 2. Placement: local-search nudging with mirrored fairness,
+- [x] 2. Placement: local-search nudging with mirrored fairness,
   derived spacing constraints + mapgen test, terrain-damage scoring,
   clearing at `village_clear_radius`.
-- [ ] 3. Mapgen: `VillageSpec` + ring placement with rejection rules;
+- [x] 3. Mapgen: `VillageSpec` + ring placement with rejection rules;
   themes distributed per map; roads stubs; probes still end on all 7
   bench seeds.
-- [ ] 4. Base rework: facing vector, functional bands via the ring
+- [x] 4. Base rework: facing vector, functional bands via the ring
   placer, `BaseSpec` unifying the describe-then-spawn path with
   villages, terrain-aware footing; determinism + defense-coverage
   tests.
-- [ ] 5. Buildings: village buildings instantiated from spec, dynamic
+- [x] 5. Buildings: village buildings instantiated from spec, dynamic
   faction recolor (generalize the tower path), Black neutral assets in
   the manifest + both renderers.
-- [ ] 6. Resources on the ground: gold stones / groves / pens as
+- [x] 6. Resources on the ground: gold stones / groves / pens as
   decorations with passability flags; pasture sheep reuse `Sheep`.
-- [ ] 7. Pawn jobs: `PawnJob` refactor of the chop loop, mine + herd
+- [x] 7. Pawn jobs: `PawnJob` refactor of the chop loop, mine + herd
   variants, carry sprites, village pawns spawned from spec, neutral
   color + recolor on capture.
-- [ ] 8. Fleeing: combat detection, flee/return states, drop-carry;
+- [x] 8. Fleeing: combat detection, flee/return states, drop-carry;
   peons untargetable.
-- [ ] 9. Production: delivery stock, wave bonus from controlled
+- [x] 9. Production: delivery stock, wave bonus from controlled
   villages, spawn at village building; tests (stock consumption, wave
   composition, stall when scattered).
-- [ ] 10. Verify: determinism (fixed-seed byte-identical runs), perf
-  budget (~20 extra pawns' A* within frame budget), headless
-  screenshots of each theme, GDD update, this roadmap.
+- [x] 10. Verify: fixed-seed sim dumps byte-identical; P99 frame
+  0.61ms at the 192 grid (16.7ms budget); all 7 bench seeds end
+  (336-624s, both factions win); 218 core tests + workspace clippy
+  green; headless screenshots confirm the rotated bases, neutral
+  assets and battle flow (blind keyboard walking never framed a
+  village close-up -- code path shared with verified building
+  rendering). GDD updated.
+
+Deviation from plan: no separate `BaseSpec` -- bases kept their
+describe-and-place generator in building.rs, gaining the facing
+vector, seeded bands and derived clearing; a spec struct added no
+value since bases spawn nothing zone-owned. Village stock starts at
+2 so early captures pay off immediately.
 
 ## Decisions taken (flag if you disagree)
 

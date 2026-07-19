@@ -48,7 +48,7 @@ You start unknown. Kills, assists, and zone captures witnessed by nearby allies 
 
 ### Grid
 
-The world is a 160x160 tile grid at 64px per tile: a 128x128 playable area surrounded by a 16-tile impassable border. Positions are continuous (floating point); the grid governs terrain, passability, pathfinding, and auto-tiling. Units render in 192x192 frames (the mounted Lancer in 320x320), Y-sorted for correct overlap.
+The world is a 192x192 tile grid at 64px per tile: a 160x160 playable area surrounded by a 16-tile impassable border (the playable size is a config value; 160 is the default). Positions are continuous (floating point); the grid governs terrain, passability, pathfinding, and auto-tiling. Units render in 192x192 frames (the mounted Lancer in 320x320), Y-sorted for correct overlap.
 
 ### Terrain
 
@@ -64,7 +64,7 @@ The same seed always generates the same battlefield; different seeds differ.
 
 ### Bases
 
-Each faction owns a base in its corner of the map, laid out by BSP partitioning and connected by dirt roads:
+Each faction owns a base in its corner of the map, laid out by BSP partitioning and connected by dirt roads. The base **faces the enemy**: layouts are seeded functional bands rotated to the base-to-base axis -- castle and 3-5 defense towers on the front arc, one production building per wave unit kind on the flanks, 8-12 houses and the sheep pasture in the rear:
 
 | Building | Role |
 |----------|------|
@@ -75,9 +75,21 @@ Each faction owns a base in its corner of the map, laid out by BSP partitioning 
 | Monastery | Produces Monks |
 | Houses | Decorative; pawns and sheep live around them |
 
-### Capture Zones
+### Capture Zones are Villages
 
-Seven named capture zones are arranged in a diamond layout across the battlefield, linked by a symmetric adjacency graph that the AI uses for planning. Each zone tracks the units inside it and moves a capture progress value between fully Red (-1) and fully Blue (+1).
+Seven named capture zones are arranged in a diamond layout across the battlefield, linked by a symmetric adjacency graph that the AI uses for planning. Zone centers nudge within a small window to spare lakes and cliffs, with mirrored offsets so both sides stay equidistant. Each zone tracks the units inside it and moves a capture progress value between fully Red (-1) and fully Blue (+1).
+
+Every zone is a small **village** with one worked resource, themed per seed (all three themes appear on every map):
+
+| Theme | Resource | Peons | Production building |
+|-------|----------|-------|---------------------|
+| Mining camp | Gold stones (impassable) | Pickaxe, carry gold | Barracks (warriors) |
+| Lumber camp | Tree grove | Axe, carry wood | Archery (archers) |
+| Pasture | Sheep pen | Knife, carry meat | Monastery (monks) |
+
+Each village has 2-3 houses (one peon each), its production building (the center zone rolls a second), and the defense tower at its heart. Buildings and peons are **Black (neutral) until captured**, then recolor to the owner's faction.
+
+**Village economy:** each peon delivery banks 1 stock (cap 5). A controlled village adds its building's units to the owner's reinforcement wave, **spawned at the village** -- front-line reinforcements are the payoff of holding it. Village units cost normal manpower and 1 stock each; peons **flee combat**, so marching an army through a village scatters its workers and stalls its output without capturing it.
 
 **Majority capture:** progress moves at the rate of the *strength difference* between the factions inside (√|blue − red|). Equal forces freeze the zone; a minority garrison slows an assault but cannot hold forever — overwhelming force completes the capture even with defenders still alive. Attacking a defended point is a readable numbers race, not a binary stall.
 
@@ -163,7 +175,7 @@ Bases produce units in waves, drawing from the faction's manpower pool. Newly pr
 
 ## Ambient Life
 
-Villages have wandering **pawns** that walk to trees, chop them down, and idle -- and **sheep** grazing in rear pastures. Purely atmospheric.
+Base villages have wandering **pawns** chopping trees and **sheep** grazing the rear pasture -- atmosphere only. Capture-zone peons do the same work loops (chop, mine, herd) but their deliveries feed the village economy above; they are invulnerable and panic away from any nearby fighting.
 
 ## Controls
 
