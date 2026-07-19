@@ -54,7 +54,10 @@ fn bench_full_frame(c: &mut Criterion) {
 fn bench_mapgen(c: &mut Criterion) {
     c.bench_function("mapgen", |b| {
         b.iter(|| {
-            battlefield_core::mapgen::generate_battlefield(42);
+            battlefield_core::mapgen::generate_battlefield(
+                42,
+                battlefield_core::grid::PLAYABLE_SIZE,
+            );
         });
     });
 }

@@ -1,5 +1,5 @@
 use battlefield_core::game::Game;
-use battlefield_core::grid::{GRID_SIZE, TILE_SIZE};
+use battlefield_core::grid::TILE_SIZE;
 use battlefield_core::ui;
 use battlefield_core::unit::Faction;
 
@@ -87,7 +87,11 @@ impl GameLoop {
         let mut game = Game::new(output_w as f32, output_h as f32);
         let seed = generate_seed();
         game.setup_demo_battle_with_seed(seed);
-        log::info!("Game initialized ({}x{} grid)", GRID_SIZE, GRID_SIZE);
+        log::info!(
+            "Game initialized ({}x{} grid)",
+            game.grid.width,
+            game.grid.height
+        );
 
         let mut input_state = InputState::new();
 
@@ -315,8 +319,9 @@ impl GameLoop {
                 }
 
                 // Clamp camera
-                let world_size = GRID_SIZE as f32 * TILE_SIZE;
-                self.game.camera.clamp_to_world(world_size, world_size);
+                let world_w = self.game.grid.width as f32 * TILE_SIZE;
+                let world_h = self.game.grid.height as f32 * TILE_SIZE;
+                self.game.camera.clamp_to_world(world_w, world_h);
 
                 // Check for player death
                 let player_alive = self.game.player_unit().is_some();

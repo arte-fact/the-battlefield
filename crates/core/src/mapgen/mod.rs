@@ -1,6 +1,6 @@
 pub mod simplex;
 
-use crate::grid::{Decoration, Grid, TileKind, BORDER_SIZE, GRID_SIZE, PLAYABLE_SIZE};
+use crate::grid::{Decoration, Grid, TileKind, BORDER_SIZE, PLAYABLE_SIZE};
 use simplex::Simplex;
 
 /// BSP layout data returned from map generation.
@@ -144,10 +144,10 @@ fn in_border(x: u32, y: u32) -> bool {
 }
 
 /// Generate a procedural battlefield grid with BSP layout.
-pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
+pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) {
     let mut rng = Rng::new(seed);
-    let w = GRID_SIZE;
-    let h = GRID_SIZE;
+    let w = playable_size + 2 * BORDER_SIZE;
+    let h = playable_size + 2 * BORDER_SIZE;
     let mut grid = Grid::new_grass(w, h);
     let noise = Simplex::new(seed as u64);
 
@@ -299,7 +299,7 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
     // --- Phase C: Post-processing with BSP layout ---
 
     let b = BORDER_SIZE;
-    let p = PLAYABLE_SIZE;
+    let p = playable_size;
 
     // Run BSP on playable area
     let playable_rect = Rect {
@@ -337,8 +337,9 @@ pub fn generate_battlefield(seed: u32) -> (Grid, MapLayout) {
     let perp_len = (perp_x * perp_x + perp_y * perp_y).sqrt().max(1.0);
     let px = perp_x / perp_len;
     let py = perp_y / perp_len;
-    let spread_near = 16.0; // offset for B1/B2 and R1/R2 (narrow ends of diamond)
-    let spread_mid = 30.0; // offset for C1/C3 (wide center of diamond)
+    // Spreads tuned at playable 128, scaled to the actual map size.
+    let spread_near = p as f32 * (16.0 / 128.0);
+    let spread_mid = p as f32 * (30.0 / 128.0);
 
     // B1, B2: 30% from Blue base, offset left/right (narrow)
     let t_near = 0.28;
@@ -806,11 +807,12 @@ fn paint_road_path(grid: &mut Grid, path: &[(u32, u32)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::GRID_SIZE;
 
     #[test]
     fn all_zones_reachable_from_bases() {
         for seed in [1, 5, 7, 21, 42, 99, 777, 1234, 31337] {
-            let (grid, layout) = generate_battlefield(seed);
+            let (grid, layout) = generate_battlefield(seed, PLAYABLE_SIZE);
 
             // Flood fill from the blue base under the PLANNER's traversal
             // rules (passable + no cliff crossing) — what flow fields, A*,
@@ -855,8 +857,8 @@ mod tests {
 
     #[test]
     fn deterministic_generation() {
-        let (g1, l1) = generate_battlefield(42);
-        let (g2, l2) = generate_battlefield(42);
+        let (g1, l1) = generate_battlefield(42, PLAYABLE_SIZE);
+        let (g2, l2) = generate_battlefield(42, PLAYABLE_SIZE);
         for y in 0..GRID_SIZE {
             for x in 0..GRID_SIZE {
                 assert_eq!(g1.get(x, y), g2.get(x, y));
@@ -871,8 +873,8 @@ mod tests {
 
     #[test]
     fn different_seeds_differ() {
-        let (g1, _) = generate_battlefield(42);
-        let (g2, _) = generate_battlefield(99);
+        let (g1, _) = generate_battlefield(42, PLAYABLE_SIZE);
+        let (g2, _) = generate_battlefield(99, PLAYABLE_SIZE);
         let mut differs = false;
         for y in 0..GRID_SIZE {
             for x in 0..GRID_SIZE {
@@ -887,7 +889,7 @@ mod tests {
 
     #[test]
     fn deployment_zones_clear() {
-        let (grid, layout) = generate_battlefield(42);
+        let (grid, layout) = generate_battlefield(42, PLAYABLE_SIZE);
         // Check 7-tile radius around each base center is clear
         for &(cx, cy) in &[layout.blue_base, layout.red_base] {
             for dy in 0..14i32 {
@@ -908,7 +910,7 @@ mod tests {
 
     #[test]
     fn zone_centers_clear() {
-        let (grid, layout) = generate_battlefield(42);
+        let (grid, layout) = generate_battlefield(42, PLAYABLE_SIZE);
         for &(cx, cy) in &layout.zone_centers {
             for dy in -3i32..=3 {
                 for dx in -3i32..=3 {
@@ -926,7 +928,7 @@ mod tests {
 
     #[test]
     fn has_terrain_variety() {
-        let (grid, _) = generate_battlefield(42);
+        let (grid, _) = generate_battlefield(42, PLAYABLE_SIZE);
         let mut has_forest = false;
         let mut has_water = false;
         let mut has_elevation = false;
@@ -957,7 +959,7 @@ mod tests {
 
     #[test]
     fn elevation_from_noise() {
-        let (grid, _) = generate_battlefield(42);
+        let (grid, _) = generate_battlefield(42, PLAYABLE_SIZE);
         let mut has_elev0 = false;
         let mut has_elev2 = false;
         for y in 0..GRID_SIZE {
@@ -975,7 +977,7 @@ mod tests {
 
     #[test]
     fn decorations_on_correct_terrain() {
-        let (grid, _) = generate_battlefield(42);
+        let (grid, _) = generate_battlefield(42, PLAYABLE_SIZE);
         for y in 0..GRID_SIZE {
             for x in 0..GRID_SIZE {
                 match grid.decoration(x, y) {
@@ -1008,7 +1010,7 @@ mod tests {
 
     #[test]
     fn trees_form_clusters() {
-        let (grid, _) = generate_battlefield(42);
+        let (grid, _) = generate_battlefield(42, PLAYABLE_SIZE);
         let mut clustered = 0;
         let mut total_forest = 0;
         for y in 0..GRID_SIZE {
@@ -1071,7 +1073,7 @@ mod tests {
 
     #[test]
     fn bsp_bases_at_opposing_corners() {
-        let (_, layout) = generate_battlefield(42);
+        let (_, layout) = generate_battlefield(42, PLAYABLE_SIZE);
         let b = BORDER_SIZE;
         let p = PLAYABLE_SIZE;
         let mid = b + p / 2;
@@ -1101,7 +1103,7 @@ mod tests {
 
     #[test]
     fn layout_has_seven_zones() {
-        let (_, layout) = generate_battlefield(42);
+        let (_, layout) = generate_battlefield(42, PLAYABLE_SIZE);
         assert_eq!(
             layout.zone_centers.len(),
             7,
@@ -1111,7 +1113,7 @@ mod tests {
 
     #[test]
     fn border_has_vegetation() {
-        let (grid, _) = generate_battlefield(42);
+        let (grid, _) = generate_battlefield(42, PLAYABLE_SIZE);
         let mut border_forest = 0u32;
         let mut border_rock = 0u32;
         let mut border_bush = 0u32;

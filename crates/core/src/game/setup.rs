@@ -338,8 +338,11 @@ impl Game {
     }
 
     pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
-        let (gen_grid, layout) = mapgen::generate_battlefield(seed);
+        let (gen_grid, layout) = mapgen::generate_battlefield(seed, self.config.playable_size);
         self.grid = gen_grid;
+        let tiles = (self.grid.width * self.grid.height) as usize;
+        self.visible = vec![false; tiles];
+        self.revealed = vec![true; tiles];
 
         // Fresh manpower pools (config may have been live-tuned since Game::new)
         self.manpower = [self.config.manpower_start; 2];

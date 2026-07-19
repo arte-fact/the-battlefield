@@ -98,6 +98,9 @@ pub struct GameConfig {
     pub max_units_per_faction: usize,
     pub zone_radius: u32,
     pub victory_hold_time: f32,
+    /// Side length of the playable map area in tiles (border added on top).
+    #[serde(default = "default_playable_size")]
+    pub playable_size: u32,
 
     // ── Retinue / Recruitment ───────────────────────────────────────
     /// Seconds between auto-recruitment passes.
@@ -127,6 +130,10 @@ pub struct GameConfig {
 
 fn default_chase_block_secs() -> f32 {
     5.0
+}
+
+fn default_playable_size() -> u32 {
+    crate::grid::PLAYABLE_SIZE
 }
 
 fn default_recruit_interval() -> f32 {
@@ -252,6 +259,7 @@ impl Default for GameConfig {
             max_units_per_faction: 35,
             zone_radius: 6,
             victory_hold_time: 60.0,
+            playable_size: default_playable_size(),
 
             // Retinue / Recruitment
             recruit_interval: default_recruit_interval(),

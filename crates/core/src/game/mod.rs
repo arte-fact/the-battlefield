@@ -352,8 +352,9 @@ impl Game {
             self.camera.x += (pvx - self.camera.x) * lerp;
             self.camera.y += (pvy - self.camera.y) * lerp;
         }
-        let world_size = GRID_SIZE as f32 * TILE_SIZE;
-        self.camera.clamp_to_world(world_size, world_size);
+        let world_w = self.grid.width as f32 * TILE_SIZE;
+        let world_h = self.grid.height as f32 * TILE_SIZE;
+        self.camera.clamp_to_world(world_w, world_h);
 
         // Throttle FOV: recompute every 3rd frame (units don't move fast enough
         // for per-frame updates to matter visually, saves ~7k ops on other frames).

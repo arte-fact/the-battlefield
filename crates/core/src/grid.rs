@@ -35,9 +35,9 @@ impl TileKind {
     }
 }
 
-pub const PLAYABLE_SIZE: u32 = 128;
+pub const PLAYABLE_SIZE: u32 = 160;
 pub const BORDER_SIZE: u32 = 16;
-pub const GRID_SIZE: u32 = PLAYABLE_SIZE + 2 * BORDER_SIZE; // 160
+pub const GRID_SIZE: u32 = PLAYABLE_SIZE + 2 * BORDER_SIZE; // 192
 
 /// Decorative elements that sit on top of tiles without affecting gameplay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
