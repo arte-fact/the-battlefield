@@ -426,10 +426,35 @@ impl Game {
 
     fn tick_pawns(&mut self, dt: f32) {
         let mut pawns = std::mem::take(&mut self.pawns);
-        // Collect trees already claimed by pawns (walking to or chopping)
+        // Collect tiles already claimed by pawns (walking to or working)
         let claimed: Vec<(u32, u32)> = pawns.iter().filter_map(|p| p.claimed_target()).collect();
+        let mut threats: Vec<(f32, f32)> = Vec::new();
         for p in &mut pawns {
-            p.update(dt, &self.grid, &claimed);
+            // A pawn panics near fighting units, or near enemies of its
+            // owner (zone owner for village pawns, faction otherwise).
+            let owner = match p.zone_id {
+                None => Some(p.faction),
+                Some(zid) => match self.zone_manager.zones.get(zid as usize).map(|z| z.state) {
+                    Some(ZoneState::Controlled(f)) | Some(ZoneState::Capturing(f)) => Some(f),
+                    _ => None,
+                },
+            };
+            threats.clear();
+            for idx in self
+                .spatial
+                .query(p.x, p.y, crate::pawn::PAWN_FLEE_RADIUS * 1.5)
+            {
+                let u = &self.units[idx];
+                if !u.alive {
+                    continue;
+                }
+                let fighting = u.current_anim.is_attack();
+                let enemy = owner.is_some_and(|f| u.faction != f);
+                if fighting || enemy {
+                    threats.push((u.x, u.y));
+                }
+            }
+            p.update(dt, &self.grid, &claimed, &threats);
         }
         // Pawn-to-pawn collision: push overlapping pawns apart
         let radius = crate::pawn::PAWN_RADIUS;

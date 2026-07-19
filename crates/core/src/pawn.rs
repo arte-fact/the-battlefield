@@ -14,6 +14,12 @@ const PAWN_WORK_DIST: f32 = TILE_SIZE * 0.6;
 const PAWN_PATH_MAX: u32 = 40;
 /// Seconds without progress before giving up and resetting.
 const STUCK_TIMEOUT: f32 = 4.0;
+/// Distance at which a pawn panics from fighting or enemy units.
+pub const PAWN_FLEE_RADIUS: f32 = TILE_SIZE * 4.0;
+/// Movement speed while fleeing (pixels/sec).
+const PAWN_FLEE_SPEED: f32 = 110.0;
+/// Seconds without a nearby threat before calming down.
+const CALM_TIME: f32 = 1.5;
 
 const IDLE_FRAMES: u32 = 8;
 const RUN_FRAMES: u32 = 6;
@@ -24,6 +30,7 @@ pub enum PawnState {
     WalkingToWork,
     Working,
     WalkingHome,
+    Fleeing,
 }
 
 /// What this pawn works: picks targets, sprites and work animation.
@@ -153,6 +160,7 @@ impl Pawn {
         let (walk_to, working, idle_carry, carry_home) = self.job.sprite_rows();
         match (self.state, self.carrying) {
             (PawnState::Idle, false) => 0,
+            (PawnState::Fleeing, _) => 1,
             (PawnState::WalkingToWork, _) => walk_to,
             (PawnState::Working, _) => working,
             (PawnState::Idle, true) => idle_carry,
@@ -163,7 +171,7 @@ impl Pawn {
     pub fn anim_frame_count(&self) -> u32 {
         match self.state {
             PawnState::Idle => IDLE_FRAMES,
-            PawnState::WalkingToWork | PawnState::WalkingHome => RUN_FRAMES,
+            PawnState::WalkingToWork | PawnState::WalkingHome | PawnState::Fleeing => RUN_FRAMES,
             PawnState::Working => self.job.work_frames(),
         }
     }
@@ -359,7 +367,69 @@ impl Pawn {
         }
     }
 
-    pub fn update(&mut self, dt: f32, grid: &Grid, claimed: &[(u32, u32)]) {
+    pub fn update(&mut self, dt: f32, grid: &Grid, claimed: &[(u32, u32)], threats: &[(f32, f32)]) {
+        // Panic takes priority over any work: drop the carry and run.
+        if self.state != PawnState::Fleeing {
+            let r2 = PAWN_FLEE_RADIUS * PAWN_FLEE_RADIUS;
+            if threats
+                .iter()
+                .any(|&(tx, ty)| (tx - self.x).powi(2) + (ty - self.y).powi(2) < r2)
+            {
+                self.carrying = false;
+                self.waypoints.clear();
+                self.waypoint_idx = 0;
+                self.state = PawnState::Fleeing;
+                self.state_timer = 0.0;
+                self.set_anim(RUN_FRAMES, 12.0);
+            }
+        }
+
+        if self.state == PawnState::Fleeing {
+            let nearest = threats
+                .iter()
+                .map(|&(tx, ty)| {
+                    let d = (tx - self.x).powi(2) + (ty - self.y).powi(2);
+                    (d, tx, ty)
+                })
+                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            let danger = PAWN_FLEE_RADIUS * 1.5;
+            match nearest {
+                Some((d2, tx, ty)) if d2 < danger * danger => {
+                    self.state_timer = 0.0;
+                    let d = d2.sqrt().max(0.1);
+                    // Run away, drifting toward home so panic ends near safety.
+                    let (mut vx, mut vy) = ((self.x - tx) / d, (self.y - ty) / d);
+                    let (hx, hy) = (self.home_x - self.x, self.home_y - self.y);
+                    let hd = (hx * hx + hy * hy).sqrt().max(0.1);
+                    vx += (hx / hd) * 0.4;
+                    vy += (hy / hd) * 0.4;
+                    let len = (vx * vx + vy * vy).sqrt().max(0.1);
+                    let new_x = self.x + (vx / len) * PAWN_FLEE_SPEED * dt;
+                    let new_y = self.y + (vy / len) * PAWN_FLEE_SPEED * dt;
+                    if grid.is_circle_passable(new_x, new_y, PAWN_RADIUS) {
+                        self.x = new_x;
+                        self.y = new_y;
+                    } else if grid.is_circle_passable(new_x, self.y, PAWN_RADIUS) {
+                        self.x = new_x;
+                    } else if grid.is_circle_passable(self.x, new_y, PAWN_RADIUS) {
+                        self.y = new_y;
+                    }
+                    if vx > 0.05 {
+                        self.facing = Facing::Right;
+                    } else if vx < -0.05 {
+                        self.facing = Facing::Left;
+                    }
+                }
+                _ => {
+                    self.state_timer += dt;
+                    if self.state_timer >= CALM_TIME {
+                        self.reset_to_idle();
+                    }
+                }
+            }
+            return;
+        }
+
         match self.state {
             PawnState::Idle => {
                 self.state_timer -= dt;
@@ -460,6 +530,7 @@ impl Pawn {
                     self.set_anim(IDLE_FRAMES, 8.0);
                 }
             }
+            PawnState::Fleeing => unreachable!("handled above"),
         }
     }
 }
@@ -483,7 +554,7 @@ mod tests {
         grid.set(10, 10, TileKind::Forest);
         let mut p = Pawn::new(500.0, 500.0, Faction::Blue, 42);
         p.state_timer = 0.0;
-        p.update(0.016, &grid, &[]);
+        p.update(0.016, &grid, &[], &[]);
         assert_eq!(p.state, PawnState::WalkingToWork);
         assert!(!p.waypoints.is_empty());
     }
@@ -493,9 +564,27 @@ mod tests {
         let grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
         let mut p = Pawn::new(500.0, 500.0, Faction::Blue, 42);
         p.state_timer = 0.0;
-        p.update(0.016, &grid, &[]);
+        p.update(0.016, &grid, &[], &[]);
         assert_eq!(p.state, PawnState::Idle);
         assert!(p.state_timer > 0.0);
+    }
+
+    #[test]
+    fn pawn_flees_threats_and_calms_down() {
+        let grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
+        let mut p = Pawn::new(500.0, 500.0, Faction::Blue, 42);
+        p.carrying = true;
+        let threats = [(520.0f32, 500.0f32)];
+        p.update(0.016, &grid, &[], &threats);
+        assert_eq!(p.state, PawnState::Fleeing);
+        assert!(!p.carrying, "panicking pawns drop their carry");
+        let x0 = p.x;
+        p.update(0.016, &grid, &[], &threats);
+        assert!(p.x < x0, "pawn must run away from the threat");
+        for _ in 0..200 {
+            p.update(0.016, &grid, &[], &[]);
+        }
+        assert_eq!(p.state, PawnState::Idle);
     }
 
     #[test]
@@ -509,7 +598,7 @@ mod tests {
         let (wx, wy) = grid::grid_to_world(5, 5);
         let mut p = Pawn::new(wx, wy, Faction::Blue, 42);
         p.state_timer = 0.0;
-        p.update(0.016, &grid, &[]);
+        p.update(0.016, &grid, &[], &[]);
         assert_eq!(p.state, PawnState::WalkingToWork);
         // Path should route around the building wall
         for &(gx, gy) in &p.waypoints {
