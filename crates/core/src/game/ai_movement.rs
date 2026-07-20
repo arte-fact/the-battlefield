@@ -465,24 +465,23 @@ impl Game {
                 let r = zone.radius as f32 * TILE_SIZE;
                 let exit = r + self.config.zone_idle_margin_tiles * TILE_SIZE;
 
-                let id = self.units[ai_idx].id as f32;
-                let angle = id * 2.39996;
-                let rad_frac = ((id * 0.618034) % 1.0).sqrt();
-                let hold_r = r * (0.2 + 0.6 * rad_frac);
-                let mut hx = zone.center_wx + angle.cos() * hold_r;
-                let mut hy = zone.center_wy + angle.sin() * hold_r;
-                let (hgx, hgy) = grid::world_to_grid(hx, hy);
-                if !self.grid.in_bounds(hgx, hgy) || !self.grid.is_passable(hgx as u32, hgy as u32)
-                {
-                    // Blocked hold point (center tower etc.): hold in place
-                    // once anywhere inside the settle ring.
-                    hx = ux;
-                    hy = uy;
-                    if dist_sq > (r * 0.85) * (r * 0.85) {
-                        hx = zone.center_wx;
-                        hy = zone.center_wy;
+                let id = self.units[ai_idx].id;
+                let (hx, hy) = match zone_hold_point(&self.grid, zone, id) {
+                    Some(p) => p,
+                    None => {
+                        // No standable point found: hold in place once
+                        // inside, else aim just inside the circle edge.
+                        if dist_sq <= (r * 0.85) * (r * 0.85) {
+                            (ux, uy)
+                        } else {
+                            let d = dist_sq.sqrt().max(1.0);
+                            (
+                                zone.center_wx + dx / d * r * 0.7,
+                                zone.center_wy + dy / d * r * 0.7,
+                            )
+                        }
                     }
-                }
+                };
 
                 let hd_sq = (ux - hx) * (ux - hx) + (uy - hy) * (uy - hy);
                 if hd_sq <= TILE_SIZE * TILE_SIZE {
@@ -711,8 +710,62 @@ impl Game {
     }
 }
 
+/// Personal hold position inside a capture zone, keyed by unit id
+/// (golden-angle disc). A unit is a wide circle, so candidates must be
+/// circle-passable — a tile-passable spot beside the centre tower still
+/// grinds the unit against it. Falls back through further golden angles
+/// before giving up.
+pub(super) fn zone_hold_point(
+    grid: &crate::grid::Grid,
+    zone: &crate::zone::CaptureZone,
+    id: crate::unit::UnitId,
+) -> Option<(f32, f32)> {
+    let r = zone.radius as f32 * TILE_SIZE;
+    let idf = id as f32;
+    let rad_frac = ((idf * 0.618034) % 1.0).sqrt();
+    let hold_r = r * (0.35 + 0.45 * rad_frac);
+    for k in 0..8u32 {
+        let angle = (idf + k as f32) * 2.39996;
+        let hx = zone.center_wx + angle.cos() * hold_r;
+        let hy = zone.center_wy + angle.sin() * hold_r;
+        if grid.is_circle_passable(hx, hy, crate::unit::UNIT_RADIUS) {
+            return Some((hx, hy));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn zone_hold_points_are_standable() {
+        for seed in [42, 777, 9999] {
+            let mut game = Game::new(960.0, 640.0);
+            game.setup_demo_battle_with_seed(seed);
+            for zone in &game.zone_manager.zones {
+                let r = zone.radius as f32 * TILE_SIZE;
+                for id in 1..300u32 {
+                    let p = zone_hold_point(&game.grid, zone, id);
+                    let (hx, hy) = p
+                        .unwrap_or_else(|| panic!("seed {seed} zone {} id {id}: no hold", zone.id));
+                    assert!(
+                        game.grid
+                            .is_circle_passable(hx, hy, crate::unit::UNIT_RADIUS),
+                        "seed {seed} zone {} id {id}: hold not circle-passable",
+                        zone.id
+                    );
+                    let d = ((hx - zone.center_wx).powi(2) + (hy - zone.center_wy).powi(2)).sqrt();
+                    assert!(
+                        d < r * 0.85,
+                        "seed {seed} zone {} id {id}: hold outside settle band ({:.0}px)",
+                        zone.id,
+                        d
+                    );
+                }
+            }
+        }
+    }
+
     use super::*;
 
     #[test]
