@@ -131,10 +131,7 @@ impl Game {
             // Militia has no strategic objectives; it stays where it is.
             return (self.units[ai_idx].x, self.units[ai_idx].y);
         }
-        let fi = match faction {
-            Faction::Blue => 0,
-            Faction::Red | Faction::Villager => 1,
-        };
+        let fi = faction.idx();
         let objectives = &self.macro_objectives[fi];
         if objectives.is_empty() {
             return self.faction_objective(faction);
@@ -254,12 +251,8 @@ impl Game {
             return;
         }
 
-        for &faction in &[Faction::Blue, Faction::Red] {
-            let fi = match faction {
-                Faction::Blue => 0,
-                Faction::Red => 1,
-                Faction::Villager => unreachable!(),
-            };
+        for &faction in self.active_factions() {
+            let fi = faction.idx();
             let objectives = &self.macro_objectives[fi];
             if objectives.is_empty() {
                 continue;

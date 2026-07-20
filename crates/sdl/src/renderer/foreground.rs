@@ -378,11 +378,8 @@ fn draw_unit(
         super::safe_set_alpha(tex, 255);
     } else {
         let (screen_x, screen_y) = world_to_screen(unit.x, unit.y, cam);
-        let color = match unit.faction {
-            Faction::Blue => Color::RGB(60, 120, 255),
-            Faction::Red => Color::RGB(255, 60, 60),
-            Faction::Villager => Color::RGB(70, 70, 70),
-        };
+        let (fr, fg, fb) = unit.faction.rgb();
+        let color = Color::RGB(fr, fg, fb);
         canvas.set_draw_color(color);
         let size = (ts * 0.6) as u32;
         let half = size as i32 / 2;
@@ -527,7 +524,7 @@ fn draw_base_building(
         if building.kind == BuildingKind::DefenseTower {
             let color_idx = match owner {
                 Some(Faction::Blue) => 1,
-                Some(Faction::Red) => 2,
+                Some(Faction::Red) | Some(Faction::Yellow) | Some(Faction::Purple) => 2,
                 Some(Faction::Villager) | None => 0,
             };
             if color_idx >= assets.tower_textures.len() {
@@ -925,10 +922,7 @@ pub(super) fn draw_victory_progress(
     let fill_w = (inner_w * progress as f64).max(0.0);
     let fill_h = (bar_h - fill_top - fill_bottom).max(1.0);
     if fill_w > 0.0 {
-        let (fr, fg, fb) = match faction {
-            Faction::Blue => (70u8, 130u8, 230u8),
-            Faction::Red | Faction::Villager => (220, 60, 60),
-        };
+        let (fr, fg, fb) = faction.rgb();
         if let Some(ref mut fill_tex) = assets.ui_bar_fill {
             super::safe_set_color_mod(fill_tex, fr, fg, fb);
             let _ = canvas.copy(

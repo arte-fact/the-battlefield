@@ -850,12 +850,13 @@ fn draw_zone_effects(effects: &mut EffectsBatch, game: &Game, elapsed: f64) {
         let color = match zone.state {
             ZoneState::Neutral => [0.78, 0.78, 0.78, 1.0],
             ZoneState::Contested => [1.0, 0.78, 0.0, 1.0],
-            ZoneState::Capturing(Faction::Blue) => [0.24, 0.47, 1.0, 0.85],
-            ZoneState::Capturing(Faction::Red) => [1.0, 0.24, 0.24, 0.85],
-            ZoneState::Controlled(Faction::Blue) => [0.24, 0.47, 1.0, 1.0],
-            ZoneState::Controlled(Faction::Red) => [1.0, 0.24, 0.24, 1.0],
-            ZoneState::Capturing(Faction::Villager) | ZoneState::Controlled(Faction::Villager) => {
-                [0.6, 0.6, 0.6, 0.9]
+            ZoneState::Capturing(f) => {
+                let (r, g, b) = f.rgb();
+                [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 0.85]
+            }
+            ZoneState::Controlled(f) => {
+                let (r, g, b) = f.rgb();
+                [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
             }
         };
         let capturing = matches!(zone.state, ZoneState::Capturing(_) | ZoneState::Contested);
@@ -1300,12 +1301,14 @@ fn draw_hud(
             let (cr, cg, cb, ca) = match zone.state {
                 ZoneState::Neutral => (0.4, 0.4, 0.4, 0.3),
                 ZoneState::Contested => (1.0, 0.78, 0.0, 0.63),
-                ZoneState::Capturing(Faction::Blue) => (0.24, 0.51, 1.0, 0.7),
-                ZoneState::Controlled(Faction::Blue) => (0.24, 0.51, 1.0, 1.0),
-                ZoneState::Capturing(Faction::Red) => (1.0, 0.24, 0.24, 0.7),
-                ZoneState::Controlled(Faction::Red) => (1.0, 0.24, 0.24, 1.0),
-                ZoneState::Capturing(Faction::Villager)
-                | ZoneState::Controlled(Faction::Villager) => (0.6, 0.6, 0.6, 0.8),
+                ZoneState::Capturing(f) => {
+                    let (r, g, b) = f.rgb();
+                    (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 0.7)
+                }
+                ZoneState::Controlled(f) => {
+                    let (r, g, b) = f.rgb();
+                    (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0)
+                }
             };
 
             let inner_r = pip_r * progress.max(0.15);
@@ -1364,10 +1367,8 @@ fn draw_victory_progress(
         prim.fill_rect(bar_x, bar_y, bar_w, bar_h, [0.0, 0.0, 0.0, 0.5]);
     }
 
-    let tint = match faction {
-        Faction::Blue => [70.0 / 255.0, 130.0 / 255.0, 230.0 / 255.0, 1.0],
-        Faction::Red | Faction::Villager => [220.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0, 1.0],
-    };
+    let (fr, fg, fb) = faction.rgb();
+    let tint = [fr as f32 / 255.0, fg as f32 / 255.0, fb as f32 / 255.0, 1.0];
     if let Some(q) = render_util::bar_fill_quad(
         bar_x as f64,
         bar_y as f64,
@@ -1503,11 +1504,8 @@ fn draw_minimap(
         }
         let ux = mm_x + ugx as f32 * sx;
         let uy = mm_y + ugy as f32 * sy;
-        let color = match unit.faction {
-            Faction::Blue => [0.29, 0.62, 1.0, 1.0],
-            Faction::Red => [1.0, 0.29, 0.29, 1.0],
-            Faction::Villager => [0.5, 0.5, 0.5, 1.0],
-        };
+        let (fr, fg, fb) = unit.faction.rgb();
+        let color = [fr as f32 / 255.0, fg as f32 / 255.0, fb as f32 / 255.0, 1.0];
         prim.fill_rect(ux - 1.0, uy - 1.0, 2.0, 2.0, color);
     }
 

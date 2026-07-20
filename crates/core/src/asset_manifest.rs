@@ -86,14 +86,17 @@ pub fn building_tex_index(kind: BuildingKind, house_variant: u8, faction: Factio
         BuildingKind::DefenseTower => 4,
         BuildingKind::House => 5 + house_variant as usize,
     };
-    let faction_index = match faction {
-        Faction::Blue => 0,
-        Faction::Red | Faction::Villager => 1, // buildings are never villager-owned
-    };
-    kind_index * 2 + faction_index
+    // Buildings are never villager-owned; map defensively to Red.
+    let faction_index = faction.army_idx().unwrap_or(1);
+    kind_index * BUILDING_FACTION_FOLDERS.len() + faction_index
 }
 
-pub const BUILDING_FACTION_FOLDERS: &[&str] = &["Blue Buildings", "Red Buildings"];
+pub const BUILDING_FACTION_FOLDERS: &[&str] = &[
+    "Blue Buildings",
+    "Red Buildings",
+    "Yellow Buildings",
+    "Purple Buildings",
+];
 
 /// Folder for neutral (unowned village) building sprites.
 pub const NEUTRAL_BUILDING_FOLDER: &str = "Black Buildings";
@@ -212,8 +215,14 @@ pub const PAWN_SPECS: &[(&str, u32)] = &[
     ("Pawn_Run Knife.png", 6),        // 13: walking to the pen
 ];
 
-/// Pawn color folders: 0=Blue, 1=Red, 2=neutral (Black, unowned villages).
-pub const PAWN_COLOR_FOLDERS: &[&str] = &["Blue Units", "Red Units", "Black Units"];
+/// Pawn color folders: 0=Blue, 1=Red, 2=neutral (Black), 3=Yellow, 4=Purple.
+pub const PAWN_COLOR_FOLDERS: &[&str] = &[
+    "Blue Units",
+    "Red Units",
+    "Black Units",
+    "Yellow Units",
+    "Purple Units",
+];
 
 // ---------------------------------------------------------------------------
 // Unit avatars (portraits for HUD)

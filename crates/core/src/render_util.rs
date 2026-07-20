@@ -209,8 +209,13 @@ pub fn zone_fill_rgba(state: ZoneState) -> (u8, u8, u8, u8) {
         ZoneState::Capturing(Faction::Red) => (255, 60, 60, 20),
         ZoneState::Controlled(Faction::Blue) => (60, 120, 255, 30),
         ZoneState::Controlled(Faction::Red) => (255, 60, 60, 30),
-        ZoneState::Capturing(Faction::Villager) | ZoneState::Controlled(Faction::Villager) => {
-            (200, 200, 200, 20)
+        ZoneState::Capturing(f) => {
+            let (r, g, b) = f.rgb();
+            (r, g, b, 20)
+        }
+        ZoneState::Controlled(f) => {
+            let (r, g, b) = f.rgb();
+            (r, g, b, 30)
         }
     }
 }
@@ -224,8 +229,13 @@ pub fn zone_border_rgba(state: ZoneState) -> (u8, u8, u8, u8) {
         ZoneState::Capturing(Faction::Red) => (255, 60, 60, 100),
         ZoneState::Controlled(Faction::Blue) => (60, 120, 255, 128),
         ZoneState::Controlled(Faction::Red) => (255, 60, 60, 128),
-        ZoneState::Capturing(Faction::Villager) | ZoneState::Controlled(Faction::Villager) => {
-            (200, 200, 200, 100)
+        ZoneState::Capturing(f) => {
+            let (r, g, b) = f.rgb();
+            (r, g, b, 100)
+        }
+        ZoneState::Controlled(f) => {
+            let (r, g, b) = f.rgb();
+            (r, g, b, 128)
         }
     }
 }
@@ -239,9 +249,7 @@ pub fn zone_pip_rgb(state: ZoneState) -> (u8, u8, u8) {
             (60, 120, 255)
         }
         ZoneState::Capturing(Faction::Red) | ZoneState::Controlled(Faction::Red) => (255, 60, 60),
-        ZoneState::Capturing(Faction::Villager) | ZoneState::Controlled(Faction::Villager) => {
-            (150, 150, 150)
-        }
+        ZoneState::Capturing(f) | ZoneState::Controlled(f) => f.rgb(),
     }
 }
 
@@ -478,6 +486,9 @@ pub fn small_ribbon_row(faction: Faction) -> u32 {
     match faction {
         Faction::Blue => 1,
         Faction::Red => 3,
+        // Yellow row exists in the atlas; Purple shares it until a
+        // purple ribbon lands.
+        Faction::Yellow | Faction::Purple => 5,
         Faction::Villager => 5,
     }
 }
@@ -625,7 +636,7 @@ pub fn ribbon_src(color_row: u32, col: u32, cell_w: f64, cell_h: f64) -> (f64, f
 pub fn faction_ribbon_row(faction: Faction) -> u32 {
     match faction {
         Faction::Blue => 0,
-        Faction::Red | Faction::Villager => 1,
+        _ => 1,
     }
 }
 

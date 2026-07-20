@@ -11,16 +11,46 @@ pub const MELEE_RANGE: f32 = TILE_SIZE * 1.5;
 pub enum Faction {
     Blue,
     Red,
-    /// Neutral village militia: hostile to both armies, belongs to no
+    Yellow,
+    Purple,
+    /// Neutral village militia: hostile to every army, belongs to no
     /// pool or planner. Converts to the captor when its zone falls.
     Villager,
 }
 
+/// The four playable army colors in per-array index order.
+pub const ARMY_FACTIONS: [Faction; 4] = [
+    Faction::Blue,
+    Faction::Red,
+    Faction::Yellow,
+    Faction::Purple,
+];
+
 impl Faction {
+    /// Index into per-faction arrays (`[T; 4]`). Villagers own nothing.
+    pub fn army_idx(self) -> Option<usize> {
+        match self {
+            Faction::Blue => Some(0),
+            Faction::Red => Some(1),
+            Faction::Yellow => Some(2),
+            Faction::Purple => Some(3),
+            Faction::Villager => None,
+        }
+    }
+
+    /// Index for callers that already know this is an army faction.
+    pub fn idx(self) -> usize {
+        self.army_idx().expect("villagers have no army index")
+    }
+
     pub fn enemy(self) -> Faction {
         match self {
             Faction::Blue => Faction::Red,
             Faction::Red => Faction::Blue,
+            // Placeholder pairing until FFA battle flow (roadmap item 3)
+            // removes single-nemesis call sites.
+            Faction::Yellow => Faction::Purple,
+            Faction::Purple => Faction::Yellow,
             // Villagers have no single nemesis; callers needing "the
             // opposing army" must not reach here with Villager.
             Faction::Villager => Faction::Villager,
@@ -37,7 +67,20 @@ impl Faction {
         match self {
             Faction::Blue => "Blue Units",
             Faction::Red => "Red Units",
+            Faction::Yellow => "Yellow Units",
+            Faction::Purple => "Purple Units",
             Faction::Villager => "Black Units",
+        }
+    }
+
+    /// Display color for HUD/minimap primitives.
+    pub fn rgb(self) -> (u8, u8, u8) {
+        match self {
+            Faction::Blue => (60, 130, 255),
+            Faction::Red => (255, 60, 60),
+            Faction::Yellow => (235, 190, 40),
+            Faction::Purple => (170, 80, 220),
+            Faction::Villager => (120, 120, 120),
         }
     }
 }

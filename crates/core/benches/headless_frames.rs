@@ -140,6 +140,10 @@ fn main() {
             battlefield_core::zone::ZoneState::Capturing(Faction::Blue) => 'b',
             battlefield_core::zone::ZoneState::Capturing(Faction::Red) => 'r',
             battlefield_core::zone::ZoneState::Contested => 'c',
+            battlefield_core::zone::ZoneState::Controlled(Faction::Yellow) => 'Y',
+            battlefield_core::zone::ZoneState::Capturing(Faction::Yellow) => 'y',
+            battlefield_core::zone::ZoneState::Controlled(Faction::Purple) => 'P',
+            battlefield_core::zone::ZoneState::Capturing(Faction::Purple) => 'p',
             battlefield_core::zone::ZoneState::Controlled(Faction::Villager)
             | battlefield_core::zone::ZoneState::Capturing(Faction::Villager) => 'v',
             battlefield_core::zone::ZoneState::Neutral => 'n',

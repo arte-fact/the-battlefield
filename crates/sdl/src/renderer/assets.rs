@@ -18,7 +18,7 @@ const ASSET_BASE: &str = asset_manifest::ASSET_BASE;
 pub struct Assets<'a> {
     pub(super) unit_textures: HashMap<UnitTexKey, (Texture<'a>, u32, u32, u32)>,
     pub(super) particle_textures: HashMap<ParticleKind, Texture<'a>>,
-    /// Indexed by `asset_manifest::building_tex_index()` (kind_index * 2 + faction_index).
+    /// Indexed by `asset_manifest::building_tex_index()` (kind_index * folders + faction_index).
     pub(super) building_textures: Vec<Option<(Texture<'a>, u32, u32)>>,
     pub(super) arrow_texture: Option<Texture<'a>>,
     // Terrain
@@ -247,7 +247,13 @@ impl<'a> Assets<'a> {
             UnitAnim::Attack,
             UnitAnim::Attack2,
         ];
-        for &faction in &[Faction::Blue, Faction::Red, Faction::Villager] {
+        for &faction in &[
+            Faction::Blue,
+            Faction::Red,
+            Faction::Yellow,
+            Faction::Purple,
+            Faction::Villager,
+        ] {
             let folder = faction.asset_folder();
             for &kind in &[
                 UnitKind::Warrior,
@@ -300,7 +306,8 @@ impl<'a> Assets<'a> {
         }
 
         // Load building textures from shared manifest (indexed by kind*2 + faction)
-        let total_building_slots = asset_manifest::BUILDING_SPECS.len() * 2;
+        let total_building_slots =
+            asset_manifest::BUILDING_SPECS.len() * asset_manifest::BUILDING_FACTION_FOLDERS.len();
         let mut building_textures: Vec<Option<(Texture, u32, u32)>> =
             (0..total_building_slots).map(|_| None).collect();
         for (spec_idx, &(sw, sh, filename)) in asset_manifest::BUILDING_SPECS.iter().enumerate() {
@@ -309,7 +316,9 @@ impl<'a> Assets<'a> {
             {
                 let path = format!("{ASSET_BASE}/Buildings/{faction_folder}/{filename}");
                 if let Some(tex) = load_png_texture(tc, &path) {
-                    building_textures[spec_idx * 2 + faction_idx] = Some((tex, sw, sh));
+                    building_textures
+                        [spec_idx * asset_manifest::BUILDING_FACTION_FOLDERS.len() + faction_idx] =
+                        Some((tex, sw, sh));
                 }
             }
         }

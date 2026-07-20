@@ -434,7 +434,12 @@ impl SkirmishConfig {
 
     /// Post-setup per-side values that GameConfig cannot express.
     pub fn apply_to_game(&self, game: &mut Game) {
-        game.manpower = [self.manpower_you, self.manpower_enemy];
+        game.manpower = [
+            self.manpower_you,
+            self.manpower_enemy,
+            self.manpower_enemy,
+            self.manpower_enemy,
+        ];
         game.authority = self.start_authority;
     }
 

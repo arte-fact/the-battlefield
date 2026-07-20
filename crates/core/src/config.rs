@@ -107,6 +107,9 @@ pub struct GameConfig {
     /// Max peon deliveries a village can bank.
     #[serde(default = "default_village_stock_cap")]
     pub village_stock_cap: u8,
+    /// AI opponents in the battle (1-3): Red, +Yellow, +Purple.
+    #[serde(default = "default_enemy_count")]
+    pub enemy_count: u8,
     /// Standing garrison size a village maintains (per village).
     #[serde(default = "default_garrison_cap")]
     pub garrison_cap: u8,
@@ -154,6 +157,10 @@ fn default_playable_size() -> u32 {
 
 fn default_village_stock_cap() -> u8 {
     5
+}
+
+fn default_enemy_count() -> u8 {
+    1
 }
 
 fn default_garrison_cap() -> u8 {
@@ -290,6 +297,7 @@ impl Default for GameConfig {
             victory_hold_time: 60.0,
             playable_size: default_playable_size(),
             village_stock_cap: default_village_stock_cap(),
+            enemy_count: default_enemy_count(),
             garrison_cap: default_garrison_cap(),
             garrison_spawn_interval: default_garrison_spawn_interval(),
 

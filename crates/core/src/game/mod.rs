@@ -129,23 +129,23 @@ pub struct Game {
     pub garrison_timer: Vec<f32>,
     /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
     pub winner: Option<Faction>,
-    /// Remaining reinforcement manpower per faction [Blue, Red].
-    pub manpower: [f32; 2],
+    /// Remaining reinforcement manpower per army faction (ARMY_FACTIONS order).
+    pub manpower: [f32; 4],
     /// Spawn queue per faction [Blue, Red] — units to spawn one-by-one.
-    spawn_queue: [Vec<(UnitKind, Option<u8>)>; 2],
-    /// Timer between individual unit spawns per faction [Blue, Red].
-    spawn_timer: [f32; 2],
+    spawn_queue: [Vec<(UnitKind, Option<u8>)>; 4],
+    /// Timer between individual unit spawns per army faction.
+    spawn_timer: [f32; 4],
     /// Per-faction flag: skip rally_hold when dominating (all zones held).
-    skip_rally: [bool; 2],
+    skip_rally: [bool; 4],
     /// Unified flow field for Blue faction (multi-source, all map objectives).
     blue_flow: FactionFlowState,
     /// Unified flow field for Red faction (multi-source, all map objectives).
     red_flow: FactionFlowState,
-    /// Macro objectives per faction: [(wx, wy, score); 3] per faction [Blue, Red].
-    pub macro_objectives: [Vec<(f32, f32, f32)>; 2],
+    /// Macro objectives per army faction: [(wx, wy, score); 3] each.
+    pub macro_objectives: [Vec<(f32, f32, f32)>; 4],
     /// Sticky planner picks per faction: (defend, attack). A new candidate
     /// must clearly beat the current target before the army retargets.
-    pub planner_targets: [(Option<u8>, Option<u8>); 2],
+    pub planner_targets: [(Option<u8>, Option<u8>); 4],
     /// Timer for periodic macro objective recomputation.
     objective_timer: f32,
     /// Timer for periodic auto-recruitment passes.
@@ -181,6 +181,12 @@ pub struct Game {
 }
 
 impl Game {
+    /// Army factions active in this battle: Blue + enemy_count rivals.
+    pub fn active_factions(&self) -> &'static [Faction] {
+        let n = (self.config.enemy_count.clamp(1, 3) as usize) + 1;
+        &crate::unit::ARMY_FACTIONS[..n]
+    }
+
     pub fn new(viewport_w: f32, viewport_h: f32) -> Self {
         let grid = Grid::new_grass(GRID_SIZE, GRID_SIZE);
         let mut camera = Camera::new(viewport_w, viewport_h);
@@ -215,14 +221,14 @@ impl Game {
             village_stock: Vec::new(),
             garrison_timer: Vec::new(),
             winner: None,
-            manpower: [config.manpower_start; 2],
-            spawn_queue: [Vec::new(), Vec::new()],
-            spawn_timer: [0.0; 2],
-            skip_rally: [false; 2],
+            manpower: [config.manpower_start; 4],
+            spawn_queue: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            spawn_timer: [0.0; 4],
+            skip_rally: [false; 4],
             blue_flow: FactionFlowState::new(),
             red_flow: FactionFlowState::new(),
-            macro_objectives: [Vec::new(), Vec::new()],
-            planner_targets: [(None, None), (None, None)],
+            macro_objectives: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            planner_targets: [(None, None); 4],
             objective_timer: 0.0,
             recruit_timer: 0.0,
             flow_field_turn: false,

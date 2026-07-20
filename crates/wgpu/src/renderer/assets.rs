@@ -371,7 +371,13 @@ impl Assets {
             UnitAnim::Attack2,
         ];
 
-        for &faction in &[Faction::Blue, Faction::Red, Faction::Villager] {
+        for &faction in &[
+            Faction::Blue,
+            Faction::Red,
+            Faction::Yellow,
+            Faction::Purple,
+            Faction::Villager,
+        ] {
             let folder = faction.asset_folder();
             for &kind in &[
                 UnitKind::Warrior,
@@ -429,7 +435,8 @@ impl Assets {
     // ── Load buildings (matches SDL assets.rs lines 293-306) ────────────
 
     fn load_buildings(&mut self, gpu: &GpuContext) {
-        let total = asset_manifest::BUILDING_SPECS.len() * 2;
+        let total =
+            asset_manifest::BUILDING_SPECS.len() * asset_manifest::BUILDING_FACTION_FOLDERS.len();
         self.building_textures = (0..total).map(|_| None).collect();
 
         for (spec_idx, &(sw, sh, filename)) in asset_manifest::BUILDING_SPECS.iter().enumerate() {
@@ -438,7 +445,9 @@ impl Assets {
             {
                 let path = format!("{ASSET_BASE}/Buildings/{faction_folder}/{filename}");
                 if let Some(id) = self.load_png(gpu, &path) {
-                    self.building_textures[spec_idx * 2 + faction_idx] = Some((id, sw, sh));
+                    self.building_textures
+                        [spec_idx * asset_manifest::BUILDING_FACTION_FOLDERS.len() + faction_idx] =
+                        Some((id, sw, sh));
                 }
             }
         }

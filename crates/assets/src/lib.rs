@@ -260,6 +260,147 @@ pub fn get(path: &str) -> Option<&'static [u8]> {
         "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Human Avatars/Avatars_04.png" =>
             Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Human Avatars/Avatars_04.png")),
 
+        // ── Yellow/Purple army sheets ───────────────────────────────
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Warrior/Warrior_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Warrior/Warrior_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Warrior/Warrior_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Warrior/Warrior_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Warrior/Warrior_Attack1.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Warrior/Warrior_Attack1.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Warrior/Warrior_Attack2.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Warrior/Warrior_Attack2.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Archer/Archer_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Archer/Archer_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Archer/Archer_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Archer/Archer_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Archer/Archer_Shoot.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Archer/Archer_Shoot.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Lancer/Lancer_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Lancer/Lancer_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Lancer/Lancer_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Lancer/Lancer_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Lancer/Lancer_Right_Attack.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Lancer/Lancer_Right_Attack.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Monk/Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Monk/Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Monk/Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Monk/Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Monk/Heal.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Monk/Heal.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Interact Axe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Interact Axe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Idle Wood.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Idle Wood.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Wood.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Wood.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Axe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Axe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Interact Pickaxe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Interact Pickaxe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Idle Gold.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Idle Gold.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Gold.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Gold.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Pickaxe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Pickaxe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Interact Knife.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Interact Knife.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Idle Meat.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Idle Meat.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Meat.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Meat.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Knife.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Yellow Units/Pawn/Pawn_Run Knife.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/Barracks.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/Barracks.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/Archery.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/Archery.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/Monastery.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/Monastery.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/Castle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/Castle.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/Tower.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/Tower.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/House1.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/House1.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/House2.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/House2.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/House3.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Yellow Buildings/House3.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Warrior/Warrior_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Warrior/Warrior_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Warrior/Warrior_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Warrior/Warrior_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Warrior/Warrior_Attack1.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Warrior/Warrior_Attack1.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Warrior/Warrior_Attack2.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Warrior/Warrior_Attack2.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Archer/Archer_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Archer/Archer_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Archer/Archer_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Archer/Archer_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Archer/Archer_Shoot.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Archer/Archer_Shoot.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Lancer/Lancer_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Lancer/Lancer_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Lancer/Lancer_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Lancer/Lancer_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Lancer/Lancer_Right_Attack.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Lancer/Lancer_Right_Attack.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Monk/Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Monk/Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Monk/Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Monk/Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Monk/Heal.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Monk/Heal.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Interact Axe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Interact Axe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Idle Wood.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Idle Wood.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Wood.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Wood.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Axe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Axe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Interact Pickaxe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Interact Pickaxe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Idle Gold.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Idle Gold.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Gold.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Gold.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Pickaxe.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Pickaxe.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Interact Knife.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Interact Knife.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Idle Meat.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Idle Meat.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Meat.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Meat.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Knife.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Purple Units/Pawn/Pawn_Run Knife.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/Barracks.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/Barracks.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/Archery.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/Archery.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/Monastery.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/Monastery.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/Castle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/Castle.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/Tower.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/Tower.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/House1.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/House1.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/House2.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/House2.png")),
+        "assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/House3.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Buildings/Purple Buildings/House3.png")),
         // ── Black (villager) unit sheets ────────────────────────────
         "assets/Tiny Swords (Free Pack)/Units/Black Units/Warrior/Warrior_Idle.png" =>
             Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Warrior/Warrior_Idle.png")),
