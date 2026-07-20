@@ -207,7 +207,7 @@ fn default_manpower_start() -> f32 {
 }
 
 fn default_bleed_zone_threshold() -> usize {
-    4
+    0 // automatic: settlement majority
 }
 
 fn default_bleed_per_extra_zone() -> f32 {

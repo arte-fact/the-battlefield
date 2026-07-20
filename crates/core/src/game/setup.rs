@@ -178,28 +178,42 @@ impl Game {
     /// Conquest bleed: controlling a majority of zones drains the enemy pool,
     /// scaling with each zone at or above the threshold.
     fn tick_manpower_bleed(&mut self, dt: f32) {
-        let threshold = self.config.bleed_zone_threshold;
-        if threshold == 0 {
+        if self.zone_manager.zones.is_empty() {
             return;
         }
         let active = self.active_factions();
-        for &faction in active {
-            let controlled = self
-                .zone_manager
-                .zones
-                .iter()
-                .filter(|z| z.state == ZoneState::Controlled(faction))
-                .count();
-            if controlled >= threshold {
-                let extra_zones = (controlled - threshold + 1) as f32;
-                let drain = extra_zones * self.config.bleed_per_extra_zone * dt;
-                for &rival in active {
-                    if rival != faction {
-                        let ri = rival.idx();
-                        self.manpower[ri] = (self.manpower[ri] - drain).max(0.0);
-                    }
-                }
+        let counts: Vec<(Faction, usize)> = active
+            .iter()
+            .map(|&f| (f, self.zone_manager.controlled_count(f)))
+            .collect();
+        let best = counts.iter().map(|&(_, c)| c).max().unwrap_or(0);
+        let leaders: Vec<Faction> = counts
+            .iter()
+            .filter(|&&(_, c)| c == best)
+            .map(|&(f, _)| f)
+            .collect();
+        // Attrition favors a clear front-runner: once the unique leader
+        // holds a real share of the map (config override, else a third of
+        // all settlements), every rival bleeds proportional to its
+        // settlement deficit. FFA battles end without needing an outright
+        // majority; 1v1 pressure is comparable to the old majority rule.
+        let gate = if self.config.bleed_zone_threshold == 0 {
+            (self.zone_manager.zones.len() / 3).max(2)
+        } else {
+            self.config.bleed_zone_threshold
+        };
+        if leaders.len() != 1 || best < gate {
+            return;
+        }
+        let leader = leaders[0];
+        for &(rival, c) in &counts {
+            if rival == leader {
+                continue;
             }
+            let deficit = (best - c) as f32;
+            let drain = deficit * self.config.bleed_per_extra_zone * dt;
+            let ri = rival.idx();
+            self.manpower[ri] = (self.manpower[ri] - drain).max(0.0);
         }
     }
 
@@ -366,15 +380,9 @@ impl Game {
 
                 let (kind, _) = self.spawn_queue[fi].remove(0);
                 self.manpower[fi] -= 1.0;
-                // Spawn at the production building that trains this unit kind
-                let (sx, sy) = self
-                    .buildings
-                    .iter()
-                    .find(|b| {
-                        b.zone_id.is_none() && b.faction == faction && b.produces == Some(kind)
-                    })
-                    .map(|b| (b.grid_x, b.grid_y))
-                    .unwrap_or(self.gathers[faction.idx()]);
+                // Reinforcements enter at the largest controlled settlement
+                // that trains this kind.
+                let (sx, sy) = self.production_site(faction, kind);
                 let id = self.spawn_unit(kind, faction, sx, sy, false);
                 // Rally hold — unit waits at base until wave is complete.
                 // Skip when dominating (all zones held) — just reinforce.
@@ -394,6 +402,39 @@ impl Game {
                 }
             }
         }
+    }
+
+    /// The zone a faction rallies and reinforces at: its largest
+    /// controlled settlement (tier, then lowest id). None when landless.
+    pub fn rally_zone(&self, faction: Faction) -> Option<&crate::zone::CaptureZone> {
+        self.zone_manager
+            .zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(faction))
+            .max_by_key(|z| (z.tier, std::cmp::Reverse(z.id)))
+    }
+
+    /// Where a reinforcement of `kind` enters the field: the production
+    /// building at the faction's best settlement that trains it, walking
+    /// down the tier list; falls back to the capital gather point.
+    fn production_site(&self, faction: Faction, kind: UnitKind) -> (u32, u32) {
+        let mut owned: Vec<&crate::zone::CaptureZone> = self
+            .zone_manager
+            .zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(faction))
+            .collect();
+        owned.sort_by_key(|z| (std::cmp::Reverse(z.tier), z.id));
+        for z in owned {
+            if let Some(b) = self
+                .buildings
+                .iter()
+                .find(|b| b.zone_id == Some(z.id) && b.produces == Some(kind))
+            {
+                return (b.grid_x, b.grid_y);
+            }
+        }
+        self.gathers[faction.idx()]
     }
 
     /// Village garrisons: each village converts banked peon stock into a
@@ -427,7 +468,8 @@ impl Game {
                         && u.order == Some(crate::unit::OrderKind::DefendZone { zone: zi as u8 })
                 })
                 .count();
-            if alive >= self.config.garrison_cap as usize {
+            let cap = self.zone_manager.zones[zi].tier.garrison_cap();
+            if alive >= cap as usize {
                 continue;
             }
             let stock = self.village_stock.get(zi).copied().unwrap_or(0);
@@ -510,6 +552,17 @@ impl Game {
         self.village_stock = vec![2; self.zone_manager.zones.len()];
         self.garrison_timer = vec![0.0; self.zone_manager.zones.len()];
 
+        // Capitals are city-tier zones appended after the seven field
+        // zones, in [Blue, Red, extras...] order; each active faction
+        // starts in control of its own.
+        let capital_zone = |k: usize| (7 + k) as u8;
+        for (k, &f) in active.iter().enumerate() {
+            let zi = capital_zone(k) as usize;
+            if zi < self.zone_manager.zones.len() {
+                self.zone_manager.zones[zi].set_controlled(f);
+            }
+        }
+
         // Store gather points for unit rallying
         self.gathers = base_pos;
 
@@ -520,29 +573,33 @@ impl Game {
         let blue_facing = (dxf / len, dyf / len);
         let red_facing = (-blue_facing.0, -blue_facing.1);
 
-        // Procedurally generate base buildings for every active faction;
-        // extra capitals face the map centre.
-        let mut buildings =
-            building::generate_base_buildings(Faction::Blue, blue_cx, blue_cy, seed, blue_facing);
-        buildings.extend(building::generate_base_buildings(
-            Faction::Red,
-            red_cx,
-            red_cy,
-            seed.wrapping_add(0xBEEF),
-            red_facing,
-        ));
-        for &f in active.iter().skip(2) {
+        // Procedurally generate capital buildings for every active
+        // faction — zone-linked so they recolor with whoever holds the
+        // city; extra capitals face the map centre.
+        let mut buildings = Vec::new();
+        for (k, &f) in active.iter().enumerate() {
             let (cx, cy) = base_pos[f.idx()];
-            let dxf = self.grid.width as f32 / 2.0 - cx as f32;
-            let dyf = self.grid.height as f32 / 2.0 - cy as f32;
-            let len = (dxf * dxf + dyf * dyf).sqrt().max(1.0);
-            buildings.extend(building::generate_base_buildings(
+            let facing = match f {
+                Faction::Blue => blue_facing,
+                Faction::Red => red_facing,
+                _ => {
+                    let dxf = self.grid.width as f32 / 2.0 - cx as f32;
+                    let dyf = self.grid.height as f32 / 2.0 - cy as f32;
+                    let len = (dxf * dxf + dyf * dyf).sqrt().max(1.0);
+                    (dxf / len, dyf / len)
+                }
+            };
+            let mut batch = building::generate_base_buildings(
                 f,
                 cx,
                 cy,
                 seed.wrapping_add(0x1000 * f.idx() as u32),
-                (dxf / len, dyf / len),
-            ));
+                facing,
+            );
+            for b in &mut batch {
+                b.zone_id = Some(capital_zone(k));
+            }
+            buildings.extend(batch);
         }
         // Place defense towers at capture zone centers
         for zone in &self.zone_manager.zones {
@@ -558,7 +615,7 @@ impl Game {
             });
         }
         // Village buildings from the map plan; ownership follows the zone.
-        for v in &layout.villages {
+        for v in &layout.settlements {
             for (i, &(hx, hy)) in v.houses.iter().enumerate() {
                 buildings.push(building::BaseBuilding {
                     kind: building::BuildingKind::House,
@@ -602,7 +659,7 @@ impl Game {
         // Paint road/dirt around building footprints, sparing village
         // resources (groves, gold stones, pen ground).
         let protected: std::collections::HashSet<(u32, u32)> = layout
-            .villages
+            .settlements
             .iter()
             .flat_map(|v| v.resources.iter().copied())
             .collect();
@@ -615,7 +672,7 @@ impl Game {
 
         // Village resources: gold outcrops as impassable decorations,
         // pasture sheep grazing the pen tiles (groves are already terrain).
-        for v in &layout.villages {
+        for v in &layout.settlements {
             match v.theme {
                 crate::mapgen::VillageTheme::Gold => {
                     for &(x, y) in &v.resources {
@@ -651,7 +708,7 @@ impl Game {
             match b.zone_id {
                 None => self.pawns.push(Pawn::new(wx, wy, b.faction, pawn_seed)),
                 Some(zid) => {
-                    let Some(v) = layout.villages.iter().find(|v| v.zone_idx == zid) else {
+                    let Some(v) = layout.settlements.iter().find(|v| v.zone_idx == zid) else {
                         continue;
                     };
                     let (job, work_tiles) = match v.theme {
@@ -805,7 +862,7 @@ mod tests {
             blue_home_zones: vec![0],
             red_home_zones: vec![2],
             connections: vec![vec![1], vec![0, 2], vec![1]],
-            villages: Vec::new(),
+            settlements: Vec::new(),
             extra_bases: Vec::new(),
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
@@ -1098,7 +1155,7 @@ mod tests {
             blue_home_zones: vec![0],
             red_home_zones: vec![2],
             connections: vec![vec![1], vec![0, 2], vec![1]],
-            villages: Vec::new(),
+            settlements: Vec::new(),
             extra_bases: Vec::new(),
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
@@ -1112,8 +1169,8 @@ mod tests {
         game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
         game.manpower = [50.0, 50.0, 0.0, 0.0];
         game.tick_zones(2.0);
-        // 2 zones at threshold 2 → 1 "extra" zone → 1.0/s drain on Red for 2s
-        assert_eq!(game.manpower[1], 48.0, "Red pool should bleed");
+        // Leader Blue holds 2, Red 0 → deficit 2 → 2.0/s drain on Red for 2s
+        assert_eq!(game.manpower[1], 46.0, "Red pool should bleed");
         assert_eq!(game.manpower[0], 50.0, "Blue pool should be untouched");
     }
 
@@ -1125,8 +1182,8 @@ mod tests {
         }
         game.manpower = [50.0, 50.0, 0.0, 0.0];
         game.tick_zones(1.0);
-        // 3 zones at threshold 2 → 2 extra zones → 2.0/s drain on Blue
-        assert_eq!(game.manpower[0], 48.0);
+        // Leader Red holds 3, Blue 0 → deficit 3 → 3.0/s drain on Blue
+        assert_eq!(game.manpower[0], 47.0);
     }
 
     #[test]

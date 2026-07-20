@@ -5,6 +5,7 @@
 use super::{Rng, VILLAGE_CLEAR_RADIUS, VILLAGE_RING_MAX, VILLAGE_RING_MIN};
 use crate::building::BuildingKind;
 use crate::grid::{Grid, TileKind};
+use crate::zone::SettlementTier;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VillageTheme {
@@ -24,8 +25,9 @@ impl VillageTheme {
 }
 
 #[derive(Clone, Debug)]
-pub struct VillageSpec {
+pub struct SettlementSpec {
     pub zone_idx: u8,
+    pub tier: SettlementTier,
     pub theme: VillageTheme,
     /// House anchor tiles.
     pub houses: Vec<(u32, u32)>,
@@ -38,9 +40,16 @@ pub struct VillageSpec {
 /// Sixteen ring directions, deterministic order before shuffling.
 const ANGLES: u32 = 16;
 
-/// Plan a village for every zone. Wood groves are painted into the grid
-/// here (they are terrain); gold stones and pens stay data until setup.
-pub fn plan_villages(grid: &mut Grid, zone_centers: &[(u32, u32)], seed: u32) -> Vec<VillageSpec> {
+/// Plan a settlement for every zone. Wood groves are painted into the
+/// grid here (they are terrain); gold stones and pens stay data until
+/// setup. City building layouts come from the band generator at setup;
+/// here cities only get a theme and a resource ring.
+pub fn plan_settlements(
+    grid: &mut Grid,
+    zone_centers: &[(u32, u32)],
+    tiers: &[SettlementTier],
+    seed: u32,
+) -> Vec<SettlementSpec> {
     let mut rng = Rng::new(seed.wrapping_mul(0x9E37_79B9).wrapping_add(0x5EED));
 
     // Theme pool guarantees all three themes on every map.
@@ -65,9 +74,9 @@ pub fn plan_villages(grid: &mut Grid, zone_centers: &[(u32, u32)], seed: u32) ->
                 zi as u8,
                 cx,
                 cy,
+                tiers.get(zi).copied().unwrap_or(SettlementTier::Village),
                 themes[zi % themes.len()],
                 &mut rng,
-                zi == 3, // C2 gets the second production building
             )
         })
         .collect()
@@ -85,10 +94,10 @@ fn plan_one(
     zone_idx: u8,
     cx: u32,
     cy: u32,
+    tier: SettlementTier,
     theme: VillageTheme,
     rng: &mut Rng,
-    double_production: bool,
-) -> VillageSpec {
+) -> SettlementSpec {
     let (icx, icy) = (cx as i32, cy as i32);
     let mut occupied: Vec<(i32, i32)> = Vec::new();
     // Reserve the zone-center tower footprint.
@@ -105,41 +114,64 @@ fn plan_one(
         angle_slots.swap(i, j);
     }
 
+    // City building layouts come from the band generator at setup; the
+    // spec only carries theme + resources for its peon economy.
     let mut production = Vec::new();
-    let kind = theme.production_building();
-    if let Some(pos) = place_on_ring(grid, icx, icy, kind, &mut occupied, &angle_slots) {
-        production.push((pos, kind));
-    }
-    if double_production {
-        let second = match theme {
-            VillageTheme::Gold => BuildingKind::Archery,
-            VillageTheme::Wood => BuildingKind::Monastery,
-            VillageTheme::Meat => BuildingKind::Barracks,
-        };
-        if let Some(pos) = place_on_ring(grid, icx, icy, second, &mut occupied, &angle_slots) {
-            production.push((pos, second));
+    let mut houses = Vec::new();
+    if tier != SettlementTier::City {
+        let kinds = [
+            theme.production_building(),
+            match theme {
+                VillageTheme::Gold => BuildingKind::Archery,
+                VillageTheme::Wood => BuildingKind::Monastery,
+                VillageTheme::Meat => BuildingKind::Barracks,
+            },
+            match theme {
+                VillageTheme::Gold => BuildingKind::Monastery,
+                VillageTheme::Wood => BuildingKind::Barracks,
+                VillageTheme::Meat => BuildingKind::Archery,
+            },
+        ];
+        for &kind in kinds.iter().take(tier.production_count()) {
+            if let Some(pos) = place_on_ring(grid, icx, icy, kind, &mut occupied, &angle_slots) {
+                production.push((pos, kind));
+            }
+        }
+
+        let house_count = tier.house_count(rng.next());
+        for _ in 0..house_count {
+            if let Some(pos) = place_on_ring(
+                grid,
+                icx,
+                icy,
+                BuildingKind::House,
+                &mut occupied,
+                &angle_slots,
+            ) {
+                houses.push(pos);
+            }
         }
     }
 
-    let house_count = 3 + (rng.next() % 2) as usize;
-    let mut houses = Vec::new();
-    for _ in 0..house_count {
-        if let Some(pos) = place_on_ring(
+    let resources = if tier == SettlementTier::City {
+        place_resources_ring(
             grid,
             icx,
             icy,
-            BuildingKind::House,
+            theme,
+            road_dir,
             &mut occupied,
-            &angle_slots,
-        ) {
-            houses.push(pos);
-        }
-    }
+            rng,
+            crate::building::BASE_BAND_RADIUS + 1,
+            crate::building::BASE_BAND_RADIUS + 3,
+        )
+    } else {
+        place_resources(grid, icx, icy, theme, road_dir, &mut occupied, rng)
+    };
 
-    let resources = place_resources(grid, icx, icy, theme, road_dir, &mut occupied, rng);
-
-    VillageSpec {
+    SettlementSpec {
         zone_idx,
+        tier,
         theme,
         houses,
         production,
@@ -255,6 +287,31 @@ fn place_resources(
     occupied: &mut Vec<(i32, i32)>,
     rng: &mut Rng,
 ) -> Vec<(u32, u32)> {
+    place_resources_ring(
+        grid,
+        cx,
+        cy,
+        theme,
+        road_dir,
+        occupied,
+        rng,
+        VILLAGE_RING_MIN as i32,
+        (VILLAGE_CLEAR_RADIUS - 1) as i32,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_resources_ring(
+    grid: &mut Grid,
+    cx: i32,
+    cy: i32,
+    theme: VillageTheme,
+    road_dir: Option<(f32, f32)>,
+    occupied: &mut Vec<(i32, i32)>,
+    rng: &mut Rng,
+    r_min: i32,
+    r_max: i32,
+) -> Vec<(u32, u32)> {
     let count = match theme {
         VillageTheme::Gold => 3 + (rng.next() % 3) as usize,
         VillageTheme::Wood => 4 + (rng.next() % 3) as usize,
@@ -278,9 +335,8 @@ fn place_resources(
         // tightly (only buildings keep an apron), so retries converge.
         let jitter = ((rng.next() % 1000) as f32 / 1000.0 - 0.5) * 2.8;
         let angle = base_angle + jitter;
-        let max_r = (VILLAGE_CLEAR_RADIUS - 1) as f32;
-        let radius = VILLAGE_RING_MIN as f32
-            + ((rng.next() % 1000) as f32 / 1000.0) * (max_r - VILLAGE_RING_MIN as f32);
+        let radius =
+            r_min as f32 + ((rng.next() % 1000) as f32 / 1000.0) * (r_max - r_min).max(1) as f32;
         let x = cx + (angle.cos() * radius).round() as i32;
         let y = cy + (angle.sin() * radius).round() as i32;
         if !grid.in_bounds(x, y) {

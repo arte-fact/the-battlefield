@@ -198,7 +198,7 @@ gates below.
   last-standing), FFA bleed, sudden death, elimination; weighted AI
   targeting (ai_w_leader + ai_w_neighbor on the base score);
   per-faction production; 1v2/1v3 probes end.
-- [ ] 4. Settlement tiers: SettlementSpec, tiered generation via the
+- [x] 4. Settlement tiers: SettlementSpec, tiered generation via the
   ring/band placer, city tier absorbs base generation, garrisons by
   tier; spawn/rally at largest controlled settlement.
 - [ ] 5. Network placement: capital max-separation, best-candidate

@@ -3,6 +3,54 @@ use crate::grid::{self, BORDER_SIZE, PLAYABLE_SIZE, TILE_SIZE};
 use crate::mapgen::MapLayout;
 use crate::unit::{Faction, Unit};
 
+/// Settlement size tier: drives capture radius, garrison size and
+/// (in mapgen) building counts. Cities are faction capitals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SettlementTier {
+    Hamlet,
+    Village,
+    Town,
+    City,
+}
+
+impl SettlementTier {
+    pub fn capture_radius(self) -> u32 {
+        match self {
+            SettlementTier::Hamlet => 5,
+            SettlementTier::Village => 6,
+            SettlementTier::Town => 7,
+            SettlementTier::City => 8,
+        }
+    }
+
+    pub fn garrison_cap(self) -> u8 {
+        match self {
+            SettlementTier::Hamlet => 2,
+            SettlementTier::Village => 4,
+            SettlementTier::Town => 6,
+            SettlementTier::City => 8,
+        }
+    }
+
+    pub fn house_count(self, roll: u32) -> usize {
+        match self {
+            SettlementTier::Hamlet => 2,
+            SettlementTier::Village => 3 + (roll % 2) as usize,
+            SettlementTier::Town => 5 + (roll % 2) as usize,
+            // City housing comes from the band generator at setup.
+            SettlementTier::City => 0,
+        }
+    }
+
+    pub fn production_count(self) -> usize {
+        match self {
+            SettlementTier::Hamlet | SettlementTier::Village => 1,
+            SettlementTier::Town => 2,
+            SettlementTier::City => 0, // band generator provides the full set
+        }
+    }
+}
+
 /// Capture zone states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZoneState {
@@ -24,6 +72,8 @@ pub struct CaptureZone {
     pub center_wy: f32,
     pub radius_world: f32,
     pub state: ZoneState,
+    /// Settlement size of this zone.
+    pub tier: SettlementTier,
     /// Who holds the zone (Controlled).
     pub owner: Option<Faction>,
     /// Who is currently converting it (draining the owner or building
@@ -50,6 +100,7 @@ impl CaptureZone {
             center_wy: wy,
             radius_world: radius as f32 * TILE_SIZE,
             state: ZoneState::Neutral,
+            tier: SettlementTier::Village,
             owner: None,
             capturing: None,
             progress: 0.0,
@@ -142,7 +193,7 @@ impl ZoneManager {
     }
 
     /// Create zones from BSP-generated layout.
-    pub fn create_from_layout(layout: &MapLayout, zone_radius: u32) -> Self {
+    pub fn create_from_layout(layout: &MapLayout, _zone_radius: u32) -> Self {
         // Zone names cycle through letters
         const NAMES: &[&str] = &[
             "Zone A", "Zone B", "Zone C", "Zone D", "Zone E", "Zone F", "Zone G", "Zone H",
@@ -153,7 +204,19 @@ impl ZoneManager {
             .iter()
             .enumerate()
             .map(|(i, &(gx, gy))| {
-                CaptureZone::new(i as u8, NAMES[i % NAMES.len()], gx, gy, zone_radius)
+                let tier = layout
+                    .settlements
+                    .get(i)
+                    .map(|sp| sp.tier)
+                    .unwrap_or(SettlementTier::Village);
+                let name = match tier {
+                    SettlementTier::City => "Capital",
+                    SettlementTier::Town => "Town",
+                    _ => NAMES[i % NAMES.len()],
+                };
+                let mut z = CaptureZone::new(i as u8, name, gx, gy, tier.capture_radius());
+                z.tier = tier;
+                z
             })
             .collect();
         Self {
@@ -594,7 +657,7 @@ mod tests {
                 vec![2, 3, 6],
                 vec![3, 4, 5],
             ],
-            villages: Vec::new(),
+            settlements: Vec::new(),
             extra_bases: Vec::new(),
         }
     }

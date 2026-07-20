@@ -1,7 +1,7 @@
 pub mod simplex;
 pub mod village;
 
-pub use village::{VillageSpec, VillageTheme};
+pub use village::{SettlementSpec, VillageTheme};
 
 use crate::grid::{Decoration, Grid, TileKind, BORDER_SIZE, PLAYABLE_SIZE};
 use simplex::Simplex;
@@ -34,7 +34,7 @@ pub struct MapLayout {
     /// Adjacency: connections[i] = list of zone indices connected to zone i.
     pub connections: Vec<Vec<u8>>,
     /// One village per zone, same order as `zone_centers`.
-    pub villages: Vec<VillageSpec>,
+    pub settlements: Vec<SettlementSpec>,
     /// Provisional capitals for third/fourth factions (Yellow, Purple),
     /// placed at the remaining map corners until the settlement network
     /// (roadmap items 4-5) replaces base handling entirely.
@@ -423,10 +423,11 @@ pub fn generate_battlefield_n(seed: u32, playable_size: u32, n_capitals: u32) ->
 
     // Order: B1, B2, C1, C2, C3, R1, R2 (indices 0-6)
     let template = [b1, b2, c1, c2, c3, r1, r2];
-    let zone_centers = nudge_zone_centers(&grid, &template, blue_base, red_base, w, h);
+    let mut zone_centers = nudge_zone_centers(&grid, &template, blue_base, red_base, w, h);
 
-    // Clear facing-agnostic base ground (band radius + 1 apron).
-    let base_clear = crate::building::BASE_BAND_RADIUS + 1;
+    // Clear facing-agnostic base ground: band radius + apron + the city
+    // resource ring just outside the building bands.
+    let base_clear = crate::building::BASE_BAND_RADIUS + 4;
     clear_circle(&mut grid, blue_base.0, blue_base.1, base_clear);
     clear_circle(&mut grid, red_base.0, red_base.1, base_clear);
     for &(bx, by) in &extra_bases {
@@ -446,7 +447,7 @@ pub fn generate_battlefield_n(seed: u32, playable_size: u32, n_capitals: u32) ->
     // B1↔C1, B1↔C2, B2↔C2, B2↔C3, C1↔R1, C2↔R1, C2↔R2, C3↔R2
     // Symmetric adjacency: if A↔B then both list each other.
     // Diamond shape: B1-B2 at top, C1-C2-C3 center, R1-R2 at bottom.
-    let connections = vec![
+    let mut connections = vec![
         vec![1, 2, 3],          // 0 (B1) ↔ B2, C1, C2
         vec![0, 3, 4],          // 1 (B2) ↔ B1, C2, C3
         vec![0, 3, 5],          // 2 (C1) ↔ B1, C2, R1
@@ -455,6 +456,34 @@ pub fn generate_battlefield_n(seed: u32, playable_size: u32, n_capitals: u32) ->
         vec![2, 3, 6],          // 5 (R1) ↔ C1, C2, R2
         vec![3, 4, 5],          // 6 (R2) ↔ C2, C3, R1
     ];
+
+    // Capitals are capture zones too: append them (City tier) after the
+    // seven field zones, each connected to its two nearest field zones.
+    let mut tiers = vec![crate::zone::SettlementTier::Village; 7];
+    tiers[3] = crate::zone::SettlementTier::Town; // C2, the crossroads
+    let mut capitals: Vec<(u32, u32)> = vec![blue_base, red_base];
+    capitals.extend(extra_bases.iter().copied());
+    for &(cx, cy) in &capitals {
+        let id = zone_centers.len() as u8;
+        let mut nearest: Vec<(u64, u8)> = zone_centers
+            .iter()
+            .take(7)
+            .enumerate()
+            .map(|(i, &(zx, zy))| {
+                let dx = zx as i64 - cx as i64;
+                let dy = zy as i64 - cy as i64;
+                ((dx * dx + dy * dy) as u64, i as u8)
+            })
+            .collect();
+        nearest.sort();
+        let adj: Vec<u8> = nearest.iter().take(2).map(|&(_, i)| i).collect();
+        for &n in &adj {
+            connections[n as usize].push(id);
+        }
+        connections.push(adj);
+        zone_centers.push((cx, cy));
+        tiers.push(crate::zone::SettlementTier::City);
+    }
 
     let mut layout = MapLayout {
         blue_base,
@@ -465,7 +494,7 @@ pub fn generate_battlefield_n(seed: u32, playable_size: u32, n_capitals: u32) ->
         blue_home_zones: vec![0, 1], // B1, B2
         red_home_zones: vec![5, 6],  // R1, R2
         connections,
-        villages: Vec::new(),
+        settlements: Vec::new(),
         extra_bases,
     };
 
@@ -473,7 +502,7 @@ pub fn generate_battlefield_n(seed: u32, playable_size: u32, n_capitals: u32) ->
     generate_roads(&mut grid, &layout);
 
     // Villages read painted roads for their entry-aware layout.
-    layout.villages = village::plan_villages(&mut grid, &layout.zone_centers, seed);
+    layout.settlements = village::plan_settlements(&mut grid, &layout.zone_centers, &tiers, seed);
 
     (grid, layout)
 }
@@ -973,8 +1002,9 @@ mod tests {
     fn zone_spacing_and_bounds_invariants() {
         for seed in [42, 77, 123, 777, 1234, 5555, 9999] {
             let (_, layout) = generate_battlefield(seed, PLAYABLE_SIZE);
-            let zones = &layout.zone_centers;
-            assert_eq!(zones.len(), 7);
+            // First 7 are field zones; capitals (city tier) follow.
+            let zones = &layout.zone_centers[..7];
+            assert_eq!(layout.zone_centers.len(), 9);
             let margin = VILLAGE_CLEAR_RADIUS + BORDER_SIZE;
             let min_zone = (2 * VILLAGE_CLEAR_RADIUS + 2).pow(2) as i64;
             let min_base = (VILLAGE_CLEAR_RADIUS + 14 + 2).pow(2) as i64;
@@ -1010,10 +1040,20 @@ mod tests {
     fn every_zone_gets_a_livable_village() {
         for seed in [42, 77, 123, 777, 1234, 5555, 9999] {
             let (grid, layout) = generate_battlefield(seed, PLAYABLE_SIZE);
-            assert_eq!(layout.villages.len(), layout.zone_centers.len());
+            assert_eq!(layout.settlements.len(), layout.zone_centers.len());
             let mut themes = std::collections::HashSet::new();
-            for v in &layout.villages {
+            for v in &layout.settlements {
                 themes.insert(format!("{:?}", v.theme));
+                if v.tier == crate::zone::SettlementTier::City {
+                    // City buildings come from the band generator at setup;
+                    // the spec still carries a worked resource ring.
+                    assert!(
+                        !v.resources.is_empty(),
+                        "seed {seed}: city {} has no resources",
+                        v.zone_idx
+                    );
+                    continue;
+                }
                 assert!(
                     v.houses.len() >= 2,
                     "seed {seed}: village {} has {} houses",
@@ -1368,11 +1408,7 @@ mod tests {
     #[test]
     fn layout_has_seven_zones() {
         let (_, layout) = generate_battlefield(42, PLAYABLE_SIZE);
-        assert_eq!(
-            layout.zone_centers.len(),
-            7,
-            "Should have exactly 7 zones (2 Blue-side + 3 center + 2 Red-side)"
-        );
+        assert_eq!(layout.zone_centers.len(), 9, "7 field zones + 2 capitals");
     }
 
     #[test]

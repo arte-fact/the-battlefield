@@ -108,7 +108,10 @@ impl Game {
             }
             // Walk toward rally point (base center)
             let faction = self.units[ai_idx].faction;
-            let (rx, ry) = self.gathers[faction.idx()];
+            let (rx, ry) = self
+                .rally_zone(faction)
+                .map(|z| (z.center_gx, z.center_gy))
+                .unwrap_or(self.gathers[faction.idx()]);
             let (rwx, rwy) = grid::grid_to_world(rx, ry);
             let dist = self.units[ai_idx].distance_to_pos(rwx, rwy);
             if dist > TILE_SIZE * 2.0 {
