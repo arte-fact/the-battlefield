@@ -263,6 +263,7 @@ impl Game {
             // Find defend target (Tier 1: score >= 200) and attack target (Tier 2: score >= 85)
             let mut defend_zone: Option<u8> = None;
             let mut attack_zone: Option<u8> = None;
+            let mut zone_scores: Vec<(u8, f32)> = Vec::new();
 
             for &(wx, wy, score) in objectives {
                 let zi =
@@ -270,16 +271,42 @@ impl Game {
                         (z.center_wx - wx).abs() < 1.0 && (z.center_wy - wy).abs() < 1.0
                     });
                 let Some(zi) = zi else { continue };
+                zone_scores.push((zi as u8, score));
 
                 if score >= 200.0 && defend_zone.is_none() {
                     defend_zone = Some(zi as u8);
                 } else if score >= 85.0 && attack_zone.is_none() {
                     attack_zone = Some(zi as u8);
                 }
-                if defend_zone.is_some() && attack_zone.is_some() {
-                    break;
+            }
+
+            // Target stickiness: capture completion collapses a zone's score
+            // and boundary flicker resurrects it seconds later, so a raw
+            // argmax teleports the whole army back and forth. Keep the
+            // current target while it still qualifies unless the challenger
+            // clearly beats it.
+            let score_of = |zi: Option<u8>| -> f32 {
+                zi.and_then(|z| zone_scores.iter().find(|(i, _)| *i == z))
+                    .map(|&(_, s)| s)
+                    .unwrap_or(0.0)
+            };
+            let (prev_defend, prev_attack) = self.planner_targets[fi];
+            if prev_defend != defend_zone {
+                let prev_score = score_of(prev_defend);
+                if prev_score >= 200.0 && score_of(defend_zone) < prev_score * 1.3 {
+                    defend_zone = prev_defend;
                 }
             }
+            if prev_attack != attack_zone {
+                let prev_score = score_of(prev_attack);
+                if prev_score >= 85.0
+                    && prev_attack != defend_zone
+                    && score_of(attack_zone) < prev_score * 1.3
+                {
+                    attack_zone = prev_attack;
+                }
+            }
+            self.planner_targets[fi] = (defend_zone, attack_zone);
 
             // Collect available AI units for this faction, sorted by index.
             // Skip rally_hold units (still assembling) and zone-locked units (mid-travel).

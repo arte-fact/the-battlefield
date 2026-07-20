@@ -82,6 +82,10 @@ pub struct ZoneManager {
     pub red_home_zones: Vec<u8>,
     /// Adjacency list: connections[i] = zone indices connected to zone i.
     pub connections: Vec<Vec<u8>>,
+    /// Zone each unit currently counts for (membership hysteresis: a unit
+    /// keeps counting until it moves half a tile beyond the radius, so a
+    /// soldier dancing on the rim cannot strobe the zone state).
+    membership: std::collections::HashMap<u32, u8>,
 }
 
 impl ZoneManager {
@@ -99,6 +103,7 @@ impl ZoneManager {
             blue_home_zones: Vec::new(),
             red_home_zones: Vec::new(),
             connections: Vec::new(),
+            membership: std::collections::HashMap::new(),
         }
     }
 
@@ -127,6 +132,7 @@ impl ZoneManager {
             blue_home_zones: layout.blue_home_zones.clone(),
             red_home_zones: layout.red_home_zones.clone(),
             connections: layout.connections.clone(),
+            membership: std::collections::HashMap::new(),
         }
     }
 
@@ -136,16 +142,38 @@ impl ZoneManager {
             zone.blue_count = 0;
             zone.red_count = 0;
         }
+        const EXIT_MARGIN: f32 = crate::grid::TILE_SIZE * 0.5;
         for unit in units {
             if !unit.alive {
+                self.membership.remove(&unit.id);
                 continue;
             }
-            for zone in &mut self.zones {
-                if zone.contains_world(unit.x, unit.y) {
+            // Sticky membership: keep counting for the current zone until
+            // clearly outside it, then re-evaluate.
+            let sticky = self.membership.get(&unit.id).copied().and_then(|zi| {
+                let z = self.zones.get(zi as usize)?;
+                let dx = unit.x - z.center_wx;
+                let dy = unit.y - z.center_wy;
+                let keep = z.radius as f32 * crate::grid::TILE_SIZE + EXIT_MARGIN;
+                (dx * dx + dy * dy <= keep * keep).then_some(zi)
+            });
+            let zone_idx = sticky.or_else(|| {
+                self.zones
+                    .iter()
+                    .position(|z| z.contains_world(unit.x, unit.y))
+                    .map(|i| i as u8)
+            });
+            match zone_idx {
+                Some(zi) => {
+                    self.membership.insert(unit.id, zi);
+                    let zone = &mut self.zones[zi as usize];
                     match unit.faction {
                         Faction::Blue => zone.blue_count += 1,
                         Faction::Red => zone.red_count += 1,
                     }
+                }
+                None => {
+                    self.membership.remove(&unit.id);
                 }
             }
         }

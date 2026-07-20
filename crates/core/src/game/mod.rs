@@ -141,6 +141,9 @@ pub struct Game {
     red_flow: FactionFlowState,
     /// Macro objectives per faction: [(wx, wy, score); 3] per faction [Blue, Red].
     pub macro_objectives: [Vec<(f32, f32, f32)>; 2],
+    /// Sticky planner picks per faction: (defend, attack). A new candidate
+    /// must clearly beat the current target before the army retargets.
+    pub planner_targets: [(Option<u8>, Option<u8>); 2],
     /// Timer for periodic macro objective recomputation.
     objective_timer: f32,
     /// Timer for periodic auto-recruitment passes.
@@ -216,6 +219,7 @@ impl Game {
             blue_flow: FactionFlowState::new(),
             red_flow: FactionFlowState::new(),
             macro_objectives: [Vec::new(), Vec::new()],
+            planner_targets: [(None, None), (None, None)],
             objective_timer: 0.0,
             recruit_timer: 0.0,
             flow_field_turn: false,
