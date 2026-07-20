@@ -209,6 +209,8 @@ pub(super) fn draw_hud(
                 ZoneState::Controlled(Faction::Blue) => (60, 130, 255, 255),
                 ZoneState::Capturing(Faction::Red) => (255, 60, 60, 180),
                 ZoneState::Controlled(Faction::Red) => (255, 60, 60, 255),
+                ZoneState::Capturing(Faction::Villager)
+                | ZoneState::Controlled(Faction::Villager) => (150, 150, 150, 180),
             };
 
             // Background circle
@@ -368,6 +370,7 @@ pub(super) fn draw_minimap(canvas: &mut Canvas<Window>, game: &Game, assets: &As
         let color = match unit.faction {
             Faction::Blue => Color::RGB(74, 158, 255),
             Faction::Red => Color::RGB(255, 74, 74),
+            Faction::Villager => Color::RGB(120, 120, 120),
         };
         canvas.set_draw_color(color);
         let _ = canvas.fill_rect(Rect::new(ux - ur as i32, uy - ur as i32, ur * 2, ur * 2));

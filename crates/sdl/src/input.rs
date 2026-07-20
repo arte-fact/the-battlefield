@@ -12,6 +12,8 @@ use std::collections::HashSet;
 
 /// Tracks keyboard, mouse, gamepad, and touch state; produces PlayerInput each frame.
 pub struct InputState {
+    defend_held_secs: f32,
+    defend_hold_fired: bool,
     // Keyboard
     pressed_this_frame: HashSet<Scancode>,
     pub scroll_delta: f32,
@@ -48,6 +50,8 @@ impl Default for InputState {
 impl InputState {
     pub fn new() -> Self {
         Self {
+            defend_held_secs: 0.0,
+            defend_hold_fired: false,
             pressed_this_frame: HashSet::new(),
             scroll_delta: 0.0,
             aim_dir: 0.0,
@@ -190,7 +194,11 @@ impl InputState {
     // ---- Build player input ----
 
     /// Build a PlayerInput from the current keyboard, gamepad, and touch state.
-    pub fn build_player_input(&mut self, keyboard: &sdl2::keyboard::KeyboardState) -> PlayerInput {
+    pub fn build_player_input(
+        &mut self,
+        keyboard: &sdl2::keyboard::KeyboardState,
+        dt: f32,
+    ) -> PlayerInput {
         // Keyboard movement
         let kb_left = keyboard.is_scancode_pressed(Scancode::A)
             || keyboard.is_scancode_pressed(Scancode::Left);
@@ -247,15 +255,33 @@ impl InputState {
         let gp_attack = self.gamepad_held(Button::A) || self.gamepad_pressed(Button::A);
         let touch_attack = self.touch.attack.pressed;
 
+        // Defend is tap-vs-hold: a short press orders the formation, a
+        // long press stations the retinue at the nearest zone.
+        let defend_down = keyboard.is_scancode_pressed(Scancode::K) || self.gamepad_held(Button::Y);
+        let mut defend_order = None;
+        if defend_down {
+            self.defend_held_secs += dt;
+            if self.defend_held_secs >= battlefield_core::touch_input::HOLD_ZONE_HOLD_SECS
+                && !self.defend_hold_fired
+            {
+                self.defend_hold_fired = true;
+                defend_order = Some(OrderRequest::HoldZone);
+            }
+        } else {
+            if self.defend_held_secs > 0.0 && !self.defend_hold_fired {
+                defend_order = Some(OrderRequest::Defend);
+            }
+            self.defend_held_secs = 0.0;
+            self.defend_hold_fired = false;
+        }
+
         let order = self.touch.take_order().or(
             if self.pressed_this_frame(Scancode::J) || self.gamepad_pressed(Button::X) {
                 Some(OrderRequest::Charge)
-            } else if self.pressed_this_frame(Scancode::K) || self.gamepad_pressed(Button::Y) {
-                Some(OrderRequest::Defend)
             } else if self.pressed_this_frame(Scancode::L) || self.gamepad_pressed(Button::B) {
                 Some(OrderRequest::Dismiss)
             } else {
-                None
+                defend_order
             },
         );
 

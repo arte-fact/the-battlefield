@@ -170,6 +170,8 @@ impl ZoneManager {
                     match unit.faction {
                         Faction::Blue => zone.blue_count += 1,
                         Faction::Red => zone.red_count += 1,
+                        // Militia contests with swords, not with the circle.
+                        Faction::Villager => {}
                     }
                 }
                 None => {
@@ -328,10 +330,12 @@ impl ZoneManager {
                 let progress_for_us = match faction {
                     Faction::Blue => z.progress,
                     Faction::Red => -z.progress,
+                    Faction::Villager => 0.0,
                 };
                 let enemy_count = match faction {
                     Faction::Blue => z.red_count,
                     Faction::Red => z.blue_count,
+                    Faction::Villager => 0,
                 };
 
                 // Distance tiebreaker (0..1, closer = lower)

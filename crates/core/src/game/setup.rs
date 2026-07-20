@@ -101,11 +101,22 @@ impl Game {
                     return None;
                 }
                 let in_fov = self.is_tile_in_fov(zone.center_gx, zone.center_gy);
-                Some((before, after, in_fov, zone.center_wx, zone.center_wy))
+                Some((
+                    i as u8,
+                    before,
+                    after,
+                    in_fov,
+                    zone.center_wx,
+                    zone.center_wy,
+                ))
             })
             .collect();
 
-        for (before, after, in_fov, zx, zy) in zone_changes {
+        for (zi, before, after, in_fov, zx, zy) in zone_changes {
+            // The village serves its new lord: surviving garrison converts.
+            if let ZoneState::Controlled(f) = after {
+                self.convert_garrison(zi, f);
+            }
             if before != ZoneState::Controlled(Faction::Blue)
                 && after == ZoneState::Controlled(Faction::Blue)
             {
@@ -255,7 +266,11 @@ impl Game {
                 let alive_count = self
                     .units
                     .iter()
-                    .filter(|u| u.alive && u.faction == faction)
+                    .filter(|u| {
+                        u.alive
+                            && u.faction == faction
+                            && !matches!(u.order, Some(crate::unit::OrderKind::DefendZone { .. }))
+                    })
                     .count();
                 if alive_count < self.config.max_units_per_faction {
                     let controlled: usize = self
@@ -276,38 +291,11 @@ impl Game {
                         Self::WAVE.len() * 2
                     };
                     let wave_size = slots.min(max_wave).min(self.manpower[fi] as usize);
-                    let mut queue: Vec<(UnitKind, Option<u8>)> = self
+                    self.spawn_queue[fi] = self
                         .build_wave(faction, wave_size)
                         .into_iter()
                         .map(|k| (k, None))
                         .collect();
-                    // Controlled villages with banked stock reinforce at the
-                    // front: their building's kind joins the wave.
-                    let mut extra_slots = slots.saturating_sub(queue.len());
-                    for zone in &self.zone_manager.zones {
-                        if zone.state != crate::zone::ZoneState::Controlled(faction) {
-                            continue;
-                        }
-                        let stock = self
-                            .village_stock
-                            .get(zone.id as usize)
-                            .copied()
-                            .unwrap_or(0) as usize;
-                        let bonus = self.config.village_wave_bonus.min(stock).min(extra_slots);
-                        let kinds: Vec<UnitKind> = self
-                            .buildings
-                            .iter()
-                            .filter(|b| b.zone_id == Some(zone.id))
-                            .filter_map(|b| b.produces)
-                            .collect();
-                        for i in 0..bonus {
-                            if let Some(&kind) = kinds.get(i % kinds.len().max(1)) {
-                                queue.push((kind, Some(zone.id)));
-                                extra_slots -= 1;
-                            }
-                        }
-                    }
-                    self.spawn_queue[fi] = queue;
                     self.spawn_timer[fi] = 0.0;
                     // Skip rally when dominating — reinforcements march out immediately
                     self.skip_rally[fi] = zone_count > 0 && controlled == zone_count;
@@ -335,30 +323,14 @@ impl Game {
                     continue;
                 }
 
-                let (kind, origin_zone) = self.spawn_queue[fi].remove(0);
-                // Village spawns need the zone still held and stock banked;
-                // a scattered or lost village silently stalls instead.
-                if let Some(zid) = origin_zone {
-                    let held =
-                        self.zone_manager.zones.get(zid as usize).is_some_and(|z| {
-                            z.state == crate::zone::ZoneState::Controlled(faction)
-                        });
-                    let stock = self.village_stock.get(zid as usize).copied().unwrap_or(0);
-                    if !held || stock == 0 {
-                        continue;
-                    }
-                    self.village_stock[zid as usize] -= 1;
-                }
+                let (kind, _) = self.spawn_queue[fi].remove(0);
                 self.manpower[fi] -= 1.0;
                 // Spawn at the production building that trains this unit kind
                 let (sx, sy) = self
                     .buildings
                     .iter()
-                    .find(|b| match origin_zone {
-                        Some(zid) => b.zone_id == Some(zid) && b.produces == Some(kind),
-                        None => {
-                            b.zone_id.is_none() && b.faction == faction && b.produces == Some(kind)
-                        }
+                    .find(|b| {
+                        b.zone_id.is_none() && b.faction == faction && b.produces == Some(kind)
                     })
                     .map(|b| (b.grid_x, b.grid_y))
                     .unwrap_or(match faction {
@@ -367,9 +339,8 @@ impl Game {
                     });
                 let id = self.spawn_unit(kind, faction, sx, sy, false);
                 // Rally hold — unit waits at base until wave is complete.
-                // Skip when dominating (all zones held); village reinforcements
-                // are already at the front and march immediately.
-                if !self.skip_rally[fi] && origin_zone.is_none() {
+                // Skip when dominating (all zones held) — just reinforce.
+                if !self.skip_rally[fi] {
                     if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
                         u.rally_hold = true;
                     }
@@ -383,6 +354,87 @@ impl Game {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Village garrisons: each village converts banked peon stock into a
+    /// small standing defense — Villager-colored while neutral, the
+    /// owner's color once captured. Garrison units carry the DefendZone
+    /// stance and never join the field army.
+    pub fn tick_village_garrisons(&mut self, dt: f32) {
+        for zi in 0..self.zone_manager.zones.len() {
+            let timer = &mut self.garrison_timer[zi];
+            *timer += dt;
+            if *timer < self.config.garrison_spawn_interval {
+                continue;
+            }
+            *timer = 0.0;
+
+            let zone = &self.zone_manager.zones[zi];
+            let owner = match zone.state {
+                crate::zone::ZoneState::Controlled(f) => Some(f),
+                crate::zone::ZoneState::Neutral => None,
+                // Mid-fight zones don't produce.
+                _ => continue,
+            };
+            let faction = owner.unwrap_or(Faction::Villager);
+
+            let alive = self
+                .units
+                .iter()
+                .filter(|u| {
+                    u.alive
+                        && u.faction == faction
+                        && u.order == Some(crate::unit::OrderKind::DefendZone { zone: zi as u8 })
+                })
+                .count();
+            if alive >= self.config.garrison_cap as usize {
+                continue;
+            }
+            let stock = self.village_stock.get(zi).copied().unwrap_or(0);
+            if stock == 0 {
+                continue;
+            }
+
+            let Some((bx, by, kind)) = self
+                .buildings
+                .iter()
+                .filter(|b| b.zone_id == Some(zi as u8))
+                .filter_map(|b| b.produces.map(|k| (b.grid_x, b.grid_y, k)))
+                .nth(alive % 2)
+                .or_else(|| {
+                    self.buildings
+                        .iter()
+                        .filter(|b| b.zone_id == Some(zi as u8))
+                        .find_map(|b| b.produces.map(|k| (b.grid_x, b.grid_y, k)))
+                })
+            else {
+                continue;
+            };
+
+            self.village_stock[zi] -= 1;
+            let id = self.spawn_unit(kind, faction, bx, by, false);
+            if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
+                u.order = Some(crate::unit::OrderKind::DefendZone { zone: zi as u8 });
+                u.order_timer = 0.0;
+            }
+        }
+    }
+
+    /// Surviving neutral militia pledges to the captor when its village
+    /// falls. Army garrisons (stationed or village-produced in a faction
+    /// color) never defect.
+    pub(super) fn convert_garrison(&mut self, zone_idx: u8, new_owner: Faction) {
+        for u in &mut self.units {
+            if u.alive
+                && u.faction == Faction::Villager
+                && u.order == Some(crate::unit::OrderKind::DefendZone { zone: zone_idx })
+                && u.faction != new_owner
+            {
+                u.faction = new_owner;
+                u.combat_target = None;
+                u.hit_flash = 0.0;
             }
         }
     }
@@ -408,6 +460,7 @@ impl Game {
         self.zone_manager = ZoneManager::create_from_layout(&layout, self.config.zone_radius);
         // Villages start with a small banked stock so early captures pay off.
         self.village_stock = vec![2; self.zone_manager.zones.len()];
+        self.garrison_timer = vec![0.0; self.zone_manager.zones.len()];
 
         // Store gather points for unit rallying
         self.blue_gather = layout.blue_gather;
@@ -700,62 +753,179 @@ mod tests {
     }
 
     #[test]
-    fn village_production_spawns_at_village_and_consumes_stock() {
+    fn neutral_village_raises_villager_garrison() {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
-        // Hand zone 3's village to Blue with full stock.
-        game.zone_manager.zones[3].state = crate::zone::ZoneState::Controlled(Faction::Blue);
-        game.village_stock[3] = 5;
-        let village_buildings: Vec<(u32, u32)> = game
-            .buildings
-            .iter()
-            .filter(|b| b.zone_id == Some(3) && b.produces.is_some())
-            .map(|b| (b.grid_x, b.grid_y))
-            .collect();
-        assert!(!village_buildings.is_empty());
-
-        for _ in 0..600 {
-            game.tick_production(0.1);
+        game.village_stock = vec![5; game.zone_manager.zones.len()];
+        for _ in 0..(30 * 10) {
+            game.tick_village_garrisons(0.1);
         }
-
+        let militia: Vec<_> = game
+            .units
+            .iter()
+            .filter(|u| u.alive && u.faction == Faction::Villager)
+            .collect();
         assert!(
-            game.village_stock[3] < 5,
-            "village production must consume stock, still at {}",
-            game.village_stock[3]
+            !militia.is_empty(),
+            "neutral villages must raise Villager garrisons"
         );
-        // Some Blue unit spawned within a few tiles of the village building.
-        let near_village = game.units.iter().any(|u| {
-            let (gx, gy) = u.grid_cell();
-            u.faction == Faction::Blue
-                && !u.is_player
-                && village_buildings
-                    .iter()
-                    .any(|&(bx, by)| gx.abs_diff(bx) <= 4 && gy.abs_diff(by) <= 4)
-        });
+        for u in &militia {
+            assert!(
+                matches!(u.order, Some(crate::unit::OrderKind::DefendZone { .. })),
+                "garrison units must carry the DefendZone stance"
+            );
+        }
+        // Cap respected per zone
+        for zi in 0..game.zone_manager.zones.len() {
+            let count = game
+                .units
+                .iter()
+                .filter(|u| {
+                    u.alive
+                        && u.order == Some(crate::unit::OrderKind::DefendZone { zone: zi as u8 })
+                })
+                .count();
+            assert!(
+                count <= game.config.garrison_cap as usize,
+                "zone {zi} garrison over cap: {count}"
+            );
+        }
         assert!(
-            near_village,
-            "village reinforcements must spawn at the village"
+            game.village_stock.iter().any(|&s| s < 5),
+            "garrison production must consume stock"
         );
     }
 
     #[test]
-    fn village_production_stalls_without_stock() {
+    fn captured_village_garrisons_for_owner() {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
         game.zone_manager.zones[3].state = crate::zone::ZoneState::Controlled(Faction::Blue);
-        for st in game.village_stock.iter_mut() {
-            *st = 0;
+        game.village_stock = vec![0; game.zone_manager.zones.len()];
+        game.village_stock[3] = 5;
+        for _ in 0..(30 * 10) {
+            game.tick_village_garrisons(0.1);
         }
-        let manpower_before = game.manpower[0];
-        for _ in 0..600 {
-            game.tick_production(0.1);
+        let blue_garrison = game
+            .units
+            .iter()
+            .filter(|u| {
+                u.alive
+                    && u.faction == Faction::Blue
+                    && !u.is_player
+                    && u.order == Some(crate::unit::OrderKind::DefendZone { zone: 3 })
+            })
+            .count();
+        assert!(
+            blue_garrison > 0,
+            "captured village must garrison in the owner's color"
+        );
+    }
+
+    #[test]
+    fn garrison_converts_on_capture() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.retain(|u| u.is_player);
+        let (zx, zy) = (
+            game.zone_manager.zones[3].center_gx,
+            game.zone_manager.zones[3].center_gy,
+        );
+        let id = game.spawn_unit(UnitKind::Warrior, Faction::Villager, zx, zy, false);
+        if let Some(u) = game.units.iter_mut().find(|u| u.id == id) {
+            u.order = Some(crate::unit::OrderKind::DefendZone { zone: 3 });
         }
-        // Base wave still spawns; but no unit consumed village stock and
-        // stock stayed at zero (no free reinforcements).
-        assert!(game.village_stock.iter().all(|&s| s == 0));
-        assert!(game.manpower[0] < manpower_before, "base wave still flows");
+        game.convert_garrison(3, Faction::Red);
+        let u = game.units.iter().find(|u| u.id == id).unwrap();
+        assert_eq!(u.faction, Faction::Red, "survivors serve the new lord");
+        assert_eq!(
+            u.order,
+            Some(crate::unit::OrderKind::DefendZone { zone: 3 }),
+            "converted garrison keeps defending its village"
+        );
+    }
+
+    #[test]
+    fn militia_fights_intruders_and_holds_home() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.retain(|u| u.is_player);
+        game.manpower = [0.0, 0.0];
+        let z = &game.zone_manager.zones[3];
+        let (zx, zy) = (z.center_gx, z.center_gy);
+        let mid = game.spawn_unit(UnitKind::Warrior, Faction::Villager, zx + 2, zy, false);
+        if let Some(u) = game.units.iter_mut().find(|u| u.id == mid) {
+            u.order = Some(crate::unit::OrderKind::DefendZone { zone: 3 });
+        }
+        let rid = game.spawn_unit(UnitKind::Warrior, Faction::Red, zx + 4, zy, false);
+        let input = crate::player_input::PlayerInput::default();
+        let mut red_hurt = false;
+        for _ in 0..(60 * 30) {
+            game.tick(&input, 1.0 / 60.0);
+            game.update(1.0 / 60.0);
+            if let Some(r) = game.units.iter().find(|u| u.id == rid) {
+                if r.hp < r.stats.max_hp {
+                    red_hurt = true;
+                    break;
+                }
+            } else {
+                red_hurt = true; // dead counts
+                break;
+            }
+        }
+        assert!(red_hurt, "militia must engage intruders in its zone");
+    }
+
+    #[test]
+    fn hold_zone_order_stations_retinue() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        let (px, py) = {
+            let p = game.player_unit().unwrap();
+            (p.x, p.y)
+        };
+        // Give the player a follower next to them
+        let fid = game.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Blue,
+            (px / crate::grid::TILE_SIZE) as u32 + 1,
+            (py / crate::grid::TILE_SIZE) as u32,
+            false,
+        );
+        if let Some(u) = game.units.iter_mut().find(|u| u.id == fid) {
+            u.order = Some(crate::unit::OrderKind::Follow);
+        }
+        let outcome = game.issue_order(crate::unit::OrderRequest::HoldZone);
+        assert!(matches!(outcome, crate::unit::OrderOutcome::Issued(1)));
+        let u = game.units.iter().find(|u| u.id == fid).unwrap();
+        assert!(
+            matches!(u.order, Some(crate::unit::OrderKind::DefendZone { .. })),
+            "stationed unit must carry the DefendZone stance"
+        );
+        assert!(
+            u.re_recruit_cooldown > 0.0,
+            "stationed units leave the retinue with a re-recruit cooldown"
+        );
+    }
+
+    #[test]
+    fn garrison_stalls_without_stock() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.retain(|u| u.is_player);
+        game.village_stock = vec![0; game.zone_manager.zones.len()];
+        for _ in 0..(30 * 10) {
+            game.tick_village_garrisons(0.1);
+        }
+        assert!(
+            !game
+                .units
+                .iter()
+                .any(|u| u.alive && u.faction == Faction::Villager),
+            "no stock, no militia"
+        );
     }
 
     #[test]

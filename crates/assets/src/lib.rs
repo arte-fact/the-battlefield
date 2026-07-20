@@ -260,6 +260,35 @@ pub fn get(path: &str) -> Option<&'static [u8]> {
         "assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Human Avatars/Avatars_04.png" =>
             Some(embed!("assets/Tiny Swords (Free Pack)/UI Elements/UI Elements/Human Avatars/Avatars_04.png")),
 
+        // ── Black (villager) unit sheets ────────────────────────────
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Warrior/Warrior_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Warrior/Warrior_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Warrior/Warrior_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Warrior/Warrior_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Warrior/Warrior_Attack1.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Warrior/Warrior_Attack1.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Warrior/Warrior_Attack2.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Warrior/Warrior_Attack2.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Archer/Archer_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Archer/Archer_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Archer/Archer_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Archer/Archer_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Archer/Archer_Shoot.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Archer/Archer_Shoot.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Lancer/Lancer_Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Lancer/Lancer_Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Lancer/Lancer_Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Lancer/Lancer_Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Lancer/Lancer_Right_Attack.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Lancer/Lancer_Right_Attack.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Monk/Idle.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Monk/Idle.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Monk/Run.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Monk/Run.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Monk/Heal.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Monk/Heal.png")),
+        "assets/Tiny Swords (Free Pack)/Units/Black Units/Monk/Heal_Effect.png" =>
+            Some(embed!("assets/Tiny Swords (Free Pack)/Units/Black Units/Monk/Heal_Effect.png")),
         // ── Pawn job/neutral sheets ─────────────────────────────────
         "assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Axe.png" =>
             Some(embed!("assets/Tiny Swords (Free Pack)/Units/Blue Units/Pawn/Pawn_Run Axe.png")),

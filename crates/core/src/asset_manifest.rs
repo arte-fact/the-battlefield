@@ -88,7 +88,7 @@ pub fn building_tex_index(kind: BuildingKind, house_variant: u8, faction: Factio
     };
     let faction_index = match faction {
         Faction::Blue => 0,
-        Faction::Red => 1,
+        Faction::Red | Faction::Villager => 1, // buildings are never villager-owned
     };
     kind_index * 2 + faction_index
 }

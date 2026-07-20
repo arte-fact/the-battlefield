@@ -81,7 +81,7 @@ impl Game {
     }
 
     /// Separation-blended steering toward a world position (collision-checked).
-    fn steer_toward(&mut self, ai_idx: usize, wx: f32, wy: f32, dt: f32) {
+    pub(super) fn steer_toward(&mut self, ai_idx: usize, wx: f32, wy: f32, dt: f32) {
         let ux = self.units[ai_idx].x;
         let uy = self.units[ai_idx].y;
         let ddx = wx - ux;
@@ -127,9 +127,13 @@ impl Game {
     /// Used for the zone-stop check and A* fallback.
     fn nearest_objective_pos(&self, ai_idx: usize) -> (f32, f32) {
         let faction = self.units[ai_idx].faction;
+        if faction == Faction::Villager {
+            // Militia has no strategic objectives; it stays where it is.
+            return (self.units[ai_idx].x, self.units[ai_idx].y);
+        }
         let fi = match faction {
             Faction::Blue => 0,
-            Faction::Red => 1,
+            Faction::Red | Faction::Villager => 1,
         };
         let objectives = &self.macro_objectives[fi];
         if objectives.is_empty() {
@@ -254,6 +258,7 @@ impl Game {
             let fi = match faction {
                 Faction::Blue => 0,
                 Faction::Red => 1,
+                Faction::Villager => unreachable!(),
             };
             let objectives = &self.macro_objectives[fi];
             if objectives.is_empty() {

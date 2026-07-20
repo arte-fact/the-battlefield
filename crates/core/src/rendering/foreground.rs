@@ -278,7 +278,7 @@ fn draw_building(
             let color_idx = match owner {
                 Some(Faction::Blue) => 1,
                 Some(Faction::Red) => 2,
-                None => 0,
+                Some(Faction::Villager) | None => 0,
             };
             SpriteKey::Tower(color_idx)
         } else {

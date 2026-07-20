@@ -371,7 +371,7 @@ impl Assets {
             UnitAnim::Attack2,
         ];
 
-        for &faction in &[Faction::Blue, Faction::Red] {
+        for &faction in &[Faction::Blue, Faction::Red, Faction::Villager] {
             let folder = faction.asset_folder();
             for &kind in &[
                 UnitKind::Warrior,

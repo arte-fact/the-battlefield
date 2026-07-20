@@ -68,6 +68,9 @@ pub struct GameConfig {
     pub defend_spacing_tiles: f32,
     pub defend_leash_melee_tiles: f32,
     pub defend_leash_ranged_tiles: f32,
+    /// Distance beyond the zone radius a garrison pursues intruders.
+    #[serde(default = "default_zone_defend_leash_tiles")]
+    pub zone_defend_leash_tiles: f32,
 
     // ── Combat Balancing ─────────────────────────────────────────────
     pub warrior_hp: i32,
@@ -104,9 +107,12 @@ pub struct GameConfig {
     /// Max peon deliveries a village can bank.
     #[serde(default = "default_village_stock_cap")]
     pub village_stock_cap: u8,
-    /// Units a controlled village adds to its owner's wave (stock permitting).
-    #[serde(default = "default_village_wave_bonus")]
-    pub village_wave_bonus: usize,
+    /// Standing garrison size a village maintains (per village).
+    #[serde(default = "default_garrison_cap")]
+    pub garrison_cap: u8,
+    /// Seconds between garrison spawn attempts per village.
+    #[serde(default = "default_garrison_spawn_interval")]
+    pub garrison_spawn_interval: f32,
 
     // ── Retinue / Recruitment ───────────────────────────────────────
     /// Seconds between auto-recruitment passes.
@@ -138,6 +144,10 @@ fn default_chase_block_secs() -> f32 {
     5.0
 }
 
+fn default_zone_defend_leash_tiles() -> f32 {
+    4.0
+}
+
 fn default_playable_size() -> u32 {
     crate::grid::PLAYABLE_SIZE
 }
@@ -146,8 +156,12 @@ fn default_village_stock_cap() -> u8 {
     5
 }
 
-fn default_village_wave_bonus() -> usize {
-    2
+fn default_garrison_cap() -> u8 {
+    4
+}
+
+fn default_garrison_spawn_interval() -> f32 {
+    6.0
 }
 
 fn default_recruit_interval() -> f32 {
@@ -243,6 +257,7 @@ impl Default for GameConfig {
             defend_spacing_tiles: 1.0,
             defend_leash_melee_tiles: 3.0,
             defend_leash_ranged_tiles: 8.0,
+            zone_defend_leash_tiles: default_zone_defend_leash_tiles(),
 
             // Combat Balancing
             warrior_hp: 10,
@@ -275,7 +290,8 @@ impl Default for GameConfig {
             victory_hold_time: 60.0,
             playable_size: default_playable_size(),
             village_stock_cap: default_village_stock_cap(),
-            village_wave_bonus: default_village_wave_bonus(),
+            garrison_cap: default_garrison_cap(),
+            garrison_spawn_interval: default_garrison_spawn_interval(),
 
             // Retinue / Recruitment
             recruit_interval: default_recruit_interval(),

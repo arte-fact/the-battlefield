@@ -141,6 +141,9 @@ impl Game {
                 } => {
                     self.ai_order_defend_tick(ai_idx, anchor_x, anchor_y, facing_dir, dt);
                 }
+                OrderKind::DefendZone { zone } => {
+                    self.ai_order_defend_zone_tick(ai_idx, zone, dt);
+                }
             }
             return;
         }
@@ -244,7 +247,7 @@ impl Game {
 
     /// Real-time melee AI: attack if in range, else close distance to enemy.
     /// If no enemy visible, follow flow field toward zone objective.
-    fn ai_melee_tick(&mut self, ai_idx: usize, dt: f32) {
+    pub(super) fn ai_melee_tick(&mut self, ai_idx: usize, dt: f32) {
         let enemy = match self.resolve_combat_target(ai_idx) {
             Some(e) => e,
             None => {
@@ -264,7 +267,7 @@ impl Game {
 
     /// Real-time archer AI: attack if in range, kite if too close, approach if too far.
     /// If no enemy visible, follow flow field toward zone objective.
-    fn ai_archer_tick(&mut self, ai_idx: usize, dt: f32) {
+    pub(super) fn ai_archer_tick(&mut self, ai_idx: usize, dt: f32) {
         let ai_id = self.units[ai_idx].id;
         let range_world = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
 
@@ -307,7 +310,7 @@ impl Game {
 
     /// Real-time lancer AI: attack at reach distance, maintain standoff.
     /// If no enemy visible, follow flow field toward zone objective.
-    fn ai_lancer_tick(&mut self, ai_idx: usize, dt: f32) {
+    pub(super) fn ai_lancer_tick(&mut self, ai_idx: usize, dt: f32) {
         let enemy = match self.resolve_combat_target(ai_idx) {
             Some(e) => e,
             None => {
@@ -365,7 +368,7 @@ impl Game {
 
     /// Real-time monk AI: heal nearby wounded ally if can_act, flee from enemies,
     /// approach wounded allies to heal them, or follow friendlies at standoff distance.
-    fn ai_monk_tick(&mut self, ai_idx: usize, dt: f32) {
+    pub(super) fn ai_monk_tick(&mut self, ai_idx: usize, dt: f32) {
         let faction = self.units[ai_idx].faction;
         let ax = self.units[ai_idx].x;
         let ay = self.units[ai_idx].y;

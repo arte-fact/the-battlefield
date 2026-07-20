@@ -113,7 +113,7 @@ pub fn pawn_color_index(pawn: &crate::pawn::Pawn, zones: &crate::zone::ZoneManag
     match faction {
         Some(Faction::Blue) => 0,
         Some(Faction::Red) => 1,
-        None => 2,
+        Some(Faction::Villager) | None => 2,
     }
 }
 

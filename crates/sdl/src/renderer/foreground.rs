@@ -381,6 +381,7 @@ fn draw_unit(
         let color = match unit.faction {
             Faction::Blue => Color::RGB(60, 120, 255),
             Faction::Red => Color::RGB(255, 60, 60),
+            Faction::Villager => Color::RGB(70, 70, 70),
         };
         canvas.set_draw_color(color);
         let size = (ts * 0.6) as u32;
@@ -527,7 +528,7 @@ fn draw_base_building(
             let color_idx = match owner {
                 Some(Faction::Blue) => 1,
                 Some(Faction::Red) => 2,
-                None => 0,
+                Some(Faction::Villager) | None => 0,
             };
             if color_idx >= assets.tower_textures.len() {
                 return;
@@ -759,6 +760,7 @@ pub(super) fn draw_unit_overlays(
                 OrderKind::Defend { .. } => {
                     (unit.order_timer / game.config.order_defend_duration).clamp(0.0, 1.0)
                 }
+                OrderKind::DefendZone { .. } => 1.0,
             };
 
             let ob_h = (3.0 * zoom).max(1.0) as i32;
@@ -773,6 +775,7 @@ pub(super) fn draw_unit_overlays(
                 OrderKind::Follow => Color::RGBA(64, 140, 255, 230),
                 OrderKind::Charge { .. } => Color::RGBA(255, 190, 40, 230),
                 OrderKind::Defend { .. } => Color::RGBA(128, 218, 128, 230),
+                OrderKind::DefendZone { .. } => Color::RGBA(90, 200, 130, 230),
             };
             let fill_w = (bar_w as f32 * remaining) as u32;
             canvas.set_draw_color(fill_color);
@@ -783,6 +786,7 @@ pub(super) fn draw_unit_overlays(
                 OrderKind::Follow => "F",
                 OrderKind::Charge { .. } => "C",
                 OrderKind::Defend { .. } => "D",
+                OrderKind::DefendZone { .. } => "H",
             };
             let lbl_size = (12.0 * dpi_scale as f32) * zoom;
             let lbl_y = ob_y - (lbl_size * 0.8) as i32;
@@ -790,6 +794,7 @@ pub(super) fn draw_unit_overlays(
                 OrderKind::Follow => Color::RGBA(100, 170, 255, 230),
                 OrderKind::Charge { .. } => Color::RGBA(255, 200, 60, 230),
                 OrderKind::Defend { .. } => Color::RGBA(140, 220, 140, 230),
+                OrderKind::DefendZone { .. } => Color::RGBA(110, 210, 150, 230),
             };
             assets
                 .text
@@ -922,7 +927,7 @@ pub(super) fn draw_victory_progress(
     if fill_w > 0.0 {
         let (fr, fg, fb) = match faction {
             Faction::Blue => (70u8, 130u8, 230u8),
-            Faction::Red => (220, 60, 60),
+            Faction::Red | Faction::Villager => (220, 60, 60),
         };
         if let Some(ref mut fill_tex) = assets.ui_bar_fill {
             super::safe_set_color_mod(fill_tex, fr, fg, fb);

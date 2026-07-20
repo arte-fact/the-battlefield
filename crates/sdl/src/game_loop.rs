@@ -286,7 +286,7 @@ impl GameLoop {
 
                 // Build input and tick game
                 self.input_state.touch.tick(dt as f32);
-                let player_input = self.input_state.build_player_input(&keyboard);
+                let player_input = self.input_state.build_player_input(&keyboard, dt as f32);
 
                 if self.game.winner.is_none() {
                     let t0 = Instant::now();

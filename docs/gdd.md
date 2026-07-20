@@ -89,7 +89,7 @@ Every zone is a small **village** with one worked resource, themed per seed (all
 
 Each village has 3-4 houses (one peon each), its production building (the center zone rolls a second), and the defense tower at its heart. Buildings ring the **outside** of the capture circle, keeping the fighting ground open. Buildings and peons are **Black (neutral) until captured**, then recolor to the owner's faction.
 
-**Village economy:** each peon delivery banks 1 stock (cap 5). A controlled village adds its building's units to the owner's reinforcement wave, **spawned at the village** -- front-line reinforcements are the payoff of holding it. Village units cost normal manpower and 1 stock each; peons **flee combat**, so marching an army through a village scatters its workers and stalls its output without capturing it.
+**Village economy and garrisons:** each peon delivery banks 1 stock (cap 5). Villages spend stock to raise a small **standing garrison** (cap 4, one soldier every ~6s): neutral villages field **Black villager militia** hostile to both armies -- taking a village means beating its defenders -- and a captured village keeps producing the same garrison in its **owner's color**. Surviving neutral militia pledges to the captor; faction soldiers never defect. Garrison units carry the **defend-zone stance**: they hold scattered points in the circle, engage intruders within a short leash, and return home. They cost stock only (no manpower) and never join the field army. Peons **flee combat**, so scattering a village's workers stalls its garrison without capturing it. Militia contests with swords, not the circle: it does not block capture progress.
 
 **Majority capture:** progress moves at the rate of the *strength difference* between the factions inside (√|blue − red|). Equal forces freeze the zone; a minority garrison slows an assault but cannot hold forever — overwhelming force completes the capture even with defenders still alive. Attacking a defended point is a readable numbers race, not a binary stall.
 
@@ -176,6 +176,10 @@ Bases produce units in waves, drawing from the faction's manpower pool. Newly pr
 ## Ambient Life
 
 Base villages have wandering **pawns** chopping trees and **sheep** grazing the rear pasture -- atmosphere only. Capture-zone peons do the same work loops (chop, mine, herd) but their deliveries feed the village economy above; they are invulnerable and panic away from any nearby fighting.
+
+### Stationing (long-press Defend)
+
+Holding the Defend button (~0.5s) stations the retinue at the nearest capture zone as a standing garrison: they leave the retinue (with the usual re-recruit cooldown) and adopt the defend-zone stance. A short tap still orders the temporary Defend formation. Visit the zone later to re-recruit them.
 
 ## Controls
 

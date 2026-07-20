@@ -139,6 +139,10 @@ impl ActionButton {
 /// Seconds the Dismiss button must be held before it fires.
 pub const DISMISS_HOLD_SECS: f32 = 0.4;
 
+/// Seconds the Defend button must be held to station the retinue
+/// (tap = regular Defend formation).
+pub const HOLD_ZONE_HOLD_SECS: f32 = 0.5;
+
 /// Full touch control state shared by all renderers.
 pub struct TouchControls {
     pub joystick: VirtualJoystick,
@@ -151,6 +155,8 @@ pub struct TouchControls {
     pending_order: Option<OrderRequest>,
     dismiss_held_secs: f32,
     dismiss_fired: bool,
+    defend_held_secs: f32,
+    defend_fired: bool,
     camera_drag_id: Option<u64>,
     camera_drag_prev: (f32, f32),
     camera_drag_dx: f32,
@@ -183,6 +189,8 @@ impl TouchControls {
             pending_order: None,
             dismiss_held_secs: 0.0,
             dismiss_fired: false,
+            defend_held_secs: 0.0,
+            defend_fired: false,
             camera_drag_id: None,
             camera_drag_prev: (0.0, 0.0),
             camera_drag_dx: 0.0,
@@ -239,6 +247,18 @@ impl TouchControls {
             self.dismiss_held_secs = 0.0;
             self.dismiss_fired = false;
         }
+        if self.defend.pressed {
+            self.defend_held_secs += dt;
+            if self.defend_held_secs >= HOLD_ZONE_HOLD_SECS && !self.defend_fired {
+                self.defend_fired = true;
+                self.pending_order = Some(OrderRequest::HoldZone);
+            }
+        }
+    }
+
+    /// Defend hold progress 0..1 for the button fill ring.
+    pub fn defend_hold_frac(&self) -> f32 {
+        (self.defend_held_secs / HOLD_ZONE_HOLD_SECS).min(1.0)
     }
 
     /// Dismiss hold progress 0..1 for the button fill ring.
@@ -259,7 +279,7 @@ impl TouchControls {
         }
         if self.defend.contains(x, y) {
             self.defend.press(tid);
-            self.pending_order = Some(OrderRequest::Defend);
+            // Tap fires Defend on release; holding fires HoldZone in tick().
             return true;
         }
         if self.dismiss.contains(x, y) {
@@ -335,7 +355,15 @@ impl TouchControls {
         self.joystick.deactivate(tid);
         self.attack.release(tid);
         self.charge.release(tid);
+        let defend_was_pressed = self.defend.pressed;
         self.defend.release(tid);
+        if defend_was_pressed && !self.defend.pressed {
+            if !self.defend_fired && self.defend_held_secs > 0.0 {
+                self.pending_order = Some(OrderRequest::Defend);
+            }
+            self.defend_held_secs = 0.0;
+            self.defend_fired = false;
+        }
         self.dismiss.release(tid);
         if !self.dismiss.pressed {
             self.dismiss_held_secs = 0.0;

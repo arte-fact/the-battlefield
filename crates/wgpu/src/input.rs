@@ -25,6 +25,8 @@ pub enum GpButton {
 
 /// Tracks keyboard, mouse, touch, and gamepad state; produces PlayerInput each frame.
 pub struct InputState {
+    defend_held_secs: f32,
+    defend_hold_fired: bool,
     // Keyboard
     keys_down: HashSet<Key>,
     pressed_this_frame: HashSet<Key>,
@@ -63,6 +65,8 @@ impl Default for InputState {
 impl InputState {
     pub fn new() -> Self {
         Self {
+            defend_held_secs: 0.0,
+            defend_hold_fired: false,
             keys_down: HashSet::new(),
             pressed_this_frame: HashSet::new(),
             scroll_delta: 0.0,
@@ -206,7 +210,7 @@ impl InputState {
 
     // ── Build player input ──────────────────────────────────────────────
 
-    pub fn build_player_input(&mut self) -> PlayerInput {
+    pub fn build_player_input(&mut self, dt: f32) -> PlayerInput {
         // Keyboard movement
         let kb_left = self.is_key_down(KeyCode::KeyA) || self.is_key_down(KeyCode::ArrowLeft);
         let kb_right = self.is_key_down(KeyCode::KeyD) || self.is_key_down(KeyCode::ArrowRight);
@@ -257,15 +261,33 @@ impl InputState {
         let gp_attack = self.gp_held(GpButton::South);
         let touch_attack = self.touch.attack.pressed;
 
+        // Defend is tap-vs-hold: a short press orders the formation, a
+        // long press stations the retinue at the nearest zone.
+        let defend_down = self.is_key_down(KeyCode::KeyK) || self.gp_held(GpButton::North);
+        let mut defend_order = None;
+        if defend_down {
+            self.defend_held_secs += dt;
+            if self.defend_held_secs >= battlefield_core::touch_input::HOLD_ZONE_HOLD_SECS
+                && !self.defend_hold_fired
+            {
+                self.defend_hold_fired = true;
+                defend_order = Some(OrderRequest::HoldZone);
+            }
+        } else {
+            if self.defend_held_secs > 0.0 && !self.defend_hold_fired {
+                defend_order = Some(OrderRequest::Defend);
+            }
+            self.defend_held_secs = 0.0;
+            self.defend_hold_fired = false;
+        }
+
         let order = self.touch.take_order().or(
             if self.pressed_this_frame(KeyCode::KeyJ) || self.gp_pressed(GpButton::West) {
                 Some(OrderRequest::Charge)
-            } else if self.pressed_this_frame(KeyCode::KeyK) || self.gp_pressed(GpButton::North) {
-                Some(OrderRequest::Defend)
             } else if self.pressed_this_frame(KeyCode::KeyL) || self.gp_pressed(GpButton::East) {
                 Some(OrderRequest::Dismiss)
             } else {
-                None
+                defend_order
             },
         );
 

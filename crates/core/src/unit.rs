@@ -11,6 +11,9 @@ pub const MELEE_RANGE: f32 = TILE_SIZE * 1.5;
 pub enum Faction {
     Blue,
     Red,
+    /// Neutral village militia: hostile to both armies, belongs to no
+    /// pool or planner. Converts to the captor when its zone falls.
+    Villager,
 }
 
 impl Faction {
@@ -18,13 +21,23 @@ impl Faction {
         match self {
             Faction::Blue => Faction::Red,
             Faction::Red => Faction::Blue,
+            // Villagers have no single nemesis; callers needing "the
+            // opposing army" must not reach here with Villager.
+            Faction::Villager => Faction::Villager,
         }
+    }
+
+    /// True when the two factions fight each other. Villagers fight
+    /// everyone who is not a villager.
+    pub fn hostile_to(self, other: Faction) -> bool {
+        self != other
     }
 
     pub fn asset_folder(self) -> &'static str {
         match self {
             Faction::Blue => "Blue Units",
             Faction::Red => "Red Units",
+            Faction::Villager => "Black Units",
         }
     }
 }
@@ -201,6 +214,10 @@ pub enum OrderKind {
         anchor_y: f32,
         facing_dir: f32,
     },
+    /// Standing garrison stance: hold a capture zone indefinitely,
+    /// engaging intruders within a leash. Used by village garrisons and
+    /// by the player stationing retinue (long-press Defend).
+    DefendZone { zone: u8 },
 }
 
 /// Player order button/key command.
@@ -209,6 +226,9 @@ pub enum OrderRequest {
     Charge,
     Defend,
     Dismiss,
+    /// Long-press Defend: station the retinue at the nearest capture
+    /// zone as a standing garrison.
+    HoldZone,
 }
 
 impl OrderRequest {
@@ -217,6 +237,7 @@ impl OrderRequest {
             OrderRequest::Charge => "Charge",
             OrderRequest::Defend => "Defend",
             OrderRequest::Dismiss => "Dismiss",
+            OrderRequest::HoldZone => "Hold Zone",
         }
     }
 
@@ -225,6 +246,7 @@ impl OrderRequest {
             OrderRequest::Charge => "C",
             OrderRequest::Defend => "D",
             OrderRequest::Dismiss => "X",
+            OrderRequest::HoldZone => "H",
         }
     }
 
@@ -233,6 +255,7 @@ impl OrderRequest {
             OrderRequest::Charge => (220, 50, 50),
             OrderRequest::Defend => (50, 120, 200),
             OrderRequest::Dismiss => (170, 170, 170),
+            OrderRequest::HoldZone => (60, 160, 90),
         }
     }
 }
@@ -437,8 +460,13 @@ impl Unit {
         }
         self.re_recruit_cooldown = (self.re_recruit_cooldown - dt).max(0.0);
         self.chase_block_timer = (self.chase_block_timer - dt).max(0.0);
-        // Follow is sticky; timed orders expire back into Follow.
-        if self.order.is_some() && !matches!(self.order, Some(OrderKind::Follow)) {
+        // Follow and DefendZone are sticky; timed orders expire into Follow.
+        if self.order.is_some()
+            && !matches!(
+                self.order,
+                Some(OrderKind::Follow) | Some(OrderKind::DefendZone { .. })
+            )
+        {
             self.order_timer -= dt;
             if self.order_timer <= 0.0 {
                 self.order = Some(OrderKind::Follow);

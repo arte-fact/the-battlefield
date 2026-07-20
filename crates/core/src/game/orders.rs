@@ -98,7 +98,9 @@ impl Game {
         let mut retinue = self
             .units
             .iter()
-            .filter(|u| u.alive && !u.is_player && u.order.is_some())
+            .filter(|u| {
+                u.alive && !u.is_player && u.faction == pf && Self::is_retinue_order(u.order)
+            })
             .count();
         if retinue >= max_followers {
             return;
@@ -154,10 +156,22 @@ impl Game {
         u.ai_waypoint_idx = 0;
     }
 
+    /// True for orders that make a unit part of the player's retinue.
+    /// Stationed garrisons (DefendZone) have left the retinue.
+    fn is_retinue_order(order: Option<OrderKind>) -> bool {
+        order.is_some_and(|o| !matches!(o, OrderKind::DefendZone { .. }))
+    }
+
     pub fn follower_count(&self) -> usize {
+        let pf = self
+            .player_unit()
+            .map(|p| p.faction)
+            .unwrap_or(Faction::Blue);
         self.units
             .iter()
-            .filter(|u| u.alive && !u.is_player && u.order.is_some())
+            .filter(|u| {
+                u.alive && !u.is_player && u.faction == pf && Self::is_retinue_order(u.order)
+            })
             .count()
     }
 
@@ -165,11 +179,12 @@ impl Game {
         if self.is_player_alive() {
             return;
         }
+        // Garrisons keep holding their zones when the player falls.
         let idxs: Vec<usize> = self
             .units
             .iter()
             .enumerate()
-            .filter(|(_, u)| u.alive && u.order.is_some())
+            .filter(|(_, u)| u.alive && Self::is_retinue_order(u.order))
             .map(|(i, _)| i)
             .collect();
         for i in idxs {
@@ -191,7 +206,12 @@ impl Game {
             .units
             .iter()
             .enumerate()
-            .filter(|(_, u)| u.alive && !u.is_player && u.order.is_some())
+            .filter(|(_, u)| {
+                u.alive
+                    && !u.is_player
+                    && u.order
+                        .is_some_and(|o| !matches!(o, OrderKind::DefendZone { .. }))
+            })
             .map(|(i, _)| i)
             .collect();
         if retinue.is_empty() {
@@ -209,6 +229,43 @@ impl Game {
             return OrderOutcome::Issued(count);
         }
 
+        if req == OrderRequest::HoldZone {
+            // Station the retinue at the nearest zone as a garrison. They
+            // leave the retinue; visiting the village later re-recruits.
+            let Some(zone) = self
+                .zone_manager
+                .zones
+                .iter()
+                .min_by(|a, b| {
+                    let da = (a.center_wx - player_x).powi(2) + (a.center_wy - player_y).powi(2);
+                    let db = (b.center_wx - player_x).powi(2) + (b.center_wy - player_y).powi(2);
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|z| z.id)
+            else {
+                return OrderOutcome::NoFollowers;
+            };
+            let cooldown = self.config.re_recruit_cooldown_secs;
+            let count = retinue.len();
+            for idx in retinue {
+                let u = &mut self.units[idx];
+                u.order = Some(OrderKind::DefendZone { zone });
+                u.order_timer = 0.0;
+                u.order_flash = self.config.order_flash_duration;
+                u.re_recruit_cooldown = cooldown;
+                u.zone_lock_timer = 0.0;
+                u.ai_waypoints.clear();
+                u.ai_waypoint_idx = 0;
+                u.ai_path_cooldown = 0.0;
+                u.follow_arrived = false;
+                u.defend_in_position = false;
+                u.defend_slot = None;
+            }
+            self.order_pulse = 0.6;
+            self.order_pulse_radius = self.authority_command_radius();
+            return OrderOutcome::Issued(count);
+        }
+
         let order = match req {
             OrderRequest::Charge => {
                 let aim = self.player_aim_dir;
@@ -222,12 +279,12 @@ impl Game {
                 anchor_y: player_y,
                 facing_dir: self.player_aim_dir,
             },
-            OrderRequest::Dismiss => unreachable!(),
+            OrderRequest::Dismiss | OrderRequest::HoldZone => unreachable!(),
         };
         let timer = match order {
             OrderKind::Charge { .. } => self.config.order_charge_timeout,
             OrderKind::Defend { .. } => self.config.order_defend_duration,
-            OrderKind::Follow => 0.0,
+            OrderKind::Follow | OrderKind::DefendZone { .. } => 0.0,
         };
 
         let mut acknowledged = 0usize;
@@ -370,6 +427,58 @@ impl Game {
             self.units[ai_idx].ai_waypoint_idx = 0;
         } else {
             self.ai_move_toward_continuous(ai_idx, target_x, target_y, dt);
+        }
+    }
+
+    /// Garrison stance: hold a personal point inside the zone, engage
+    /// intruders within the zone leash, drift back home when clear.
+    pub(super) fn ai_order_defend_zone_tick(&mut self, ai_idx: usize, zone_idx: u8, dt: f32) {
+        let zi = zone_idx as usize;
+        if zi >= self.zone_manager.zones.len() {
+            self.units[ai_idx].order = None;
+            return;
+        }
+        let (zx, zy, r) = {
+            let z = &self.zone_manager.zones[zi];
+            (z.center_wx, z.center_wy, z.radius as f32 * TILE_SIZE)
+        };
+        let leash = r + self.config.zone_defend_leash_tiles * TILE_SIZE;
+
+        // Fight anyone bringing the fight to the village.
+        if let Some((ex, ey, _, _)) = self.find_nearest_enemy(ai_idx) {
+            let ddx = ex - zx;
+            let ddy = ey - zy;
+            if ddx * ddx + ddy * ddy <= leash * leash {
+                let kind = self.units[ai_idx].kind;
+                match kind {
+                    UnitKind::Monk => self.ai_monk_tick(ai_idx, dt),
+                    UnitKind::Archer => self.ai_archer_tick(ai_idx, dt),
+                    UnitKind::Lancer => self.ai_lancer_tick(ai_idx, dt),
+                    UnitKind::Warrior => self.ai_melee_tick(ai_idx, dt),
+                }
+                return;
+            }
+        }
+
+        // Quiet: walk to the personal hold point and stand there.
+        let id = self.units[ai_idx].id;
+        let ux = self.units[ai_idx].x;
+        let uy = self.units[ai_idx].y;
+        let hold = {
+            let zone = &self.zone_manager.zones[zi];
+            super::ai_movement::zone_hold_point(&self.grid, zone, id)
+        };
+        let (hx, hy) = hold.unwrap_or((zx, zy));
+        let hd_sq = (ux - hx) * (ux - hx) + (uy - hy) * (uy - hy);
+        if hd_sq <= TILE_SIZE * TILE_SIZE {
+            self.units[ai_idx].set_anim(UnitAnim::Idle);
+        } else {
+            let dz_sq = (ux - zx) * (ux - zx) + (uy - zy) * (uy - zy);
+            if dz_sq <= r * r {
+                self.steer_toward(ai_idx, hx, hy, dt);
+            } else {
+                self.ai_move_toward_continuous(ai_idx, hx, hy, dt);
+            }
         }
     }
 

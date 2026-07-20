@@ -323,7 +323,7 @@ impl GameLoop {
 
                 // Build input and tick game
                 self.input_state.touch.tick(dt as f32);
-                let player_input = self.input_state.build_player_input();
+                let player_input = self.input_state.build_player_input(dt as f32);
 
                 if self.game.winner.is_none() {
                     self.game.tick(&player_input, dt as f32);

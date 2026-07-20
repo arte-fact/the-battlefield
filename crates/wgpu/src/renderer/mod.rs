@@ -854,6 +854,9 @@ fn draw_zone_effects(effects: &mut EffectsBatch, game: &Game, elapsed: f64) {
             ZoneState::Capturing(Faction::Red) => [1.0, 0.24, 0.24, 0.85],
             ZoneState::Controlled(Faction::Blue) => [0.24, 0.47, 1.0, 1.0],
             ZoneState::Controlled(Faction::Red) => [1.0, 0.24, 0.24, 1.0],
+            ZoneState::Capturing(Faction::Villager) | ZoneState::Controlled(Faction::Villager) => {
+                [0.6, 0.6, 0.6, 0.9]
+            }
         };
         let capturing = matches!(zone.state, ZoneState::Capturing(_) | ZoneState::Contested);
         // Shift up half a tile so the ring aligns with the tower base
@@ -957,6 +960,7 @@ fn draw_unit_overlays(
                 OrderKind::Defend { .. } => {
                     (u.order_timer / game.config.order_defend_duration).clamp(0.0, 1.0)
                 }
+                OrderKind::DefendZone { .. } => 1.0,
             };
 
             let ob_w = 36.0_f32;
@@ -972,6 +976,7 @@ fn draw_unit_overlays(
                 OrderKind::Follow => [0.25, 0.55, 1.0, 0.9],
                 OrderKind::Charge { .. } => [1.0, 0.75, 0.15, 0.9],
                 OrderKind::Defend { .. } => [0.5, 0.85, 0.5, 0.9],
+                OrderKind::DefendZone { .. } => [0.35, 0.8, 0.5, 0.9],
             };
             prim.fill_rect(ob_x, ob_y, ob_w * remaining, ob_h, color);
 
@@ -980,6 +985,7 @@ fn draw_unit_overlays(
                 OrderKind::Follow => "F",
                 OrderKind::Charge { .. } => "C",
                 OrderKind::Defend { .. } => "D",
+                OrderKind::DefendZone { .. } => "H",
             };
             let lbl_size = 14.0_f32;
             let lbl_y = ob_y - lbl_size * 0.5 - 1.0;
@@ -987,6 +993,7 @@ fn draw_unit_overlays(
                 OrderKind::Follow => (100, 170, 255),
                 OrderKind::Charge { .. } => (255, 200, 60),
                 OrderKind::Defend { .. } => (140, 220, 140),
+                OrderKind::DefendZone { .. } => (110, 210, 150),
             };
             // Shadow
             assets.text.draw_text_centered(
@@ -1297,6 +1304,8 @@ fn draw_hud(
                 ZoneState::Controlled(Faction::Blue) => (0.24, 0.51, 1.0, 1.0),
                 ZoneState::Capturing(Faction::Red) => (1.0, 0.24, 0.24, 0.7),
                 ZoneState::Controlled(Faction::Red) => (1.0, 0.24, 0.24, 1.0),
+                ZoneState::Capturing(Faction::Villager)
+                | ZoneState::Controlled(Faction::Villager) => (0.6, 0.6, 0.6, 0.8),
             };
 
             let inner_r = pip_r * progress.max(0.15);
@@ -1357,7 +1366,7 @@ fn draw_victory_progress(
 
     let tint = match faction {
         Faction::Blue => [70.0 / 255.0, 130.0 / 255.0, 230.0 / 255.0, 1.0],
-        Faction::Red => [220.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0, 1.0],
+        Faction::Red | Faction::Villager => [220.0 / 255.0, 60.0 / 255.0, 60.0 / 255.0, 1.0],
     };
     if let Some(q) = render_util::bar_fill_quad(
         bar_x as f64,
@@ -1497,6 +1506,7 @@ fn draw_minimap(
         let color = match unit.faction {
             Faction::Blue => [0.29, 0.62, 1.0, 1.0],
             Faction::Red => [1.0, 0.29, 0.29, 1.0],
+            Faction::Villager => [0.5, 0.5, 0.5, 1.0],
         };
         prim.fill_rect(ux - 1.0, uy - 1.0, 2.0, 2.0, color);
     }

@@ -125,6 +125,8 @@ pub struct Game {
     pub zone_manager: ZoneManager,
     /// Banked peon deliveries per zone (fuels village production).
     pub village_stock: Vec<u8>,
+    /// Per-zone garrison production timers.
+    pub garrison_timer: Vec<f32>,
     /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
     pub winner: Option<Faction>,
     /// Remaining reinforcement manpower per faction [Blue, Red].
@@ -211,6 +213,7 @@ impl Game {
             pawns: Vec::new(),
             zone_manager: ZoneManager::empty(),
             village_stock: Vec::new(),
+            garrison_timer: Vec::new(),
             winner: None,
             manpower: [config.manpower_start; 2],
             spawn_queue: [Vec::new(), Vec::new()],
@@ -391,6 +394,7 @@ impl Game {
         }
 
         self.tick_cooldowns(dt);
+        self.tick_village_garrisons(dt);
         self.tick_ai(dt);
         self.tick_zones(dt);
         self.tick_production(dt);
