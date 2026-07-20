@@ -811,7 +811,7 @@ mod tests {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
-        game.zone_manager.zones[3].state = crate::zone::ZoneState::Controlled(Faction::Blue);
+        game.zone_manager.zones[3].set_controlled(Faction::Blue);
         game.village_stock = vec![0; game.zone_manager.zones.len()];
         game.village_stock[3] = 5;
         for _ in 0..(30 * 10) {

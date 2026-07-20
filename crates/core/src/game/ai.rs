@@ -446,8 +446,7 @@ mod tests {
         game.setup_demo_battle_with_seed(42);
         game.units.clear();
         for z in &mut game.zone_manager.zones {
-            z.state = crate::zone::ZoneState::Controlled(Faction::Blue);
-            z.progress = 1.0;
+            z.set_controlled(Faction::Blue);
         }
         let z = (
             game.zone_manager.zones[3].center_gx,

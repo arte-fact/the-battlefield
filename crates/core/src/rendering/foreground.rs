@@ -270,7 +270,7 @@ fn draw_building(
             _ => None,
         };
         let zone_alpha = match zone.state {
-            ZoneState::Capturing(_) => (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0),
+            ZoneState::Capturing(_) => (zone.progress as f64 * 0.5 + 0.5).clamp(0.5, 1.0),
             _ => 1.0,
         };
         let alpha = proximity_alpha * zone_alpha;

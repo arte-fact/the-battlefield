@@ -200,7 +200,7 @@ pub(super) fn draw_hud(
         for (i, zone) in game.zone_manager.zones.iter().enumerate() {
             let cx = zone_panel_x + pad_z + pip_r + (i as i32) * (pip_d + gap_z);
             let cy = zone_panel_y + pad_z + pip_r;
-            let progress = zone.progress.abs();
+            let progress = zone.progress;
 
             let (cr, cg, cb, alpha) = match zone.state {
                 ZoneState::Neutral => (100u8, 100, 100, 80u8),

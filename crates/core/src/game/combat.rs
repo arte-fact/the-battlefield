@@ -241,13 +241,9 @@ impl Game {
                 if zi >= self.zone_manager.zones.len() {
                     continue;
                 }
-                let progress = self.zone_manager.zones[zi].progress;
-                if progress > 0.01 {
-                    Faction::Blue
-                } else if progress < -0.01 {
-                    Faction::Red
-                } else {
-                    continue; // neutral — no tower defense
+                match self.zone_manager.zones[zi].effective_faction() {
+                    Some(f) => f,
+                    None => continue, // neutral — no tower defense
                 }
             } else {
                 self.buildings[i].faction

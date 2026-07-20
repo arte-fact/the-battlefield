@@ -24,10 +24,17 @@ pub struct CaptureZone {
     pub center_wy: f32,
     pub radius_world: f32,
     pub state: ZoneState,
-    /// -1.0 = fully Red, 0.0 = neutral, +1.0 = fully Blue.
+    /// Who holds the zone (Controlled).
+    pub owner: Option<Faction>,
+    /// Who is currently converting it (draining the owner or building
+    /// ownership of a neutral zone).
+    pub capturing: Option<Faction>,
+    /// 0..1 — the owner's hold strength while owned, otherwise the
+    /// capturer's progress. Draining a hold and building your own take
+    /// the same time, preserving the old signed-scalar pacing.
     pub progress: f32,
-    pub blue_count: u32,
-    pub red_count: u32,
+    /// Units inside per army faction (ARMY_FACTIONS order).
+    pub counts: [u32; 4],
 }
 
 impl CaptureZone {
@@ -43,10 +50,37 @@ impl CaptureZone {
             center_wy: wy,
             radius_world: radius as f32 * TILE_SIZE,
             state: ZoneState::Neutral,
+            owner: None,
+            capturing: None,
             progress: 0.0,
-            blue_count: 0,
-            red_count: 0,
+            counts: [0; 4],
         }
+    }
+
+    pub fn count(&self, faction: Faction) -> u32 {
+        faction.army_idx().map(|i| self.counts[i]).unwrap_or(0)
+    }
+
+    pub fn total_inside(&self) -> u32 {
+        self.counts.iter().sum()
+    }
+
+    /// Mark the zone fully held by `faction` (tests and scripted setups).
+    pub fn set_controlled(&mut self, faction: Faction) {
+        self.owner = Some(faction);
+        self.capturing = None;
+        self.progress = 1.0;
+        self.state = ZoneState::Controlled(faction);
+    }
+
+    /// The faction a zone's tower fights for: the owner, else whoever
+    /// has meaningful capture progress.
+    pub fn effective_faction(&self) -> Option<Faction> {
+        self.owner.or(if self.progress > 0.01 {
+            self.capturing
+        } else {
+            None
+        })
     }
 
     /// Returns true if a world-space position is within this zone (Euclidean distance).
@@ -139,8 +173,7 @@ impl ZoneManager {
     /// Update unit counts for all zones.
     pub fn count_units(&mut self, units: &[Unit]) {
         for zone in &mut self.zones {
-            zone.blue_count = 0;
-            zone.red_count = 0;
+            zone.counts = [0; 4];
         }
         const EXIT_MARGIN: f32 = crate::grid::TILE_SIZE * 0.5;
         for unit in units {
@@ -166,15 +199,9 @@ impl ZoneManager {
             match zone_idx {
                 Some(zi) => {
                     self.membership.insert(unit.id, zi);
-                    let zone = &mut self.zones[zi as usize];
-                    match unit.faction {
-                        Faction::Blue => zone.blue_count += 1,
-                        Faction::Red => zone.red_count += 1,
-                        // Counted properly once the capture model goes
-                        // multi-faction (roadmap item 2).
-                        Faction::Yellow | Faction::Purple => {}
-                        // Militia contests with swords, not with the circle.
-                        Faction::Villager => {}
+                    // Militia contests with swords, not with the circle.
+                    if let Some(fi) = unit.faction.army_idx() {
+                        self.zones[zi as usize].counts[fi] += 1;
                     }
                 }
                 None => {
@@ -190,43 +217,91 @@ impl ZoneManager {
         let max_rate = max_capture_multiplier * rate_per_unit;
 
         for zone in &mut self.zones {
-            let (blue, red) = (zone.blue_count, zone.red_count);
-
-            if blue == 0 && red == 0 {
+            let total = zone.total_inside();
+            if total == 0 {
                 // No units present — state persists, no progress change
                 continue;
             }
 
-            // Majority capture: progress moves at the strength-difference
-            // rate. Equal contested forces freeze; a minority garrison only
-            // slows an assault, it cannot hold indefinitely.
-            let diff = blue as i32 - red as i32;
-            if diff == 0 {
+            // Majority capture: the strongest faction present converts the
+            // zone at the rate of its advantage over EVERYONE else inside.
+            // A tie for strongest freezes the zone.
+            let (best_i, best_c) = zone
+                .counts
+                .iter()
+                .copied()
+                .enumerate()
+                .max_by_key(|&(_, c)| c)
+                .unwrap();
+            let tie = zone
+                .counts
+                .iter()
+                .enumerate()
+                .any(|(i, &c)| i != best_i && c == best_c);
+            let adv = best_c as i64 - (total - best_c) as i64;
+            if tie || adv <= 0 {
                 zone.state = ZoneState::Contested;
                 continue;
             }
-            let (count, direction) = if diff > 0 {
-                (diff as u32, 1.0_f32)
-            } else {
-                (diff.unsigned_abs(), -1.0_f32)
-            };
+            let best_f = crate::unit::ARMY_FACTIONS[best_i];
+            let rate = ((adv as f32).sqrt() * rate_per_unit).min(max_rate);
+            let step = rate * dt;
+            let crowd = zone.counts.iter().filter(|&&c| c > 0).count() > 1;
 
-            let rate = ((count as f32).sqrt() * rate_per_unit).min(max_rate);
-            zone.progress = (zone.progress + direction * rate * dt).clamp(-1.0, 1.0);
-
-            if zone.progress >= 1.0 {
-                zone.state = ZoneState::Controlled(Faction::Blue);
-            } else if zone.progress <= -1.0 {
-                zone.state = ZoneState::Controlled(Faction::Red);
-            } else if blue > 0 && red > 0 {
-                zone.state = ZoneState::Contested;
-            } else {
-                let faction = if direction > 0.0 {
-                    Faction::Blue
-                } else {
-                    Faction::Red
-                };
-                zone.state = ZoneState::Capturing(faction);
+            match zone.owner {
+                // The owner reinforces its hold back toward full.
+                Some(o) if o == best_f => {
+                    zone.progress = (zone.progress + step).min(1.0);
+                    zone.capturing = None;
+                    // A full hold reads Controlled even mid-melee.
+                    zone.state = if zone.progress >= 1.0 {
+                        ZoneState::Controlled(o)
+                    } else if crowd {
+                        ZoneState::Contested
+                    } else {
+                        ZoneState::Capturing(o)
+                    };
+                }
+                // An attacker drains the owner's hold to zero first.
+                Some(_) => {
+                    zone.progress -= step;
+                    zone.capturing = Some(best_f);
+                    if zone.progress <= 0.0 {
+                        zone.owner = None;
+                        zone.progress = 0.0;
+                    }
+                    zone.state = if crowd {
+                        ZoneState::Contested
+                    } else {
+                        ZoneState::Capturing(best_f)
+                    };
+                }
+                // Neutral: drain a rival's partial claim, then build your own.
+                None => {
+                    if zone.capturing != Some(best_f) && zone.progress > 0.0 {
+                        zone.progress -= step;
+                        if zone.progress <= 0.0 {
+                            zone.progress = 0.0;
+                            zone.capturing = Some(best_f);
+                        }
+                    } else {
+                        zone.capturing = Some(best_f);
+                        zone.progress = (zone.progress + step).min(1.0);
+                    }
+                    // Completion beats the crowd: an overwhelming majority
+                    // takes the zone with defenders still alive inside.
+                    if zone.progress >= 1.0 {
+                        zone.owner = Some(best_f);
+                        zone.capturing = None;
+                        zone.state = ZoneState::Controlled(best_f);
+                    } else {
+                        zone.state = if crowd {
+                            ZoneState::Contested
+                        } else {
+                            ZoneState::Capturing(best_f)
+                        };
+                    }
+                }
             }
         }
     }
@@ -330,16 +405,14 @@ impl ZoneManager {
             .iter()
             .map(|z| {
                 let controlled_by_us = z.state == ZoneState::Controlled(faction);
-                let progress_for_us = match faction {
-                    Faction::Blue => z.progress,
-                    Faction::Red => -z.progress,
-                    _ => 0.0,
+                let progress_for_us = match (z.owner, z.capturing) {
+                    (Some(o), _) if o == faction => z.progress,
+                    (Some(_), _) => -z.progress,
+                    (None, Some(c)) if c == faction => z.progress,
+                    (None, Some(_)) => -z.progress,
+                    (None, None) => 0.0,
                 };
-                let enemy_count = match faction {
-                    Faction::Blue => z.red_count,
-                    Faction::Red => z.blue_count,
-                    _ => 0,
-                };
+                let enemy_count = z.total_inside() - z.count(faction);
 
                 // Distance tiebreaker (0..1, closer = lower)
                 let dx = z.center_gx as f32 - own_x;
@@ -518,8 +591,8 @@ mod tests {
     #[test]
     fn neutral_zone_captures_with_blue() {
         let mut mgr = test_zones();
-        mgr.zones[1].blue_count = 1;
-        mgr.zones[1].red_count = 0;
+        mgr.zones[1].counts[0] = 1;
+        mgr.zones[1].counts[1] = 0;
         mgr.tick_capture(4.0, 8.0, 3.0);
         assert!(mgr.zones[1].progress > 0.4 && mgr.zones[1].progress < 0.6);
         assert!(matches!(
@@ -531,10 +604,11 @@ mod tests {
     #[test]
     fn neutral_zone_captures_with_red() {
         let mut mgr = test_zones();
-        mgr.zones[1].blue_count = 0;
-        mgr.zones[1].red_count = 1;
+        mgr.zones[1].counts[0] = 0;
+        mgr.zones[1].counts[1] = 1;
         mgr.tick_capture(4.0, 8.0, 3.0);
-        assert!(mgr.zones[1].progress < -0.4 && mgr.zones[1].progress > -0.6);
+        assert!(mgr.zones[1].progress > 0.4 && mgr.zones[1].progress < 0.6);
+        assert_eq!(mgr.zones[1].capturing, Some(Faction::Red));
         assert!(matches!(
             mgr.zones[1].state,
             ZoneState::Capturing(Faction::Red)
@@ -542,11 +616,46 @@ mod tests {
     }
 
     #[test]
+    fn third_faction_captures_and_drains() {
+        let mut mgr = test_zones();
+        // Yellow takes a neutral zone
+        mgr.zones[0].counts[2] = 4;
+        for _ in 0..200 {
+            mgr.tick_capture(0.1, 8.0, 3.0);
+        }
+        assert_eq!(mgr.zones[0].owner, Some(Faction::Yellow));
+        assert_eq!(mgr.zones[0].state, ZoneState::Controlled(Faction::Yellow));
+
+        // Purple must drain Yellow's hold before building its own
+        mgr.zones[0].counts = [0, 0, 0, 3];
+        mgr.tick_capture(1.0, 8.0, 3.0);
+        assert_eq!(mgr.zones[0].owner, Some(Faction::Yellow));
+        assert!(mgr.zones[0].progress < 1.0);
+        assert_eq!(mgr.zones[0].capturing, Some(Faction::Purple));
+        for _ in 0..200 {
+            mgr.tick_capture(0.1, 8.0, 3.0);
+        }
+        assert_eq!(mgr.zones[0].owner, Some(Faction::Purple));
+    }
+
+    #[test]
+    fn strongest_of_three_converts_at_advantage_rate() {
+        let mut mgr = test_zones();
+        // Blue 5, Red 2, Yellow 1 — Blue advantage is 5 - 3 = 2
+        mgr.zones[0].counts = [5, 2, 1, 0];
+        mgr.tick_capture(1.0, 8.0, 3.0);
+        assert_eq!(mgr.zones[0].capturing, Some(Faction::Blue));
+        assert_eq!(mgr.zones[0].state, ZoneState::Contested);
+        let expected = (2.0f32).sqrt() / 8.0;
+        assert!((mgr.zones[0].progress - expected).abs() < 1e-4);
+    }
+
+    #[test]
     fn equal_contest_freezes_progress() {
         let mut mgr = test_zones();
         mgr.zones[1].progress = 0.5;
-        mgr.zones[1].blue_count = 3;
-        mgr.zones[1].red_count = 3;
+        mgr.zones[1].counts[0] = 3;
+        mgr.zones[1].counts[1] = 3;
         mgr.tick_capture(1.0, 8.0, 3.0);
         assert!((mgr.zones[1].progress - 0.5).abs() < f32::EPSILON);
         assert_eq!(mgr.zones[1].state, ZoneState::Contested);
@@ -556,8 +665,8 @@ mod tests {
     fn majority_progresses_contested_capture() {
         let mut mgr = test_zones();
         mgr.zones[1].progress = 0.0;
-        mgr.zones[1].blue_count = 5;
-        mgr.zones[1].red_count = 2;
+        mgr.zones[1].counts[0] = 5;
+        mgr.zones[1].counts[1] = 2;
         mgr.tick_capture(1.0, 8.0, 3.0);
         assert!(
             mgr.zones[1].progress > 0.0,
@@ -567,7 +676,7 @@ mod tests {
 
         // Same margin, same rate: 5v2 progresses like 3v0
         let mut solo = test_zones();
-        solo.zones[1].blue_count = 3;
+        solo.zones[1].counts[0] = 3;
         solo.tick_capture(1.0, 8.0, 3.0);
         assert!((mgr.zones[1].progress - solo.zones[1].progress).abs() < f32::EPSILON);
     }
@@ -575,20 +684,21 @@ mod tests {
     #[test]
     fn overwhelm_completes_capture_despite_defenders() {
         let mut mgr = test_zones();
+        mgr.zones[1].capturing = Some(Faction::Blue);
         mgr.zones[1].progress = 0.95;
-        mgr.zones[1].blue_count = 8;
-        mgr.zones[1].red_count = 2;
+        mgr.zones[1].counts[0] = 8;
+        mgr.zones[1].counts[1] = 2;
         mgr.tick_capture(1.0, 8.0, 3.0);
         assert_eq!(mgr.zones[1].state, ZoneState::Controlled(Faction::Blue));
+        assert_eq!(mgr.zones[1].owner, Some(Faction::Blue));
     }
 
     #[test]
     fn minority_defenders_cannot_hold_forever() {
         let mut mgr = test_zones();
-        mgr.zones[1].progress = -1.0;
-        mgr.zones[1].state = ZoneState::Controlled(Faction::Red);
-        mgr.zones[1].blue_count = 6;
-        mgr.zones[1].red_count = 1;
+        mgr.zones[1].set_controlled(Faction::Red);
+        mgr.zones[1].counts[0] = 6;
+        mgr.zones[1].counts[1] = 1;
         for _ in 0..600 {
             mgr.tick_capture(0.1, 8.0, 3.0);
         }
@@ -599,8 +709,8 @@ mod tests {
     fn more_units_capture_faster() {
         let mut mgr1 = test_zones();
         let mut mgr2 = test_zones();
-        mgr1.zones[0].blue_count = 1;
-        mgr2.zones[0].blue_count = 4;
+        mgr1.zones[0].counts[0] = 1;
+        mgr2.zones[0].counts[0] = 4;
         mgr1.tick_capture(1.0, 8.0, 3.0);
         mgr2.tick_capture(1.0, 8.0, 3.0);
         assert!(mgr2.zones[0].progress > mgr1.zones[0].progress);
@@ -609,7 +719,7 @@ mod tests {
     #[test]
     fn fully_captured_becomes_controlled() {
         let mut mgr = test_zones();
-        mgr.zones[0].blue_count = 4;
+        mgr.zones[0].counts[0] = 4;
         for _ in 0..50 {
             mgr.tick_capture(0.1, 8.0, 3.0);
         }
@@ -684,11 +794,11 @@ mod tests {
             Unit::new(4, UnitKind::Warrior, Faction::Red, 0, 0, false), // outside all zones
         ];
         mgr.count_units(&units);
-        assert_eq!(mgr.zones[0].blue_count, 2);
-        assert_eq!(mgr.zones[0].red_count, 1);
+        assert_eq!(mgr.zones[0].counts[0], 2);
+        assert_eq!(mgr.zones[0].counts[1], 1);
         // Unit 4 should not be in any zone
         for zone in &mgr.zones[1..] {
-            assert_eq!(zone.blue_count, 0);
+            assert_eq!(zone.counts[0], 0);
         }
     }
 
@@ -704,10 +814,12 @@ mod tests {
     #[test]
     fn progress_clamped_to_range() {
         let mut mgr = test_zones();
-        mgr.zones[0].blue_count = 9;
+        mgr.zones[0].counts[0] = 9;
+        mgr.zones[0].capturing = Some(Faction::Blue);
         mgr.zones[0].progress = 0.95;
         mgr.tick_capture(10.0, 8.0, 3.0);
         assert!((mgr.zones[0].progress - 1.0).abs() < f32::EPSILON);
+        assert_eq!(mgr.zones[0].owner, Some(Faction::Blue));
     }
 
     #[test]

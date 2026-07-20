@@ -109,23 +109,16 @@ pub(super) fn draw_zones(
         }
 
         let progress = zone.progress as f64;
+        let acting = zone.owner.or(zone.capturing);
         let fill_inset_x = 10.0 * zoom;
         let fill_inset_y = 12.0 * zoom;
         let inner_w = bar_w - fill_inset_x * 2.0;
         let fill_h = (bar_h - fill_inset_y * 2.0).max(1.0);
-        if progress.abs() > 0.01 {
-            let (fr, fg, fb) = if progress > 0.0 {
-                (60u8, 120u8, 255u8)
-            } else {
-                (255u8, 60u8, 60u8)
-            };
-            let fill_w = (inner_w * 0.5 * progress.abs()).max(0.0);
+        if let Some(acting) = acting.filter(|_| progress > 0.01) {
+            let (fr, fg, fb) = acting.rgb();
+            let fill_w = (inner_w * progress).max(0.0);
             if fill_w > 0.0 {
-                let fill_x = if progress > 0.0 {
-                    bar_x + fill_inset_x + inner_w * 0.5
-                } else {
-                    bar_x + fill_inset_x + inner_w * 0.5 - fill_w
-                };
+                let fill_x = bar_x + fill_inset_x;
                 if let Some(ref mut fill_tex) = assets.ui_bar_fill {
                     super::safe_set_color_mod(fill_tex, fr, fg, fb);
                     let _ = canvas.copy(
@@ -517,7 +510,7 @@ fn draw_base_building(
             _ => None,
         };
         let zone_alpha = match zone.state {
-            ZoneState::Capturing(_) => (zone.progress.abs() as f64 * 0.5 + 0.5).clamp(0.5, 1.0),
+            ZoneState::Capturing(_) => (zone.progress as f64 * 0.5 + 0.5).clamp(0.5, 1.0),
             _ => 1.0,
         };
         let alpha = (proximity_alpha * zone_alpha * 255.0) as u8;

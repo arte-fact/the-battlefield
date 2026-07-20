@@ -803,22 +803,16 @@ fn draw_zones(
         }
 
         let progress = zone.progress;
-        if progress.abs() > 0.01 {
+        let acting = zone.owner.or(zone.capturing);
+        if let Some(acting) = acting.filter(|_| progress > 0.01) {
             let inset_x = render_util::BAR_FILL_INSET_X as f32;
             let inset_y = render_util::BAR_FILL_INSET_Y as f32;
             let inner_w = bar_w - inset_x * 2.0;
             let fill_h = (bar_h - inset_y * 2.0).max(1.0);
-            let fill_w = (inner_w * 0.5 * progress.abs()).max(0.0);
-            let fill_x = if progress > 0.0 {
-                bar_x + inset_x + inner_w * 0.5
-            } else {
-                bar_x + inset_x + inner_w * 0.5 - fill_w
-            };
-            let tint = if progress > 0.0 {
-                [60.0 / 255.0, 120.0 / 255.0, 1.0, 1.0]
-            } else {
-                [1.0, 60.0 / 255.0, 60.0 / 255.0, 1.0]
-            };
+            let fill_w = (inner_w * progress).max(0.0);
+            let fill_x = bar_x + inset_x;
+            let (fr, fg, fb) = acting.rgb();
+            let tint = [fr as f32 / 255.0, fg as f32 / 255.0, fb as f32 / 255.0, 1.0];
             if let Some(fill_id) = assets.ui_bar_fill {
                 let tex = &assets.textures[fill_id];
                 let (sx, sy, sw, sh) = render_util::BAR_FILL_SRC;
@@ -1293,7 +1287,7 @@ fn draw_hud(
 
         for (i, zone) in game.zone_manager.zones.iter().enumerate() {
             let cx = start_x + i as f32 * (pip_d + pip_gap);
-            let progress = zone.progress.abs();
+            let progress = zone.progress;
 
             // Background circle
             prim.fill_circle(cx, pip_y, pip_r, [0.12, 0.1, 0.08, 0.5]);
