@@ -191,7 +191,7 @@ gates below.
   arrays to [4], one faction_rgb()/color-helper pass over renderers;
   Yellow/Purple sheets embedded and loaded. Compiles and plays with
   2 active factions, zero behavior change.
-- [ ] 2. Capture rework: owner/capturing/progress/counts model,
+- [x] 2. Capture rework: owner/capturing/progress/counts model,
   majority + membership hysteresis + sticky-target logic ported;
   zone tests rewritten; 1v1 probes still end on all seeds.
 - [ ] 3. Multi-faction battle flow: victory (domination >half +
