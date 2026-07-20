@@ -71,6 +71,13 @@ pub struct GameConfig {
     /// Distance beyond the zone radius a garrison pursues intruders.
     #[serde(default = "default_zone_defend_leash_tiles")]
     pub zone_defend_leash_tiles: f32,
+    /// Extra zone score for zones held by the settlement leader (the
+    /// pack turns on whoever is winning).
+    #[serde(default = "default_ai_w_leader")]
+    pub ai_w_leader: f32,
+    /// Extra zone score for zones road-adjacent to own territory.
+    #[serde(default = "default_ai_w_neighbor")]
+    pub ai_w_neighbor: f32,
 
     // ── Combat Balancing ─────────────────────────────────────────────
     pub warrior_hp: i32,
@@ -149,6 +156,14 @@ fn default_chase_block_secs() -> f32 {
 
 fn default_zone_defend_leash_tiles() -> f32 {
     4.0
+}
+
+fn default_ai_w_leader() -> f32 {
+    8.0
+}
+
+fn default_ai_w_neighbor() -> f32 {
+    6.0
 }
 
 fn default_playable_size() -> u32 {
@@ -265,6 +280,8 @@ impl Default for GameConfig {
             defend_leash_melee_tiles: 3.0,
             defend_leash_ranged_tiles: 8.0,
             zone_defend_leash_tiles: default_zone_defend_leash_tiles(),
+            ai_w_leader: default_ai_w_leader(),
+            ai_w_neighbor: default_ai_w_neighbor(),
 
             // Combat Balancing
             warrior_hp: 10,

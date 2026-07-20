@@ -35,6 +35,10 @@ pub struct MapLayout {
     pub connections: Vec<Vec<u8>>,
     /// One village per zone, same order as `zone_centers`.
     pub villages: Vec<VillageSpec>,
+    /// Provisional capitals for third/fourth factions (Yellow, Purple),
+    /// placed at the remaining map corners until the settlement network
+    /// (roadmap items 4-5) replaces base handling entirely.
+    pub extra_bases: Vec<(u32, u32)>,
 }
 
 /// A rectangle used during BSP partitioning.
@@ -162,6 +166,11 @@ fn in_border(x: u32, y: u32) -> bool {
 
 /// Generate a procedural battlefield grid with BSP layout.
 pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) {
+    generate_battlefield_n(seed, playable_size, 2)
+}
+
+/// Generate with `n_capitals` faction start positions (2-4).
+pub fn generate_battlefield_n(seed: u32, playable_size: u32, n_capitals: u32) -> (Grid, MapLayout) {
     let mut rng = Rng::new(seed);
     let w = playable_size + 2 * BORDER_SIZE;
     let h = playable_size + 2 * BORDER_SIZE;
@@ -342,6 +351,26 @@ pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) 
     let blue_base = sorted_leaves[0].center();
     let red_base = sorted_leaves[sorted_leaves.len() - 1].center();
 
+    // Yellow/Purple capitals: leaves nearest the two remaining corners.
+    let mut extra_bases: Vec<(u32, u32)> = Vec::new();
+    for corner in [(b + p, b), (b, b + p)]
+        .iter()
+        .take((n_capitals.saturating_sub(2)) as usize)
+    {
+        let best = leaves
+            .iter()
+            .map(|l| l.center())
+            .filter(|&c| c != blue_base && c != red_base && !extra_bases.contains(&c))
+            .min_by_key(|&(x, y)| {
+                let dx = x as i64 - corner.0 as i64;
+                let dy = y as i64 - corner.1 as i64;
+                dx * dx + dy * dy
+            });
+        if let Some(c) = best {
+            extra_bases.push(c);
+        }
+    }
+
     // Place 7 zones: 2 near Blue base, 3 on center line, 2 near Red base.
     // Layout: B1-B2 (30% from Blue) → C1-C2-C3 (center) → R1-R2 (30% from Red)
     let (bx, by) = (blue_base.0 as f32, blue_base.1 as f32);
@@ -400,6 +429,9 @@ pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) 
     let base_clear = crate::building::BASE_BAND_RADIUS + 1;
     clear_circle(&mut grid, blue_base.0, blue_base.1, base_clear);
     clear_circle(&mut grid, red_base.0, red_base.1, base_clear);
+    for &(bx, by) in &extra_bases {
+        clear_circle(&mut grid, bx, by, base_clear);
+    }
 
     // Clear village ground around each zone center
     for &(cx, cy) in &zone_centers {
@@ -434,6 +466,7 @@ pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) 
         red_home_zones: vec![5, 6],  // R1, R2
         connections,
         villages: Vec::new(),
+        extra_bases,
     };
 
     // Generate 2-tile-wide roads connecting bases through capture zones
@@ -677,10 +710,11 @@ fn count_neighbors(grid: &[bool], w: u32, h: u32, x: u32, y: u32) -> u32 {
 /// tree-shaped road network, then routes each MST edge through A*.
 fn generate_roads(grid: &mut Grid, layout: &MapLayout) {
     // Collect all objectives (bases + zone centers)
-    let mut nodes: Vec<(u32, u32)> = Vec::with_capacity(layout.zone_centers.len() + 2);
+    let mut nodes: Vec<(u32, u32)> = Vec::with_capacity(layout.zone_centers.len() + 4);
     nodes.push(layout.blue_base);
     nodes.extend(layout.zone_centers.iter().copied());
     nodes.push(layout.red_base);
+    nodes.extend(layout.extra_bases.iter().copied());
 
     let n = nodes.len();
     if n < 2 {

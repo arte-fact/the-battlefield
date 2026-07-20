@@ -15,53 +15,50 @@ impl Game {
             self.recruitment_pass();
         }
 
-        // Recompute macro objectives periodically, staggering factions to avoid
-        // both score_all_zones() calls landing on the same frame.
-        self.objective_timer += dt;
+        // Recompute macro objectives periodically, staggering the active
+        // factions evenly across the interval so score_all_zones() calls
+        // never share a frame.
+        let active: Vec<Faction> = self.active_factions().to_vec();
+        let interval = self.config.objective_interval;
         let mut refresh_objectives = false;
-        let half_interval = self.config.objective_interval / 2.0;
-        if self.macro_objectives[0].is_empty() && self.macro_objectives[1].is_empty() {
-            // First time: compute both
-            self.objective_timer = 0.0;
-            self.macro_objectives[0] = self
-                .zone_manager
-                .score_all_zones(Faction::Blue, &self.config);
-            self.macro_objectives[1] = self
-                .zone_manager
-                .score_all_zones(Faction::Red, &self.config);
-            refresh_objectives = true;
-        } else if self.objective_timer >= self.config.objective_interval {
-            // Blue scores at 0s, Red at 1s (half interval offset)
-            self.objective_timer = 0.0;
-            self.macro_objectives[0] = self
-                .zone_manager
-                .score_all_zones(Faction::Blue, &self.config);
-            refresh_objectives = true;
-        } else if self.objective_timer >= half_interval && self.objective_timer - dt < half_interval
+        if active
+            .iter()
+            .all(|f| self.macro_objectives[f.idx()].is_empty())
         {
-            // Red scores at the midpoint
-            self.macro_objectives[1] = self
-                .zone_manager
-                .score_all_zones(Faction::Red, &self.config);
+            // First time: compute everyone
+            self.objective_timer = 0.0;
+            for &f in &active {
+                self.macro_objectives[f.idx()] = self.zone_manager.score_all_zones(f, &self.config);
+            }
             refresh_objectives = true;
-        } else if !refresh_objectives
-            && self.objective_timer >= half_interval
-            && self.macro_objectives[1].is_empty()
-        {
-            // Catch-up: Red missed its midpoint window (e.g. lag spike)
-            self.macro_objectives[1] = self
-                .zone_manager
-                .score_all_zones(Faction::Red, &self.config);
-            refresh_objectives = true;
+        } else {
+            let prev = self.objective_timer;
+            self.objective_timer += dt;
+            let slot = interval / active.len() as f32;
+            for (k, &f) in active.iter().enumerate() {
+                let phase = k as f32 * slot;
+                let crossed = prev < phase && self.objective_timer >= phase;
+                let catch_up =
+                    self.objective_timer >= phase && self.macro_objectives[f.idx()].is_empty();
+                if crossed || catch_up {
+                    self.macro_objectives[f.idx()] =
+                        self.zone_manager.score_all_zones(f, &self.config);
+                    refresh_objectives = true;
+                }
+            }
+            if self.objective_timer >= interval {
+                self.objective_timer = 0.0;
+                // Phase 0 recomputes on wrap (prev < 0 never true otherwise).
+                self.macro_objectives[active[0].idx()] =
+                    self.zone_manager.score_all_zones(active[0], &self.config);
+                refresh_objectives = true;
+            }
         }
 
-        // Stagger flow field updates: one faction per frame to halve per-frame cost
-        if self.flow_field_turn {
-            self.update_flow_fields(Faction::Blue);
-        } else {
-            self.update_flow_fields(Faction::Red);
-        }
-        self.flow_field_turn = !self.flow_field_turn;
+        // Stagger flow field updates: one faction per frame round-robin.
+        let turn = self.flow_field_rotation as usize % active.len();
+        self.update_flow_fields(active[turn]);
+        self.flow_field_rotation = self.flow_field_rotation.wrapping_add(1);
 
         // Assign per-unit zone objectives when macro objectives are refreshed
         if refresh_objectives {
@@ -111,10 +108,7 @@ impl Game {
             }
             // Walk toward rally point (base center)
             let faction = self.units[ai_idx].faction;
-            let (rx, ry) = match faction {
-                Faction::Blue => self.zone_manager.blue_base,
-                _ => self.zone_manager.red_base,
-            };
+            let (rx, ry) = self.gathers[faction.idx()];
             let (rwx, rwy) = grid::grid_to_world(rx, ry);
             let dist = self.units[ai_idx].distance_to_pos(rwx, rwy);
             if dist > TILE_SIZE * 2.0 {

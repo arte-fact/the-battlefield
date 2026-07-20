@@ -378,10 +378,21 @@ impl ZoneManager {
     }
 
     /// Score all zones for a faction, return all as (world_x, world_y, score) sorted desc.
-    pub fn score_all_zones(&self, faction: Faction, _cfg: &GameConfig) -> Vec<(f32, f32, f32)> {
+    pub fn score_all_zones(&self, faction: Faction, cfg: &GameConfig) -> Vec<(f32, f32, f32)> {
         if self.zones.is_empty() {
             return Vec::new();
         }
+
+        // Settlement leader (a RIVAL with the most zones): its holdings
+        // score higher — the pack turns on whoever is winning.
+        let leader: Option<Faction> = crate::unit::ARMY_FACTIONS
+            .iter()
+            .copied()
+            .filter(|&f| f != faction)
+            .map(|f| (f, self.controlled_count(f)))
+            .filter(|&(_, c)| c > 0)
+            .max_by_key(|&(_, c)| c)
+            .map(|(f, _)| f);
 
         let (own_x, own_y) = match faction {
             Faction::Blue => (self.blue_base.0 as f32, self.blue_base.1 as f32),
@@ -431,7 +442,20 @@ impl ZoneManager {
                     }
                 } else {
                     // Tier 2: Not ours — attack, prefer momentum + nearness
-                    100.0 + progress_for_us.max(0.0) * 30.0 - norm_dist * 15.0
+                    let mut sc = 100.0 + progress_for_us.max(0.0) * 30.0 - norm_dist * 15.0;
+                    if z.owner.is_some() && z.owner == leader {
+                        sc += cfg.ai_w_leader;
+                    }
+                    if self.connections.get(z.id as usize).is_some_and(|adj| {
+                        adj.iter().any(|&n| {
+                            self.zones
+                                .get(n as usize)
+                                .is_some_and(|nz| nz.state == ZoneState::Controlled(faction))
+                        })
+                    }) {
+                        sc += cfg.ai_w_neighbor;
+                    }
+                    sc
                 };
 
                 (z.center_wx, z.center_wy, score)
@@ -454,7 +478,13 @@ impl ZoneManager {
 
     /// Update victory timer. Returns Some(faction) if a faction has won.
     pub fn tick_victory(&mut self, dt: f32, victory_hold_time: f32) -> Option<Faction> {
-        let leader = self.all_zones_controlled_by();
+        // Domination: hold MORE THAN HALF of all settlements for the hold
+        // time. Losing the majority resets the timer.
+        let need = self.zones.len() / 2 + 1;
+        let leader = crate::unit::ARMY_FACTIONS
+            .iter()
+            .copied()
+            .find(|&f| self.controlled_count(f) >= need);
         self.advance_victory(leader, dt, victory_hold_time, true)
     }
 
@@ -463,12 +493,22 @@ impl ZoneManager {
     /// zones dipping to contested) pauses the timer instead of resetting
     /// it — only an actual leadership flip resets.
     pub fn tick_victory_majority(&mut self, dt: f32, victory_hold_time: f32) -> Option<Faction> {
-        let blue = self.controlled_count(Faction::Blue);
-        let red = self.controlled_count(Faction::Red);
-        let leader = match blue.cmp(&red) {
-            std::cmp::Ordering::Greater => Some(Faction::Blue),
-            std::cmp::Ordering::Less => Some(Faction::Red),
-            std::cmp::Ordering::Equal => None,
+        // Strict plurality across all army factions; a tie for the lead
+        // pauses the timer.
+        let counts: Vec<(Faction, usize)> = crate::unit::ARMY_FACTIONS
+            .iter()
+            .map(|&f| (f, self.controlled_count(f)))
+            .collect();
+        let best = counts.iter().map(|&(_, c)| c).max().unwrap_or(0);
+        let leaders: Vec<Faction> = counts
+            .iter()
+            .filter(|&&(_, c)| c == best && c > 0)
+            .map(|&(f, _)| f)
+            .collect();
+        let leader = if leaders.len() == 1 {
+            Some(leaders[0])
+        } else {
+            None
         };
         self.advance_victory(leader, dt, victory_hold_time, false)
     }
@@ -555,6 +595,7 @@ mod tests {
                 vec![3, 4, 5],
             ],
             villages: Vec::new(),
+            extra_bases: Vec::new(),
         }
     }
 
@@ -851,7 +892,12 @@ mod tests {
         mgr.tick_victory(60.0, 120.0);
         assert!(mgr.victory_timer > 0.0);
 
-        mgr.zones[0].state = ZoneState::Neutral;
+        // Dropping to half or less of the settlements loses the majority
+        // and resets the domination timer.
+        let keep = mgr.zones.len() / 2;
+        for zone in mgr.zones.iter_mut().skip(keep) {
+            zone.state = ZoneState::Neutral;
+        }
         mgr.tick_victory(1.0, 120.0);
         assert!((mgr.victory_timer).abs() < f32::EPSILON);
         assert_eq!(mgr.victory_candidate, None);

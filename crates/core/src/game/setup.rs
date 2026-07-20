@@ -137,9 +137,32 @@ impl Game {
         if self.winner.is_none() {
             let hold = self.config.victory_hold_time;
             // A pool below 1.0 cannot field a unit — effectively exhausted
-            let exhausted = self.manpower[0] < 1.0 && self.manpower[1] < 1.0;
+            let exhausted = self
+                .active_factions()
+                .iter()
+                .all(|&f| self.manpower[f.idx()] < 1.0);
             let won = if exhausted {
-                self.zone_manager.tick_victory_majority(dt, hold)
+                self.sudden_death_elapsed += dt;
+                self.zone_manager
+                    .tick_victory_majority(dt, hold)
+                    .or_else(|| {
+                        // FFA can deadlock with exhausted armies garrisoning a
+                        // tied map forever: after five hold-times of sudden
+                        // death, resolve by zones, then living units.
+                        if self.sudden_death_elapsed >= hold * 5.0 {
+                            self.active_factions().iter().copied().max_by_key(|&f| {
+                                (
+                                    self.zone_manager.controlled_count(f),
+                                    self.units
+                                        .iter()
+                                        .filter(|u| u.alive && u.faction == f)
+                                        .count(),
+                                )
+                            })
+                        } else {
+                            None
+                        }
+                    })
             } else {
                 self.zone_manager.tick_victory(dt, hold)
             };
@@ -214,8 +237,17 @@ impl Game {
                     || self.units.iter().any(|u| u.alive && u.faction == f)
             })
             .collect();
-        if standing.len() == 1 && active.len() > 1 {
+        if active.len() > 1 && standing.len() == 1 {
             self.winner = Some(standing[0]);
+        } else if active.len() > 1 && !standing.contains(&Faction::Blue) {
+            // The player's faction is annihilated while rivals still fight:
+            // the run ends now — credit the current settlement leader.
+            let leader = standing
+                .iter()
+                .copied()
+                .max_by_key(|&f| self.zone_manager.controlled_count(f))
+                .unwrap_or(Faction::Red);
+            self.winner = Some(leader);
         }
     }
 
@@ -342,10 +374,7 @@ impl Game {
                         b.zone_id.is_none() && b.faction == faction && b.produces == Some(kind)
                     })
                     .map(|b| (b.grid_x, b.grid_y))
-                    .unwrap_or(match faction {
-                        Faction::Blue => self.blue_gather,
-                        _ => self.red_gather,
-                    });
+                    .unwrap_or(self.gathers[faction.idx()]);
                 let id = self.spawn_unit(kind, faction, sx, sy, false);
                 // Rally hold — unit waits at base until wave is complete.
                 // Skip when dominating (all zones held) — just reinforce.
@@ -449,7 +478,9 @@ impl Game {
     }
 
     pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
-        let (gen_grid, layout) = mapgen::generate_battlefield(seed, self.config.playable_size);
+        let n_capitals = 2 + self.config.enemy_count.clamp(1, 3).saturating_sub(1) as u32;
+        let (gen_grid, layout) =
+            mapgen::generate_battlefield_n(seed, self.config.playable_size, n_capitals);
         self.grid = gen_grid;
         let tiles = (self.grid.width * self.grid.height) as usize;
         self.visible = vec![false; tiles];
@@ -461,9 +492,17 @@ impl Game {
         let (blue_cx, blue_cy) = layout.blue_base;
         let (red_cx, red_cy) = layout.red_base;
 
-        // Each faction's objective is the other faction's base
-        self.blue_objective = grid::grid_to_world(red_cx, red_cy);
-        self.red_objective = grid::grid_to_world(blue_cx, blue_cy);
+        // Per-faction base positions: Blue, Red, then provisional capitals.
+        let mut base_pos: [(u32, u32); 4] = [layout.blue_base, layout.red_base, (0, 0), (0, 0)];
+        for (i, &b) in layout.extra_bases.iter().enumerate() {
+            base_pos[2 + i] = b;
+        }
+        let active: Vec<Faction> = self.active_factions().to_vec();
+
+        // Fallback objective: the map centre — real targets come from the
+        // zone planner within the first refresh.
+        let centre = grid::grid_to_world(self.grid.width / 2, self.grid.height / 2);
+        self.faction_objectives = [centre; 4];
 
         // Create capture zones from BSP layout
         self.zone_manager = ZoneManager::create_from_layout(&layout, self.config.zone_radius);
@@ -472,8 +511,7 @@ impl Game {
         self.garrison_timer = vec![0.0; self.zone_manager.zones.len()];
 
         // Store gather points for unit rallying
-        self.blue_gather = layout.blue_gather;
-        self.red_gather = layout.red_gather;
+        self.gathers = base_pos;
 
         // Bases face each other; every band rotates with this vector.
         let dxf = red_cx as f32 - blue_cx as f32;
@@ -482,7 +520,8 @@ impl Game {
         let blue_facing = (dxf / len, dyf / len);
         let red_facing = (-blue_facing.0, -blue_facing.1);
 
-        // Procedurally generate all base buildings (castle, towers, production, houses)
+        // Procedurally generate base buildings for every active faction;
+        // extra capitals face the map centre.
         let mut buildings =
             building::generate_base_buildings(Faction::Blue, blue_cx, blue_cy, seed, blue_facing);
         buildings.extend(building::generate_base_buildings(
@@ -492,6 +531,19 @@ impl Game {
             seed.wrapping_add(0xBEEF),
             red_facing,
         ));
+        for &f in active.iter().skip(2) {
+            let (cx, cy) = base_pos[f.idx()];
+            let dxf = self.grid.width as f32 / 2.0 - cx as f32;
+            let dyf = self.grid.height as f32 / 2.0 - cy as f32;
+            let len = (dxf * dxf + dyf * dyf).sqrt().max(1.0);
+            buildings.extend(building::generate_base_buildings(
+                f,
+                cx,
+                cy,
+                seed.wrapping_add(0x1000 * f.idx() as u32),
+                (dxf / len, dyf / len),
+            ));
+        }
         // Place defense towers at capture zone centers
         for zone in &self.zone_manager.zones {
             buildings.push(building::BaseBuilding {
@@ -630,10 +682,15 @@ impl Game {
         self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_cx, blue_cy, true);
 
         // Spawn starting armies around each base — same composition as a wave, no rally hold
-        for (faction, base_cx, base_cy) in [
-            (Faction::Blue, blue_cx, blue_cy),
-            (Faction::Red, red_cx, red_cy),
-        ] {
+        for &(faction, base_cx, base_cy) in active
+            .iter()
+            .map(|&f| {
+                let (cx, cy) = base_pos[f.idx()];
+                (f, cx, cy)
+            })
+            .collect::<Vec<_>>()
+            .iter()
+        {
             for (i, &kind) in Self::WAVE.iter().enumerate() {
                 // Spread units in a grid around the base center
                 let col = (i % 5) as u32;
@@ -749,6 +806,7 @@ mod tests {
             red_home_zones: vec![2],
             connections: vec![vec![1], vec![0, 2], vec![1]],
             villages: Vec::new(),
+            extra_bases: Vec::new(),
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
         let z0gx = game.zone_manager.zones[0].center_gx;
@@ -1041,6 +1099,7 @@ mod tests {
             red_home_zones: vec![2],
             connections: vec![vec![1], vec![0, 2], vec![1]],
             villages: Vec::new(),
+            extra_bases: Vec::new(),
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
         game
@@ -1198,13 +1257,14 @@ mod tests {
         game.manpower = [10.0, 0.0, 0.0, 0.0];
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
         game.spawn_unit(UnitKind::Warrior, Faction::Red, 100, 100, false);
-        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
-        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
+        // A plurality below the majority threshold (1 of 3) wins in
+        // sudden death but not while a pool remains.
+        game.zone_manager.zones[0].set_controlled(Faction::Blue);
 
         game.tick_zones(game.config.victory_hold_time * 2.0);
         assert_eq!(
             game.winner, None,
-            "majority is not enough outside sudden death"
+            "plurality is not enough outside sudden death"
         );
     }
 

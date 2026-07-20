@@ -117,10 +117,7 @@ impl Game {
         if let Some(zone) = self.zone_manager.most_advanced_zone(faction) {
             return (zone.center_wx, zone.center_wy);
         }
-        match faction {
-            Faction::Blue => self.blue_objective,
-            _ => self.red_objective,
-        }
+        self.faction_objectives[faction.idx()]
     }
 
     /// Return the world position of the objective nearest to a unit (Euclidean).
@@ -770,7 +767,7 @@ mod tests {
     fn ai_melee_marches_to_objective() {
         let mut game = Game::new(960.0, 640.0);
         // Set up objective to the right
-        game.blue_objective = grid::grid_to_world(50, 5);
+        game.faction_objectives[0] = grid::grid_to_world(50, 5);
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, false);
         // No enemies at all — AI should march toward objective
         let start_x = game.units[0].x;
@@ -797,9 +794,10 @@ mod tests {
             red_home_zones: vec![2],
             connections: vec![vec![1], vec![0, 2], vec![1]],
             villages: Vec::new(),
+            extra_bases: Vec::new(),
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
-        game.blue_objective = grid::grid_to_world(138, 138);
+        game.faction_objectives[0] = grid::grid_to_world(138, 138);
         let obj = game.faction_objective(Faction::Blue);
         let (base_wx, _) = grid::grid_to_world(138, 138);
         assert!(

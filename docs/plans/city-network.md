@@ -194,7 +194,7 @@ gates below.
 - [x] 2. Capture rework: owner/capturing/progress/counts model,
   majority + membership hysteresis + sticky-target logic ported;
   zone tests rewritten; 1v1 probes still end on all seeds.
-- [ ] 3. Multi-faction battle flow: victory (domination >half +
+- [x] 3. Multi-faction battle flow: victory (domination >half +
   last-standing), FFA bleed, sudden death, elimination; weighted AI
   targeting (ai_w_leader + ai_w_neighbor on the base score);
   per-faction production; 1v2/1v3 probes end.

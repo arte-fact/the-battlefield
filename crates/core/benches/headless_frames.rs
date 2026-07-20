@@ -18,6 +18,11 @@ fn main() {
 
     let mut game = Game::new(960.0, 640.0);
     // Optional balance-tuning overrides for run-to-end probes
+    if let Ok(n) = std::env::var("BENCH_ENEMIES") {
+        if let Ok(n) = n.parse::<u8>() {
+            game.config.enemy_count = n.clamp(1, 3);
+        }
+    }
     if let Some(mp) = std::env::var("BENCH_MANPOWER")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -116,20 +121,24 @@ fn main() {
         )
     };
     println!();
+    let active = game.active_factions();
+    let mp: Vec<String> = active
+        .iter()
+        .map(|f| format!("{:.1}", game.manpower[f.idx()]))
+        .collect();
+    let al: Vec<String> = active.iter().map(|&f| alive(f).to_string()).collect();
     println!(
-        "Battle state after {:.0}s simulated: winner={:?}, manpower=[{:.1}, {:.1}], alive=[{}, {}]",
+        "Battle state after {:.0}s simulated: winner={:?}, manpower=[{}], alive=[{}]",
         frames as f32 * dt,
         game.winner,
-        game.manpower[0],
-        game.manpower[1],
-        alive(Faction::Blue),
-        alive(Faction::Red),
+        mp.join(", "),
+        al.join(", "),
     );
-    println!(
-        "Composition: blue=[{}] red=[{}]",
-        comp(Faction::Blue),
-        comp(Faction::Red)
-    );
+    let comps: Vec<String> = active
+        .iter()
+        .map(|&f| format!("{:?}=[{}]", f, comp(f)))
+        .collect();
+    println!("Composition: {}", comps.join(" "));
     let zones: String = game
         .zone_manager
         .zones

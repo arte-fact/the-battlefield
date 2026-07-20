@@ -107,14 +107,10 @@ pub struct Game {
     pub last_fov_cell: (u32, u32),
     /// Player aim direction in radians (0 = right). Updated from movement input.
     pub player_aim_dir: f32,
-    /// Strategic objective for Blue faction (world-space coords of Red spawn).
-    pub blue_objective: (f32, f32),
-    /// Strategic objective for Red faction (world-space coords of Blue spawn).
-    pub red_objective: (f32, f32),
-    /// Rally point for Blue faction (grid coords, front-center of base).
-    pub blue_gather: (u32, u32),
-    /// Rally point for Red faction (grid coords, front-center of base).
-    pub red_gather: (u32, u32),
+    /// Fallback strategic objective per army faction (world coords).
+    pub faction_objectives: [(f32, f32); 4],
+    /// Rally point per army faction (grid coords, base center).
+    pub gathers: [(u32, u32); 4],
     /// Production buildings at faction bases.
     pub buildings: Vec<BaseBuilding>,
     /// Ambient sheep at faction bases.
@@ -150,8 +146,11 @@ pub struct Game {
     objective_timer: f32,
     /// Timer for periodic auto-recruitment passes.
     recruit_timer: f32,
-    /// Alternates each frame to stagger Blue/Red flow field updates.
-    flow_field_turn: bool,
+    /// Round-robin counter staggering per-faction flow field updates.
+    flow_field_rotation: u32,
+    /// Time spent in sudden death (all pools empty) without a winner;
+    /// forces a resolution when FFA stalemates.
+    sudden_death_elapsed: f32,
     /// Per-frame A* pathfind budget (reset each tick, decremented per find_path call).
     pub(crate) astar_budget: u8,
     /// Outcome of the most recent A* attempt: Some(found), None = deferred.
@@ -210,10 +209,8 @@ impl Game {
             turn_events: Vec::new(),
             last_fov_cell: (0, 0),
             player_aim_dir: 0.0,
-            blue_objective: (0.0, 0.0),
-            red_objective: (0.0, 0.0),
-            blue_gather: (0, 0),
-            red_gather: (0, 0),
+            faction_objectives: [(0.0, 0.0); 4],
+            gathers: [(0, 0); 4],
             buildings: Vec::new(),
             sheep: Vec::new(),
             pawns: Vec::new(),
@@ -231,7 +228,8 @@ impl Game {
             planner_targets: [(None, None); 4],
             objective_timer: 0.0,
             recruit_timer: 0.0,
-            flow_field_turn: false,
+            flow_field_rotation: 0,
+            sudden_death_elapsed: 0.0,
             astar_budget: 0,
             last_path_result: None,
             ai_rotation: 0,
