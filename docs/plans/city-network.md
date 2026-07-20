@@ -187,7 +187,7 @@ gates below.
 
 ## Roadmap (checkable)
 
-- [ ] 1. Faction plumbing: 4 army colors + idx(), active_factions,
+- [x] 1. Faction plumbing: 4 army colors + idx(), active_factions,
   arrays to [4], one faction_rgb()/color-helper pass over renderers;
   Yellow/Purple sheets embedded and loaded. Compiles and plays with
   2 active factions, zero behavior change.
