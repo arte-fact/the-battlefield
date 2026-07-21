@@ -201,7 +201,7 @@ gates below.
 - [x] 4. Settlement tiers: SettlementSpec, tiered generation via the
   ring/band placer, city tier absorbs base generation, garrisons by
   tier; spawn/rally at largest controlled settlement.
-- [ ] 5. Network placement: capital max-separation, best-candidate
+- [x] 5. Network placement: capital max-separation, best-candidate
   towns/villages, MST + ~20% extra road edges, adjacency from road
   edges; invariants generalized (spacing, fairness, livability,
   reachability).

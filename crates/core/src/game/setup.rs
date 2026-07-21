@@ -552,10 +552,10 @@ impl Game {
         self.village_stock = vec![2; self.zone_manager.zones.len()];
         self.garrison_timer = vec![0.0; self.zone_manager.zones.len()];
 
-        // Capitals are city-tier zones appended after the seven field
-        // zones, in [Blue, Red, extras...] order; each active faction
-        // starts in control of its own.
-        let capital_zone = |k: usize| (7 + k) as u8;
+        // Capitals are the first zones (ids 0..n_capitals) in
+        // [Blue, Red, extras...] order; each active faction starts in
+        // control of its own.
+        let capital_zone = |k: usize| k as u8;
         for (k, &f) in active.iter().enumerate() {
             let zi = capital_zone(k) as usize;
             if zi < self.zone_manager.zones.len() {

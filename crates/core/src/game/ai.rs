@@ -453,12 +453,12 @@ mod tests {
             game.spawn_unit(
                 UnitKind::Warrior,
                 Faction::Red,
-                z.0.saturating_sub(15),
+                z.0.saturating_sub(10),
                 z.1.saturating_sub(2) + i % 4,
                 false,
             );
         }
-        for _ in 0..3600 {
+        for _ in 0..7200 {
             game.tick_ai(1.0 / 60.0);
             game.tick_cooldowns(1.0 / 60.0);
             game.tick_zones(1.0 / 60.0);

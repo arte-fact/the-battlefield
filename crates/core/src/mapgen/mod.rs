@@ -15,8 +15,6 @@ pub const VILLAGE_RING_MAX: u32 = 10;
 pub const VILLAGE_MAX_FOOTPRINT: u32 = 2;
 /// Cleared ground radius required by a village.
 pub const VILLAGE_CLEAR_RADIUS: u32 = VILLAGE_RING_MAX + VILLAGE_MAX_FOOTPRINT + 1;
-/// Local-search window for terrain-aware zone nudging.
-const ZONE_NUDGE_RANGE: i32 = 6;
 
 /// BSP layout data returned from map generation.
 pub struct MapLayout {
@@ -39,82 +37,6 @@ pub struct MapLayout {
     /// placed at the remaining map corners until the settlement network
     /// (roadmap items 4-5) replaces base handling entirely.
     pub extra_bases: Vec<(u32, u32)>,
-}
-
-/// A rectangle used during BSP partitioning.
-#[derive(Clone, Copy, Debug)]
-struct Rect {
-    x: u32,
-    y: u32,
-    w: u32,
-    h: u32,
-}
-
-impl Rect {
-    fn center(&self) -> (u32, u32) {
-        (self.x + self.w / 2, self.y + self.h / 2)
-    }
-}
-
-/// Recursively split a rectangle via BSP, returning leaf rects.
-fn bsp_split(rng: &mut Rng, rect: Rect, depth: u32, max_depth: u32, min_size: u32) -> Vec<Rect> {
-    if depth >= max_depth || (rect.w < min_size * 2 && rect.h < min_size * 2) {
-        return vec![rect];
-    }
-
-    // Split along longer axis
-    let split_horizontal = if rect.w > rect.h + 4 {
-        false // split vertically (along x)
-    } else if rect.h > rect.w + 4 {
-        true // split horizontally (along y)
-    } else {
-        rng.chance(0.5)
-    };
-
-    if split_horizontal {
-        if rect.h < min_size * 2 {
-            return vec![rect];
-        }
-        // Split position: 40-60% of height
-        let range = rect.h - 2 * min_size;
-        let split_offset = min_size + (rng.next() % (range + 1));
-        let top = Rect {
-            x: rect.x,
-            y: rect.y,
-            w: rect.w,
-            h: split_offset,
-        };
-        let bottom = Rect {
-            x: rect.x,
-            y: rect.y + split_offset,
-            w: rect.w,
-            h: rect.h - split_offset,
-        };
-        let mut leaves = bsp_split(rng, top, depth + 1, max_depth, min_size);
-        leaves.extend(bsp_split(rng, bottom, depth + 1, max_depth, min_size));
-        leaves
-    } else {
-        if rect.w < min_size * 2 {
-            return vec![rect];
-        }
-        let range = rect.w - 2 * min_size;
-        let split_offset = min_size + (rng.next() % (range + 1));
-        let left = Rect {
-            x: rect.x,
-            y: rect.y,
-            w: split_offset,
-            h: rect.h,
-        };
-        let right = Rect {
-            x: rect.x + split_offset,
-            y: rect.y,
-            w: rect.w - split_offset,
-            h: rect.h,
-        };
-        let mut leaves = bsp_split(rng, left, depth + 1, max_depth, min_size);
-        leaves.extend(bsp_split(rng, right, depth + 1, max_depth, min_size));
-        leaves
-    }
 }
 
 /// Simple xorshift32 PRNG for deterministic terrain generation.
@@ -322,186 +244,202 @@ pub fn generate_battlefield_n(seed: u32, playable_size: u32, n_capitals: u32) ->
         }
     }
 
-    // --- Phase C: Post-processing with BSP layout ---
+    // --- Phase C: Settlement network ---
+    //
+    // Capitals by farthest-point sampling, towns/villages/hamlets by
+    // best-candidate sampling (spacing + terrain-damage scoring), roads
+    // as an MST with loop edges, and the zone adjacency graph derived
+    // from the actual road edges. Zone ids: capitals first (0..n), then
+    // the countryside.
+    use crate::zone::SettlementTier;
 
     let b = BORDER_SIZE;
     let p = playable_size;
+    let mut net_rng = Rng::new(seed.wrapping_add(0xC17E));
 
-    // Run BSP on playable area
-    let playable_rect = Rect {
-        x: b,
-        y: b,
-        w: p,
-        h: p,
+    let margin_city = crate::building::BASE_BAND_RADIUS as u32 + 4;
+    let margin_field = VILLAGE_CLEAR_RADIUS;
+
+    let sample = |rng: &mut Rng, margin: u32| -> (u32, u32) {
+        let span = p - 2 * margin;
+        (
+            b + margin + rng.next() % span,
+            b + margin + rng.next() % span,
+        )
     };
-    let mut bsp_rng = Rng::new(seed.wrapping_add(0xBEEF));
-    let leaves = bsp_split(&mut bsp_rng, playable_rect, 0, 4, 20);
+    let d2 = |a: (u32, u32), c: (u32, u32)| -> i64 {
+        let dx = a.0 as i64 - c.0 as i64;
+        let dy = a.1 as i64 - c.1 as i64;
+        dx * dx + dy * dy
+    };
 
-    // Sort leaves by distance to top-left corner to assign bases
-    let top_left = (b as f32, b as f32);
-    let mut sorted_leaves = leaves.clone();
-    sorted_leaves.sort_by(|a, b_leaf| {
-        let (ax, ay) = a.center();
-        let (bx, by) = b_leaf.center();
-        let da = (ax as f32 - top_left.0).powi(2) + (ay as f32 - top_left.1).powi(2);
-        let db = (bx as f32 - top_left.0).powi(2) + (by as f32 - top_left.1).powi(2);
-        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let blue_base = sorted_leaves[0].center();
-    let red_base = sorted_leaves[sorted_leaves.len() - 1].center();
-
-    // Yellow/Purple capitals: leaves nearest the two remaining corners.
-    let mut extra_bases: Vec<(u32, u32)> = Vec::new();
-    for corner in [(b + p, b), (b, b + p)]
-        .iter()
-        .take((n_capitals.saturating_sub(2)) as usize)
+    // Capitals: greedy farthest-point over a shared candidate pool,
+    // terrain-damage penalized so cities avoid lakes and cliff fields.
+    let n_capitals = n_capitals.clamp(2, 4) as usize;
+    let pool: Vec<(u32, u32)> = (0..48).map(|_| sample(&mut net_rng, margin_city)).collect();
+    let dmg = |c: (u32, u32)| terrain_damage(&grid, c.0 as i32, c.1 as i32) as i64;
+    let mut capitals: Vec<(u32, u32)> = Vec::new();
     {
-        let best = leaves
-            .iter()
-            .map(|l| l.center())
-            .filter(|&c| c != blue_base && c != red_base && !extra_bases.contains(&c))
-            .min_by_key(|&(x, y)| {
-                let dx = x as i64 - corner.0 as i64;
-                let dy = y as i64 - corner.1 as i64;
-                dx * dx + dy * dy
-            });
-        if let Some(c) = best {
-            extra_bases.push(c);
+        // Seed with the least-damaged pair among genuinely distant ones —
+        // fairness first, then terrain quality.
+        let min_sep = ((p as i64) * 6 / 10).pow(2);
+        type CapitalPair = ((u32, u32), (u32, u32), i64);
+        let mut best: Option<CapitalPair> = None;
+        let mut best_far = (pool[0], pool[1], i64::MIN);
+        for i in 0..pool.len() {
+            for j in (i + 1)..pool.len() {
+                let dist = d2(pool[i], pool[j]);
+                if dist > best_far.2 {
+                    best_far = (pool[i], pool[j], dist);
+                }
+                if dist < min_sep {
+                    continue;
+                }
+                let score = -(dmg(pool[i]) + dmg(pool[j])) * 200 + dist / 8;
+                if best.map(|(_, _, bs)| score > bs).unwrap_or(true) {
+                    best = Some((pool[i], pool[j], score));
+                }
+            }
+        }
+        let (a, bcap) = best
+            .map(|(a, b, _)| (a, b))
+            .unwrap_or((best_far.0, best_far.1));
+        capitals.push(a);
+        capitals.push(bcap);
+        while capitals.len() < n_capitals {
+            let next = pool
+                .iter()
+                .copied()
+                .filter(|c| !capitals.contains(c))
+                .max_by_key(|&c| {
+                    capitals.iter().map(|&k| d2(c, k)).min().unwrap_or(0) - dmg(c) * 200
+                });
+            match next {
+                Some(c) => capitals.push(c),
+                None => break,
+            }
+        }
+    }
+    let blue_base = capitals[0];
+    let red_base = capitals[1];
+
+    // Countryside: total settlement count scales with playable area.
+    let area = (p as usize) * (p as usize);
+    let total = (area / 3500).max(n_capitals + 5);
+    let mut n_field = (total - capitals.len()).clamp(5, 24);
+    if n_capitals == 2 {
+        // Mirrored 1v1 countryside needs an even count.
+        n_field += n_field % 2;
+    }
+    let min_gap: i64 = 26 * 26;
+    let cap_gap: i64 = 32 * 32;
+
+    let mut field: Vec<(u32, u32)> = Vec::new();
+    {
+        let ok = |c: (u32, u32), field: &Vec<(u32, u32)>, capitals: &Vec<(u32, u32)>| -> bool {
+            capitals.iter().all(|&k| d2(c, k) >= cap_gap)
+                && field.iter().all(|&f| d2(c, f) >= min_gap)
+        };
+        // 1v1 maps mirror the countryside about the capital midpoint for
+        // fairness; bigger FFAs rely on best-candidate spread.
+        let mirror_sum = (
+            (blue_base.0 + red_base.0) as i64,
+            (blue_base.1 + red_base.1) as i64,
+        );
+        let mirrored = n_capitals == 2;
+        let mut attempts = 0;
+        while field.len() < n_field && attempts < 3000 {
+            attempts += 1;
+            let mut best: Option<((u32, u32), i64)> = None;
+            for _ in 0..24 {
+                let c = sample(&mut net_rng, margin_field);
+                if !ok(c, &field, &capitals) {
+                    continue;
+                }
+                if mirrored {
+                    let m = (mirror_sum.0 - c.0 as i64, mirror_sum.1 - c.1 as i64);
+                    if m.0 < (b + margin_field) as i64
+                        || m.1 < (b + margin_field) as i64
+                        || m.0 >= (b + p - margin_field) as i64
+                        || m.1 >= (b + p - margin_field) as i64
+                    {
+                        continue;
+                    }
+                    let m = (m.0 as u32, m.1 as u32);
+                    if d2(c, m) < min_gap || !ok(m, &field, &capitals) {
+                        continue;
+                    }
+                }
+                let spread = field
+                    .iter()
+                    .chain(capitals.iter())
+                    .map(|&e| d2(c, e))
+                    .min()
+                    .unwrap_or(i64::MAX / 4);
+                let score = spread - dmg(c) * 300;
+                if best.map(|(_, bs)| score > bs).unwrap_or(true) {
+                    best = Some((c, score));
+                }
+            }
+            let Some((c, _)) = best else { continue };
+            field.push(c);
+            if mirrored {
+                // Pairs stay together — n_field is even for 1v1.
+                let m = (
+                    (mirror_sum.0 - c.0 as i64) as u32,
+                    (mirror_sum.1 - c.1 as i64) as u32,
+                );
+                field.push(m);
+            }
         }
     }
 
-    // Place 7 zones: 2 near Blue base, 3 on center line, 2 near Red base.
-    // Layout: B1-B2 (30% from Blue) → C1-C2-C3 (center) → R1-R2 (30% from Red)
-    let (bx, by) = (blue_base.0 as f32, blue_base.1 as f32);
-    let (rx, ry) = (red_base.0 as f32, red_base.1 as f32);
-    let dx = rx - bx;
-    let dy = ry - by;
-    // Perpendicular offset for spreading zones across the width
-    let perp_x = -dy;
-    let perp_y = dx;
-    let perp_len = (perp_x * perp_x + perp_y * perp_y).sqrt().max(1.0);
-    let px = perp_x / perp_len;
-    let py = perp_y / perp_len;
-    // Spreads tuned at playable 128, scaled to the actual map size.
-    let spread_near = p as f32 * (16.0 / 128.0);
-    let spread_mid = p as f32 * (30.0 / 128.0);
-
-    // B1, B2: 30% from Blue base, offset left/right (narrow)
-    let t_near = 0.28;
-    let b1 = (
-        (bx + dx * t_near + px * spread_near) as u32,
-        (by + dy * t_near + py * spread_near) as u32,
-    );
-    let b2 = (
-        (bx + dx * t_near - px * spread_near) as u32,
-        (by + dy * t_near - py * spread_near) as u32,
-    );
-
-    // C1, C2, C3: center line (50%), C1/C3 pushed wide for diamond shape
-    let t_mid = 0.50;
-    let c1 = (
-        (bx + dx * t_mid + px * spread_mid) as u32,
-        (by + dy * t_mid + py * spread_mid) as u32,
-    );
-    let c2 = ((bx + dx * t_mid) as u32, (by + dy * t_mid) as u32);
-    let c3 = (
-        (bx + dx * t_mid - px * spread_mid) as u32,
-        (by + dy * t_mid - py * spread_mid) as u32,
-    );
-
-    // R1, R2: 30% from Red base (= 70% from Blue), offset left/right (narrow)
-    let t_far = 0.72;
-    let r1 = (
-        (bx + dx * t_far + px * spread_near) as u32,
-        (by + dy * t_far + py * spread_near) as u32,
-    );
-    let r2 = (
-        (bx + dx * t_far - px * spread_near) as u32,
-        (by + dy * t_far - py * spread_near) as u32,
-    );
-
-    // Order: B1, B2, C1, C2, C3, R1, R2 (indices 0-6)
-    let template = [b1, b2, c1, c2, c3, r1, r2];
-    let mut zone_centers = nudge_zone_centers(&grid, &template, blue_base, red_base, w, h);
-
-    // Clear facing-agnostic base ground: band radius + apron + the city
-    // resource ring just outside the building bands.
-    let base_clear = crate::building::BASE_BAND_RADIUS + 4;
-    clear_circle(&mut grid, blue_base.0, blue_base.1, base_clear);
-    clear_circle(&mut grid, red_base.0, red_base.1, base_clear);
-    for &(bx, by) in &extra_bases {
-        clear_circle(&mut grid, bx, by, base_clear);
+    // Zone list: capitals first, then countryside. Tier split for the
+    // countryside: ~1 town per 4, ~1 hamlet per 4, villages otherwise —
+    // mirrored pairs share a tier so 1v1 stays fair.
+    let mut zone_centers: Vec<(u32, u32)> = capitals.clone();
+    zone_centers.extend(field.iter().copied());
+    let mut tiers = vec![SettlementTier::City; capitals.len()];
+    for i in 0..field.len() {
+        let group = if n_capitals == 2 { i / 2 } else { i };
+        tiers.push(match group % 4 {
+            0 => SettlementTier::Town,
+            3 => SettlementTier::Hamlet,
+            _ => SettlementTier::Village,
+        });
     }
 
-    // Clear village ground around each zone center
-    for &(cx, cy) in &zone_centers {
-        clear_circle(&mut grid, cx, cy, VILLAGE_CLEAR_RADIUS as i32);
+    // Clear settlement ground by tier.
+    for (i, &(cx, cy)) in zone_centers.iter().enumerate() {
+        let r = if tiers[i] == SettlementTier::City {
+            crate::building::BASE_BAND_RADIUS + 4
+        } else {
+            VILLAGE_CLEAR_RADIUS as i32
+        };
+        clear_circle(&mut grid, cx, cy, r);
     }
 
-    // Gather points: base center (open rally zone where units congregate).
-    let blue_gather = blue_base;
-    let red_gather = red_base;
-
-    // Zone connectivity: B1(0)-B2(1)-C1(2)-C2(3)-C3(4)-R1(5)-R2(6)
-    // B1↔C1, B1↔C2, B2↔C2, B2↔C3, C1↔R1, C2↔R1, C2↔R2, C3↔R2
-    // Symmetric adjacency: if A↔B then both list each other.
-    // Diamond shape: B1-B2 at top, C1-C2-C3 center, R1-R2 at bottom.
-    let mut connections = vec![
-        vec![1, 2, 3],          // 0 (B1) ↔ B2, C1, C2
-        vec![0, 3, 4],          // 1 (B2) ↔ B1, C2, C3
-        vec![0, 3, 5],          // 2 (C1) ↔ B1, C2, R1
-        vec![0, 1, 2, 4, 5, 6], // 3 (C2) ↔ B1, B2, C1, C3, R1, R2
-        vec![1, 3, 6],          // 4 (C3) ↔ B2, C2, R2
-        vec![2, 3, 6],          // 5 (R1) ↔ C1, C2, R2
-        vec![3, 4, 5],          // 6 (R2) ↔ C2, C3, R1
-    ];
-
-    // Capitals are capture zones too: append them (City tier) after the
-    // seven field zones, each connected to its two nearest field zones.
-    let mut tiers = vec![crate::zone::SettlementTier::Village; 7];
-    tiers[3] = crate::zone::SettlementTier::Town; // C2, the crossroads
-    let mut capitals: Vec<(u32, u32)> = vec![blue_base, red_base];
-    capitals.extend(extra_bases.iter().copied());
-    for &(cx, cy) in &capitals {
-        let id = zone_centers.len() as u8;
-        let mut nearest: Vec<(u64, u8)> = zone_centers
-            .iter()
-            .take(7)
-            .enumerate()
-            .map(|(i, &(zx, zy))| {
-                let dx = zx as i64 - cx as i64;
-                let dy = zy as i64 - cy as i64;
-                ((dx * dx + dy * dy) as u64, i as u8)
-            })
-            .collect();
-        nearest.sort();
-        let adj: Vec<u8> = nearest.iter().take(2).map(|&(_, i)| i).collect();
-        for &n in &adj {
-            connections[n as usize].push(id);
-        }
-        connections.push(adj);
-        zone_centers.push((cx, cy));
-        tiers.push(crate::zone::SettlementTier::City);
+    // Roads over every settlement; the edges ARE the adjacency graph.
+    let road_edges = generate_roads(&mut grid, &zone_centers);
+    let mut connections: Vec<Vec<u8>> = vec![Vec::new(); zone_centers.len()];
+    for &(i, j) in &road_edges {
+        connections[i].push(j as u8);
+        connections[j].push(i as u8);
     }
 
     let mut layout = MapLayout {
         blue_base,
         red_base,
         zone_centers,
-        blue_gather,
-        red_gather,
-        blue_home_zones: vec![0, 1], // B1, B2
-        red_home_zones: vec![5, 6],  // R1, R2
+        blue_gather: blue_base,
+        red_gather: red_base,
+        blue_home_zones: Vec::new(),
+        red_home_zones: Vec::new(),
         connections,
         settlements: Vec::new(),
-        extra_bases,
+        extra_bases: capitals[2..].to_vec(),
     };
 
-    // Generate 2-tile-wide roads connecting bases through capture zones
-    generate_roads(&mut grid, &layout);
-
-    // Villages read painted roads for their entry-aware layout.
     layout.settlements = village::plan_settlements(&mut grid, &layout.zone_centers, &tiers, seed);
 
     (grid, layout)
@@ -528,113 +466,6 @@ fn terrain_damage(grid: &Grid, cx: i32, cy: i32) -> u32 {
         }
     }
     damage
-}
-
-/// Terrain-aware zone placement: nudge each template center within a small
-/// window to minimize bulldozed water/cliff, keeping the layout fair by
-/// applying identical offsets to point-mirrored zone pairs (B1/R2, B2/R1,
-/// C1/C3 mirror about the base midpoint; C2 slides along the axis only).
-fn nudge_zone_centers(
-    grid: &Grid,
-    template: &[(u32, u32); 7],
-    blue_base: (u32, u32),
-    red_base: (u32, u32),
-    w: u32,
-    h: u32,
-) -> Vec<(u32, u32)> {
-    let sum = (
-        (blue_base.0 + red_base.0) as i32,
-        (blue_base.1 + red_base.1) as i32,
-    );
-    let mirror = |p: (i32, i32)| (sum.0 - p.0, sum.1 - p.1);
-    let margin = VILLAGE_CLEAR_RADIUS as i32 + BORDER_SIZE as i32;
-    let in_playable = |p: (i32, i32)| {
-        p.0 >= margin && p.1 >= margin && p.0 < w as i32 - margin && p.1 < h as i32 - margin
-    };
-    let min_zone_dist_sq = {
-        let d = (2 * VILLAGE_CLEAR_RADIUS + 2) as i32;
-        d * d
-    };
-    let min_base_dist_sq = {
-        let d = VILLAGE_CLEAR_RADIUS as i32 + 14 + 2;
-        d * d
-    };
-    let dist_sq = |a: (i32, i32), b: (i32, i32)| {
-        let (dx, dy) = (a.0 - b.0, a.1 - b.1);
-        dx * dx + dy * dy
-    };
-    let bases = [
-        (blue_base.0 as i32, blue_base.1 as i32),
-        (red_base.0 as i32, red_base.1 as i32),
-    ];
-
-    let t = |i: usize| (template[i].0 as i32, template[i].1 as i32);
-    let mut placed: Vec<(i32, i32)> = vec![(0, 0); 7];
-
-    let valid = |cand: (i32, i32), fixed: &[(i32, i32)]| {
-        in_playable(cand)
-            && bases.iter().all(|&b| dist_sq(cand, b) >= min_base_dist_sq)
-            && fixed.iter().all(|&z| dist_sq(cand, z) >= min_zone_dist_sq)
-    };
-
-    // Mirrored pairs, then C2 along the axis.
-    let mut fixed: Vec<(i32, i32)> = Vec::new();
-    for &(a, b) in &[(0usize, 6usize), (1, 5), (2, 4)] {
-        let (ta, tb) = (t(a), t(b));
-        let mut best = (ta, tb);
-        let mut best_score = u32::MAX;
-        for oy in -ZONE_NUDGE_RANGE..=ZONE_NUDGE_RANGE {
-            for ox in -ZONE_NUDGE_RANGE..=ZONE_NUDGE_RANGE {
-                let ca = (ta.0 + ox, ta.1 + oy);
-                let cb = mirror(ca);
-                if !valid(ca, &fixed) || !valid(cb, &fixed) || dist_sq(ca, cb) < min_zone_dist_sq {
-                    continue;
-                }
-                let score = (terrain_damage(grid, ca.0, ca.1) + terrain_damage(grid, cb.0, cb.1))
-                    * 10
-                    + (ox.unsigned_abs() + oy.unsigned_abs());
-                if score < best_score {
-                    best_score = score;
-                    best = (ca, cb);
-                }
-            }
-        }
-        placed[a] = best.0;
-        placed[b] = best.1;
-        fixed.push(best.0);
-        fixed.push(best.1);
-    }
-
-    // C2: slide along the base axis only, preferring the template midpoint.
-    let tc = t(3);
-    let axis = (
-        red_base.0 as f32 - blue_base.0 as f32,
-        red_base.1 as f32 - blue_base.1 as f32,
-    );
-    let axis_len = (axis.0 * axis.0 + axis.1 * axis.1).sqrt().max(1.0);
-    let (ax, ay) = (axis.0 / axis_len, axis.1 / axis_len);
-    let mut best = tc;
-    let mut best_score = u32::MAX;
-    for k in -ZONE_NUDGE_RANGE..=ZONE_NUDGE_RANGE {
-        let cand = (
-            tc.0 + (ax * k as f32).round() as i32,
-            tc.1 + (ay * k as f32).round() as i32,
-        );
-        if !valid(cand, &fixed) {
-            continue;
-        }
-        let score = terrain_damage(grid, cand.0, cand.1) * 10 + k.unsigned_abs();
-        if score < best_score {
-            best_score = score;
-            best = cand;
-        }
-    }
-    placed[3] = best;
-
-    placed
-        .into_iter()
-        .map(|(x, y)| (x.max(0) as u32, y.max(0) as u32))
-        .collect()
 }
 
 /// Clear a circular area to grass.
@@ -734,20 +565,14 @@ fn count_neighbors(grid: &[bool], w: u32, h: u32, x: u32, y: u32) -> u32 {
     count
 }
 
-/// Generate 2-tile-wide roads connecting objectives via a Minimum Spanning Tree.
-/// Uses Kruskal's algorithm (sorted edges + union-find) to produce a plausible
-/// tree-shaped road network, then routes each MST edge through A*.
-fn generate_roads(grid: &mut Grid, layout: &MapLayout) {
-    // Collect all objectives (bases + zone centers)
-    let mut nodes: Vec<(u32, u32)> = Vec::with_capacity(layout.zone_centers.len() + 4);
-    nodes.push(layout.blue_base);
-    nodes.extend(layout.zone_centers.iter().copied());
-    nodes.push(layout.red_base);
-    nodes.extend(layout.extra_bases.iter().copied());
-
+/// Generate 2-tile-wide roads connecting all settlements via a Minimum
+/// Spanning Tree plus loop edges (every node reaches degree >= 2 where
+/// possible), routed through A*. Returns the edge list — the settlement
+/// adjacency graph.
+fn generate_roads(grid: &mut Grid, nodes: &[(u32, u32)]) -> Vec<(usize, usize)> {
     let n = nodes.len();
     if n < 2 {
-        return;
+        return Vec::new();
     }
 
     // All candidate edges sorted by Euclidean distance
@@ -804,7 +629,7 @@ fn generate_roads(grid: &mut Grid, layout: &MapLayout) {
     }
 
     // Route each edge via A* and paint the road
-    for (i, j) in mst_edges {
+    for &(i, j) in &mst_edges {
         if let Some(path) = road_astar(grid, nodes[i], nodes[j]) {
             paint_road_path(grid, &path);
         }
@@ -851,6 +676,8 @@ fn generate_roads(grid: &mut Grid, layout: &MapLayout) {
         grid.set_decoration(x, y, None);
         grid.set_elevation(x, y, 0);
     }
+
+    mst_edges
 }
 
 /// A* pathfinding for road generation. Prefers existing roads (zero extra cost)
@@ -1002,34 +829,26 @@ mod tests {
     fn zone_spacing_and_bounds_invariants() {
         for seed in [42, 77, 123, 777, 1234, 5555, 9999] {
             let (_, layout) = generate_battlefield(seed, PLAYABLE_SIZE);
-            // First 7 are field zones; capitals (city tier) follow.
-            let zones = &layout.zone_centers[..7];
-            assert_eq!(layout.zone_centers.len(), 9);
-            let margin = VILLAGE_CLEAR_RADIUS + BORDER_SIZE;
-            let min_zone = (2 * VILLAGE_CLEAR_RADIUS + 2).pow(2) as i64;
-            let min_base = (VILLAGE_CLEAR_RADIUS + 14 + 2).pow(2) as i64;
-            let d2 = |a: (u32, u32), b: (u32, u32)| {
-                let (dx, dy) = (a.0 as i64 - b.0 as i64, a.1 as i64 - b.1 as i64);
-                dx * dx + dy * dy
-            };
+            let zones = &layout.zone_centers;
+            let total = ((PLAYABLE_SIZE as usize * PLAYABLE_SIZE as usize) / 3500).max(7);
+            let mut n_field = (total - 2).clamp(5, 24);
+            n_field += n_field % 2; // mirrored 1v1 pairs
+            assert_eq!(zones.len(), 2 + n_field, "seed {seed}: settlement count");
+            let margin = BORDER_SIZE; // every tier keeps at least this
             for (i, &z) in zones.iter().enumerate() {
                 assert!(
                     z.0 >= margin
                         && z.1 >= margin
                         && z.0 < GRID_SIZE - margin
                         && z.1 < GRID_SIZE - margin,
-                    "seed {seed}: zone {i} at {z:?} too close to map edge"
+                    "seed {seed}: settlement {i} at {z:?} too close to map edge"
                 );
-                for &base in &[layout.blue_base, layout.red_base] {
-                    assert!(
-                        d2(z, base) >= min_base,
-                        "seed {seed}: zone {i} at {z:?} overlaps base at {base:?}"
-                    );
-                }
                 for (j, &other) in zones.iter().enumerate().skip(i + 1) {
+                    let dx = z.0 as i64 - other.0 as i64;
+                    let dy = z.1 as i64 - other.1 as i64;
                     assert!(
-                        d2(z, other) >= min_zone,
-                        "seed {seed}: zones {i} and {j} too close ({z:?} vs {other:?})"
+                        dx * dx + dy * dy >= 26 * 26,
+                        "seed {seed}: settlements {i} and {j} too close ({z:?} vs {other:?})"
                     );
                 }
             }
@@ -1087,20 +906,23 @@ mod tests {
 
     #[test]
     fn zone_placement_is_mirror_fair() {
-        for seed in [42, 77, 123, 777, 1234, 5555, 9999] {
+        // 1v1 countryside is placed in mirrored pairs about the capital
+        // midpoint: every field settlement's mirror is also a settlement.
+        for seed in [42, 777, 9999] {
             let (_, layout) = generate_battlefield(seed, PLAYABLE_SIZE);
-            let z = &layout.zone_centers;
-            let d = |a: (u32, u32), b: (u32, u32)| {
-                let (dx, dy) = (a.0 as f64 - b.0 as f64, a.1 as f64 - b.1 as f64);
-                (dx * dx + dy * dy).sqrt()
-            };
-            // Mirrored pairs must sit at matching distances from their bases.
-            for &(bi, ri) in &[(0usize, 6usize), (1, 5), (2, 4)] {
-                let db = d(z[bi], layout.blue_base);
-                let dr = d(z[ri], layout.red_base);
+            let sum = (
+                (layout.blue_base.0 + layout.red_base.0) as i64,
+                (layout.blue_base.1 + layout.red_base.1) as i64,
+            );
+            let field = &layout.zone_centers[2..];
+            for &(x, y) in field {
+                let m = (sum.0 - x as i64, sum.1 - y as i64);
+                let found = field
+                    .iter()
+                    .any(|&(fx, fy)| (fx as i64 - m.0).abs() <= 1 && (fy as i64 - m.1).abs() <= 1);
                 assert!(
-                    (db - dr).abs() <= 2.0,
-                    "seed {seed}: zone {bi} is {db:.1} from Blue but mirror {ri} is {dr:.1} from Red"
+                    found,
+                    "seed {seed}: settlement ({x},{y}) has no mirror at {m:?}"
                 );
             }
         }
@@ -1354,61 +1176,36 @@ mod tests {
     }
 
     #[test]
-    fn bsp_produces_leaves() {
-        let mut rng = Rng::new(42);
-        let rect = Rect {
-            x: 16,
-            y: 16,
-            w: 128,
-            h: 128,
-        };
-        let leaves = bsp_split(&mut rng, rect, 0, 4, 20);
-        assert!(
-            leaves.len() >= 4,
-            "BSP should produce at least 4 leaves, got {}",
-            leaves.len()
-        );
-        assert!(
-            leaves.len() <= 16,
-            "BSP should produce at most 16 leaves, got {}",
-            leaves.len()
-        );
+    fn capitals_far_apart() {
+        for seed in [42, 777, 9999] {
+            let (_, layout) = generate_battlefield(seed, PLAYABLE_SIZE);
+            let dx = layout.blue_base.0 as f32 - layout.red_base.0 as f32;
+            let dy = layout.blue_base.1 as f32 - layout.red_base.1 as f32;
+            let dist = (dx * dx + dy * dy).sqrt();
+            assert!(
+                dist >= PLAYABLE_SIZE as f32 * 0.55,
+                "seed {seed}: capitals only {dist:.0} tiles apart"
+            );
+        }
     }
 
     #[test]
-    fn bsp_bases_at_opposing_corners() {
+    fn network_adjacency_matches_roads() {
         let (_, layout) = generate_battlefield(42, PLAYABLE_SIZE);
-        let b = BORDER_SIZE;
-        let p = PLAYABLE_SIZE;
-        let mid = b + p / 2;
-        // Blue base should be in top-left quadrant
-        assert!(
-            layout.blue_base.0 < mid,
-            "Blue base x={} should be < {mid}",
-            layout.blue_base.0
-        );
-        assert!(
-            layout.blue_base.1 < mid,
-            "Blue base y={} should be < {mid}",
-            layout.blue_base.1
-        );
-        // Red base should be in bottom-right quadrant
-        assert!(
-            layout.red_base.0 > mid,
-            "Red base x={} should be > {mid}",
-            layout.red_base.0
-        );
-        assert!(
-            layout.red_base.1 > mid,
-            "Red base y={} should be > {mid}",
-            layout.red_base.1
-        );
-    }
-
-    #[test]
-    fn layout_has_seven_zones() {
-        let (_, layout) = generate_battlefield(42, PLAYABLE_SIZE);
-        assert_eq!(layout.zone_centers.len(), 9, "7 field zones + 2 capitals");
+        assert_eq!(layout.connections.len(), layout.zone_centers.len());
+        // Every settlement is on the road network (degree >= 1, mostly 2+).
+        for (i, adj) in layout.connections.iter().enumerate() {
+            assert!(
+                !adj.is_empty(),
+                "settlement {i} is not connected to the road network"
+            );
+            for &n in adj {
+                assert!(
+                    layout.connections[n as usize].contains(&(i as u8)),
+                    "adjacency not symmetric: {i} -> {n}"
+                );
+            }
+        }
     }
 
     #[test]
