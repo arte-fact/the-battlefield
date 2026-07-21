@@ -1,4 +1,4 @@
-# Garrison Improvements & Conscript Mode — Spec
+# Garrison Improvements & Free Mode — Spec
 
 Three features: garrisons that feed the retinue, garrison monks that
 earn their keep, and a new default game mode where every run begins as
@@ -9,8 +9,12 @@ Decisions taken with the designer (2026-07-21):
 - Garrison soldiers are recruitable **anytime**; the village refills.
 - Conversion happens at **army-owned production buildings only**.
 - The neutral pawn is **killable by stray hits** (never targeted).
-- The villager origin is a **new game mode**, the default one, beside
-  Arcade and Skirmish. Arcade keeps the classic Blue-soldier start.
+- The villager origin powers **FREE mode** — the new default mode
+  beside Arcade and Skirmish: the full-featured game with **no timed
+  objectives**. Arcade keeps the classic Blue-soldier start and the
+  ladder.
+- Skirmish gains a **START AS** row: begin as any army color (soldier
+  at that faction's capital) or NEUTRAL (villager pawn origin).
 
 ---
 
@@ -87,7 +91,7 @@ the stationed monk while no enemy is near; monk returns to its hold
 point when everyone is healthy; sleeping zones with no wounded stay
 asleep.
 
-## 3. Conscript mode — start as a neutral pawn
+## 3. Free mode — start as a neutral pawn
 
 **The narrative:** you are nobody. A villager with a tool, in a
 countryside being torn apart by up to four armies. Walk the roads, see
@@ -96,18 +100,35 @@ barracks, you stop being a bystander.
 
 ### Mode structure
 
-- A **new game mode** (working name: **CONSCRIPT** — alternatives:
-  VILLAGER, LEVY) added to `GameMode`, shown as the **first, default
-  button** on the main menu, above ARCADE and SKIRMISH.
-- Arcade is unchanged (Blue warrior at the capital, escalation ladder).
-  Skirmish is unchanged. Conscript uses AUTO map sizing with a fixed
-  1v1-strength battle at first; an enemies row can come later if the
-  mode sticks.
-- Faction count on the map: **2-4 armies, all AI**, fighting normally
-  from the first tick. Until conversion there is no "player faction" —
-  every army is autonomous (the Blue-is-player special casing must be
-  behind a `player_faction: Option<Faction>` instead of a hardcoded
-  `Faction::Blue`).
+- **FREE** joins `GameMode` as the **first, default button** on the
+  main menu, above ARCADE and SKIRMISH.
+- Free mode is the **full-featured game with no timed objectives**:
+  the domination hold timer, sudden death, and leader-deficit bleed
+  are all disabled. The war ends only by real events — annihilation /
+  last army standing, or the player's death. Stalemates are allowed;
+  it is the sandbox where you live in the world.
+- Everything else is on: villages, garrisons, economy, capturable
+  capitals, authority, retinue, fog.
+- Free mode uses AUTO map sizing with **four armies** (1v3-strength
+  map), so the pawn has real factions to choose between. No setup
+  screen — one press and you are in the world; Skirmish is where you
+  configure.
+- All armies are AI from the first tick. Until conversion there is no
+  "player faction" — every army is autonomous (the Blue-is-player
+  special casing must be behind a `player_faction: Option<Faction>`
+  instead of a hardcoded `Faction::Blue`).
+
+### Skirmish: START AS row
+
+Skirmish gains a **START AS** row: `NEUTRAL / BLUE / RED / YELLOW /
+PURPLE` (colors above the enemy count are hidden).
+
+- A color: classic soldier start — you spawn as that faction's Warrior
+  at its capital, full kit from the first tick. Blue remains the
+  default, so existing skirmish behavior is one row-cycle away.
+- NEUTRAL: the villager-pawn origin below, inside skirmish's
+  configured battle (timed objectives stay on in skirmish — the rows
+  already control hold time and bleed).
 
 ### The pawn phase
 
@@ -150,15 +171,16 @@ barracks, you stop being a bystander.
 
 ### Scoring & end conditions
 
-- Conscript runs use the existing score flow (kills, zone caps, peak
-  authority, survival seconds, victory bonus) on the shared top-10
-  board. Multiplier: number of enemy armies **from the joined
-  faction's perspective** (armies − 1); dying unconverted scores
-  survival seconds only, ×1.
-- Run ends: pawn death, converted-player death, joined faction wins or
-  is defeated — same screens as today. If the battle ends while the
-  player is still an unconverted pawn (an army dominates the map), the
-  run ends as a loss-without-defeat: "the war ended without you".
+- **Free mode is unscored** — Arcade stays the scored ladder. Free
+  runs end on the victory/defeat/death screens without the score
+  entry flow.
+- Run ends: pawn death, converted-player death, or the joined faction
+  winning by last-army-standing / being eliminated. With no timed
+  objectives, "the war ended without you" can only happen through
+  full annihilation among the AIs — allowed, and the run ends on the
+  defeat screen with that line.
+- Skirmish NEUTRAL starts keep skirmish's usual end conditions and
+  result screens (skirmish is already unscored).
 
 ### Technical notes
 
@@ -172,8 +194,11 @@ barracks, you stop being a bystander.
   `Pawn` (it needs input, FOV and death handling).
 - Conversion swaps `kind`, `faction`, stats and sprite on the existing
   player unit — no respawn, position preserved.
-- Menu: new default button + `GameScreen` flow unchanged (Loading →
-  Playing). Mode stored in `UiState.mode` next to Arcade/Skirmish.
+- Menu: FREE as the new default button + `GameScreen` flow unchanged
+  (Loading → Playing). Mode stored in `UiState.mode`; free-mode setup
+  is `enemy_count = 3`, AUTO size, timed objectives off
+  (`victory_hold_time` ignored, sudden death and bleed disabled via
+  the mode, not via config edits — skirmish rows keep their meaning).
 
 ## Suggested implementation order
 
@@ -182,18 +207,22 @@ barracks, you stop being a bystander.
 2. **Garrison monk patrol/heal** + sleep exception + tests.
 3. **`player_faction` refactor** — mechanical sweep replacing hardcoded
    Blue-as-player assumptions; probes must stay byte-identical.
-4. **Conscript mode**: menu entry, pawn spawn/phase, stray-hit damage,
-   conversion, HUD states, end conditions.
-5. **Verify**: probes (all modes), browser run of a full conscript
+4. **Skirmish START AS row** (colors first — small once
+   `player_faction` exists; NEUTRAL value lands with step 5).
+5. **Free mode**: menu entry, untimed rules, pawn spawn/phase,
+   stray-hit damage, conversion, HUD states, end conditions; the same
+   pawn origin wired to skirmish's NEUTRAL.
+6. **Verify**: probes (all modes), browser run of a full free-mode
    loop (spawn → walk → enlist with each of the 3 building kinds →
    fight), GDD section, screenshots.
 
 ## Open questions (deferred, defaults chosen)
 
-- Mode name: **CONSCRIPT** used throughout; rename is one string.
-- Enemies row for conscript setup: not in v1 (AUTO 2-army map; revisit
-  after playtest — the mode shines with 3-4 armies to choose from).
 - Should stationed (long-press) soldiers also be auto-recruitable now
   that garrisons are? Spec says yes — one rule for all garrisons.
 - Pawn walking speed: normal pawn speed vs unit speed (v1: unit walk
   speed, so the opening isn't slow).
+- Free mode is unscored (Arcade owns the scoreboard); revisit if free
+  runs want bragging rights.
+- "The player is Blue" leaves the HUD too: minimap/unit visibility
+  rules ("hide enemies outside FOV") key on `player_faction`.
