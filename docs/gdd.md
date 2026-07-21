@@ -49,8 +49,9 @@ You start unknown. Kills, assists, and zone captures witnessed by nearby allies 
 
 ### Game Modes
 
-- **Arcade** -- the scored mode. An **escalation ladder** starts at 1v1; each victory raises the enemy count up to 1v3, any defeat resets it to 1v1. The ladder level is persisted with the high scores and shown on the main menu; run scores multiply by the enemy count. Top-10 scoreboard with initials entry.
-- **Skirmish** -- a configurable single battle: map seed, enemy count (1-3), map size, manpower pools, army cap, victory hold time, zone bleed, and starting authority.
+- **Free Play** (default) -- the full game with **no timed objectives**: domination timer, sudden death and leader bleed are off, and the war ends only by annihilation or your death. Every run begins as a **neutral villager** (5 HP) at the countryside settlement farthest from the capitals. Soldiers ignore the bystander, but stray cone swings and arrows still hurt -- crossing a battle line is a choice. Walking into any army-owned production building **enlists you on the spot**: you become the unit kind it trains, in its owner's color, and the full player kit (attack, orders, authority, retinue) unlocks. Neutral villages' buildings serve no lord. Unscored.
+- **Arcade** -- the scored mode, classic Blue-soldier start. An **escalation ladder** starts at 1v1; each victory raises the enemy count up to 1v3, any defeat resets it to 1v1. The ladder level is persisted with the high scores and shown on the main menu; run scores multiply by the enemy count. Top-10 scoreboard with initials entry.
+- **Skirmish** -- a configurable single battle: map seed, enemy count (1-3), map size, **starting side** (any army color, or NEUTRAL for the villager origin), manpower pools, army cap, victory hold time, zone bleed, and starting authority.
 
 ### Screens
 
@@ -113,7 +114,7 @@ Every settlement below City tier is a working **village** with one worked resour
 
 Each village has houses (one peon each, count by tier), its production buildings, and the defense tower at its heart. Buildings ring the **outside** of the capture circle, keeping the fighting ground open. Buildings and peons are **Black (neutral) until captured**, then recolor to the owner's faction.
 
-**Village economy and garrisons:** each peon delivery banks 1 stock (cap 5). Settlements spend stock to raise a small **standing garrison** (cap by tier, one soldier every ~6s): neutral settlements field **Black villager militia** hostile to every army -- taking a village means beating its defenders -- and a captured settlement keeps producing the same garrison in its **owner's color**. Surviving neutral militia pledges to the captor; faction soldiers never defect. Garrison units carry the **defend-zone stance**: they hold scattered points in the circle, engage intruders within a short leash, and return home. They cost stock only (no manpower) and never join the field army. Peons **flee combat**, so scattering a village's workers stalls its garrison without capturing it. Militia contests with swords, not the circle: it does not block capture progress. Garrisons of quiet settlements **sleep** (skip their AI entirely) until a hostile enters the settlement's influence radius, so live-unit cost tracks active fronts rather than map size.
+**Village economy and garrisons:** each peon delivery banks 1 stock (cap 5). Settlements spend stock to raise a small **standing garrison** (garrisons of your color are ordinary recruits: walk by with authority and they join your retinue, and the village spends stock to replace them -- draining a garrison leaves it exposed; stationed monks patrol their zone healing any wounded friendly, making pasture villages the road network's healing stops) (cap by tier, one soldier every ~6s): neutral settlements field **Black villager militia** hostile to every army -- taking a village means beating its defenders -- and a captured settlement keeps producing the same garrison in its **owner's color**. Surviving neutral militia pledges to the captor; faction soldiers never defect. Garrison units carry the **defend-zone stance**: they hold scattered points in the circle, engage intruders within a short leash, and return home. They cost stock only (no manpower) and never join the field army. Peons **flee combat**, so scattering a village's workers stalls its garrison without capturing it. Militia contests with swords, not the circle: it does not block capture progress. Garrisons of quiet settlements **sleep** (skip their AI entirely) until a hostile enters the settlement's influence radius, so live-unit cost tracks active fronts rather than map size.
 
 **Majority capture:** capture is multi-faction -- a zone tracks every army inside it, and progress moves at the rate of the *strength advantage* of the strongest faction over all others combined (√advantage). Equal forces freeze the zone; a minority garrison slows an assault but cannot hold forever -- overwhelming force completes the capture even with defenders still alive. Attacking a defended point is a readable numbers race, not a binary stall.
 
@@ -143,7 +144,7 @@ Stats live in `GameConfig` and can be rebalanced at runtime. Damage is `max(1, A
 
 ## The Player
 
-You play a Blue Warrior in real time:
+You play a single soldier in real time -- a Blue Warrior in Arcade, your chosen side in Skirmish, or whoever you enlist as in Free Play:
 
 - **Movement** -- continuous 360° movement via virtual joystick (touch), WASD/arrows (keyboard), or gamepad stick.
 - **Attack** -- an explicit attack action (button / Space / gamepad) that hits all enemies in a 180° cone in your facing direction, with knockback. No auto-attack. **You fight exactly like other soldiers**: AI melee units use the same cone swing, knockback, and reach (1.5 tiles), at the same rate.
