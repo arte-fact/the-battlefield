@@ -10,7 +10,6 @@ use web_time::{Instant, SystemTime, UNIX_EPOCH};
 use battlefield_core::game::Game;
 use battlefield_core::grid::TILE_SIZE;
 use battlefield_core::ui::{self, GameScreen};
-use battlefield_core::unit::Faction;
 use winit::keyboard::KeyCode;
 
 use crate::gpu::GpuContext;
@@ -367,7 +366,7 @@ impl GameLoop {
 
                 // Check for game end
                 if let Some(winner) = self.game.winner {
-                    if winner == Faction::Blue {
+                    if winner == self.game.player_army() {
                         self.screen = self.end_screen(true, GameScreen::GameWon);
                     } else {
                         self.screen = self.end_screen(false, GameScreen::GameLost);

@@ -153,6 +153,9 @@ pub struct Game {
     sudden_death_elapsed: f32,
     /// In-flight budgeted map generation (loading screen).
     pending_setup: Option<mapgen::MapGen>,
+    /// The army the player fights for. None while unaligned (free-mode
+    /// pawn phase); every player-side rule reads `player_army()`.
+    pub player_faction: Option<Faction>,
     /// Per-frame A* pathfind budget (reset each tick, decremented per find_path call).
     pub(crate) astar_budget: u8,
     /// Outcome of the most recent A* attempt: Some(found), None = deferred.
@@ -183,6 +186,13 @@ pub struct Game {
 
 impl Game {
     /// Army factions active in this battle: Blue + enemy_count rivals.
+    /// The player's army for player-side rules (authority witnesses,
+    /// FOV, scoring, win/lose). Blue while unaligned so legacy modes
+    /// and probes behave identically.
+    pub fn player_army(&self) -> Faction {
+        self.player_faction.unwrap_or(Faction::Blue)
+    }
+
     pub fn active_factions(&self) -> &'static [Faction] {
         let n = (self.config.enemy_count.clamp(1, 3) as usize) + 1;
         &crate::unit::ARMY_FACTIONS[..n]
@@ -232,6 +242,7 @@ impl Game {
             recruit_timer: 0.0,
             sudden_death_elapsed: 0.0,
             pending_setup: None,
+            player_faction: Some(Faction::Blue),
             astar_budget: 0,
             last_path_result: None,
             ai_rotation: 0,

@@ -347,7 +347,7 @@ impl GameLoop {
 
                 // Check for game end
                 if let Some(winner) = self.game.winner {
-                    if winner == Faction::Blue {
+                    if winner == self.game.player_army() {
                         self.screen = self.end_screen(true, GameScreen::GameWon);
                     } else {
                         self.screen = self.end_screen(false, GameScreen::GameLost);

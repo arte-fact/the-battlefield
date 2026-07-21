@@ -117,13 +117,14 @@ impl Game {
             if let ZoneState::Controlled(f) = after {
                 self.convert_garrison(zi, f);
             }
-            if before != ZoneState::Controlled(Faction::Blue)
-                && after == ZoneState::Controlled(Faction::Blue)
+            let army = self.player_army();
+            if before != ZoneState::Controlled(army)
+                && after == ZoneState::Controlled(army)
             {
                 self.on_zone_captured(in_fov, zx, zy);
             }
-            if before == ZoneState::Controlled(Faction::Blue)
-                && after != ZoneState::Controlled(Faction::Blue)
+            if before == ZoneState::Controlled(army)
+                && after != ZoneState::Controlled(army)
             {
                 self.on_zone_lost(in_fov, zx, zy);
             }
@@ -224,7 +225,7 @@ impl Game {
         if threshold == 0 {
             return false;
         }
-        let fi = if faction == Faction::Blue { 0 } else { 1 };
+        let fi = faction.army_idx().unwrap_or(0);
         if self.manpower[fi] <= 0.0 {
             return false;
         }
@@ -253,7 +254,7 @@ impl Game {
             .collect();
         if active.len() > 1 && standing.len() == 1 {
             self.winner = Some(standing[0]);
-        } else if active.len() > 1 && !standing.contains(&Faction::Blue) {
+        } else if active.len() > 1 && !standing.contains(&self.player_army()) {
             // The player's faction is annihilated while rivals still fight:
             // the run ends now — credit the current settlement leader.
             let leader = standing
@@ -777,8 +778,14 @@ impl Game {
             }
         }
 
-        // Spawn player at base center
-        self.spawn_unit(UnitKind::Warrior, Faction::Blue, blue_cx, blue_cy, true);
+        // Spawn player at their army's capital center
+        let army = self.player_army();
+        let (pcx, pcy) = if army == Faction::Blue {
+            (blue_cx, blue_cy)
+        } else {
+            base_pos[army.idx()]
+        };
+        self.spawn_unit(UnitKind::Warrior, army, pcx, pcy, true);
 
         // Spawn starting armies around each base — same composition as a wave, no rally hold
         for &(faction, base_cx, base_cy) in active

@@ -169,7 +169,7 @@ impl Game {
         let pf = self
             .player_unit()
             .map(|p| p.faction)
-            .unwrap_or(Faction::Blue);
+            .unwrap_or_else(|| self.player_army());
         self.units
             .iter()
             .filter(|u| {

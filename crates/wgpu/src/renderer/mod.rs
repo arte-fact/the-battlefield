@@ -1503,7 +1503,7 @@ fn draw_minimap(
             continue;
         }
         let (ugx, ugy) = grid::world_to_grid(unit.x, unit.y);
-        if unit.faction != Faction::Blue {
+        if unit.faction != game.player_army() {
             let idx = (ugy as u32 * game.grid.width + ugx as u32) as usize;
             if idx >= game.visible.len() || !game.visible[idx] {
                 continue;

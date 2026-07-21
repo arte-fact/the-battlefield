@@ -97,7 +97,7 @@ impl Game {
                     } else if self
                         .units
                         .iter()
-                        .any(|u| u.id == *attacker_id && u.faction == Faction::Blue)
+                        .any(|u| u.id == *attacker_id && u.faction == self.player_army())
                         && self.is_unit_in_fov(*defender_id)
                     {
                         deltas.push((self.config.rep_ally_kill, *defender_id));
@@ -139,7 +139,7 @@ impl Game {
             if self
                 .units
                 .iter()
-                .any(|u| u.id == defender_id && u.faction == Faction::Blue && !u.is_player)
+                .any(|u| u.id == defender_id && u.faction == self.player_army() && !u.is_player)
                 && self.is_unit_in_fov(defender_id)
             {
                 deltas.push((self.config.rep_ally_death, defender_id));
