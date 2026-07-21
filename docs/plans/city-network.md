@@ -205,7 +205,7 @@ gates below.
   towns/villages, MST + ~20% extra road edges, adjacency from road
   edges; invariants generalized (spacing, fairness, livability,
   reachability).
-- [ ] 6. Roads as highways: +25% speed on Road tiles; road-following
+- [x] 6. Roads as highways: +25% speed on Road tiles; road-following
   steering polish so columns look right.
 - [ ] 7. Hierarchical navigation: shared (deduped) then bounded local
   flow fields (~32-tile influence), settlement-graph A* +

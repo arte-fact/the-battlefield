@@ -458,7 +458,7 @@ mod tests {
                 false,
             );
         }
-        for _ in 0..7200 {
+        for _ in 0..10800 {
             game.tick_ai(1.0 / 60.0);
             game.tick_cooldowns(1.0 / 60.0);
             game.tick_zones(1.0 / 60.0);

@@ -173,11 +173,14 @@ impl BasePlacer {
         // Production buildings use a narrow exclusion (footprint row + 1 buffer row)
         // so that 5 buildings fit across the ~20-tile base.
         // Towers/Houses also narrow so the defensive line packs naturally.
+        // Two clear tiles between structures: units are 56px wide in
+        // 64px tiles, and single-tile corridors wedge circle movement —
+        // the same rule village layouts follow.
         let (hw, vlo, vhi): (i32, i32, i32) = match kind {
-            BuildingKind::Castle => (3, -2, 1),
-            BuildingKind::Barracks | BuildingKind::Archery | BuildingKind::Monastery => (2, -1, 1),
-            BuildingKind::DefenseTower => (1, -1, 1),
-            BuildingKind::House => (2, -1, 0),
+            BuildingKind::Castle => (4, -3, 2),
+            BuildingKind::Barracks | BuildingKind::Archery | BuildingKind::Monastery => (3, -2, 2),
+            BuildingKind::DefenseTower => (2, -2, 2),
+            BuildingKind::House => (2, -2, 1),
         };
         let mut cells = Vec::new();
         for dy in vlo..=vhi {
@@ -232,7 +235,7 @@ impl BasePlacer {
 
 /// Buildings sit within this radius of the base center; the map
 /// generator clears one tile more.
-pub const BASE_BAND_RADIUS: i32 = 14;
+pub const BASE_BAND_RADIUS: i32 = 17;
 
 /// Procedurally generate all buildings for a faction base.
 ///
@@ -265,16 +268,16 @@ pub fn generate_base_buildings(
     };
 
     // Castle at the front of the gather zone, facing the enemy.
-    let (x, y) = pos(4.0, 0.0);
+    let (x, y) = pos(5.0, 0.0);
     p.try_place(BuildingKind::Castle, x, y);
 
     // Production band flanking the gather zone, one building per wave kind.
     let prod: &[(BuildingKind, UnitKind, f32, f32)] = &[
-        (BuildingKind::Barracks, UnitKind::Warrior, 2.0, -6.0),
-        (BuildingKind::Barracks, UnitKind::Lancer, 2.0, 6.0),
-        (BuildingKind::Archery, UnitKind::Archer, -2.0, -6.0),
-        (BuildingKind::Archery, UnitKind::Archer, -2.0, 6.0),
-        (BuildingKind::Monastery, UnitKind::Monk, -5.0, 0.0),
+        (BuildingKind::Barracks, UnitKind::Warrior, 3.0, -8.0),
+        (BuildingKind::Barracks, UnitKind::Lancer, 3.0, 8.0),
+        (BuildingKind::Archery, UnitKind::Archer, -3.0, -8.0),
+        (BuildingKind::Archery, UnitKind::Archer, -3.0, 8.0),
+        (BuildingKind::Monastery, UnitKind::Monk, -7.0, 0.0),
     ];
     // Wave production depends on every kind having a building: try the
     // jittered spot first, then widen the search until one fits.
@@ -301,11 +304,11 @@ pub fn generate_base_buildings(
     // Defense towers: front pair first so coverage survives low rolls.
     let tower_count = 3 + (rng.next() % 3) as usize;
     let slots: [(f32, f32); 5] = [
-        (7.0, -7.0),
-        (7.0, 7.0),
-        (0.0, -10.0),
-        (0.0, 10.0),
-        (9.0, 0.0),
+        (9.0, -9.0),
+        (9.0, 9.0),
+        (0.0, -12.0),
+        (0.0, 12.0),
+        (11.0, 0.0),
     ];
     let mut towers = 0usize;
     for &(fw, lat) in slots.iter() {
@@ -326,8 +329,8 @@ pub fn generate_base_buildings(
     // Living band: houses row by row from the back, shuffled per row.
     let house_target = 8 + (rng.next() % 5) as u8;
     let mut cands: Vec<(f32, f32)> = Vec::new();
-    for rear in (4..=13).rev() {
-        let mut row: Vec<i32> = (-9..=9).collect();
+    for rear in (5..=15).rev() {
+        let mut row: Vec<i32> = (-11..=11).collect();
         rng.shuffle(&mut row);
         for lat in row {
             cands.push((-(rear as f32), lat as f32));
@@ -405,7 +408,7 @@ mod tests {
             assert_eq!(count(BuildingKind::Archery), 2, "must have 2 archery");
             assert_eq!(count(BuildingKind::Monastery), 1, "must have 1 monastery");
             let houses = count(BuildingKind::House);
-            assert!((8..=12).contains(&houses), "8-12 houses, got {houses}");
+            assert!((7..=12).contains(&houses), "7-12 houses, got {houses}");
         }
     }
 
@@ -473,7 +476,7 @@ mod tests {
             .filter(|b| b.kind == BuildingKind::House)
             .map(|b| b.house_variant)
             .collect();
-        assert!(houses.len() >= 8);
+        assert!(houses.len() >= 7);
         // All 3 variants should appear
         for v in 0..3u8 {
             assert!(

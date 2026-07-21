@@ -15,7 +15,10 @@ impl TileKind {
     pub fn movement_cost(self) -> Option<u32> {
         match self {
             TileKind::Grass => Some(5),
-            TileKind::Road => Some(4), // slightly cheaper than grass
+            // Highways: strongly preferred by flow fields and A*, so
+            // armies column-march between settlements (and move 25%
+            // faster on them — see `Grid::speed_factor_at`).
+            TileKind::Road => Some(3),
             TileKind::Forest => Some(10),
             TileKind::Water => None, // impassable
             TileKind::Rock => Some(5),
@@ -559,7 +562,7 @@ mod tests {
         assert_eq!(TileKind::Forest.movement_cost(), Some(10));
         assert_eq!(TileKind::Water.movement_cost(), None);
         assert_eq!(TileKind::Rock.movement_cost(), Some(5));
-        assert_eq!(TileKind::Road.movement_cost(), Some(4));
+        assert_eq!(TileKind::Road.movement_cost(), Some(3));
     }
 
     #[test]
@@ -752,6 +755,20 @@ mod tests {
         assert!((grid.speed_factor_at(wx, wy) - 1.0).abs() < f32::EPSILON);
         grid.set(5, 5, TileKind::Forest);
         assert!((grid.speed_factor_at(wx, wy) - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn roads_are_highways() {
+        let mut grid = Grid::new_grass(16, 16);
+        grid.set(5, 5, TileKind::Road);
+        let (wx, wy) = grid_to_world(5, 5);
+        // 25% faster to walk, markedly cheaper to plan through.
+        assert!((grid.speed_factor_at(wx, wy) - 1.25).abs() < f32::EPSILON);
+        assert!(
+            TileKind::Road.movement_cost().unwrap() * 3
+                <= TileKind::Grass.movement_cost().unwrap() * 2,
+            "roads must be at least a third cheaper for pathfinding"
+        );
     }
 
     #[test]
