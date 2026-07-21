@@ -114,12 +114,18 @@ fn start_battle(
     if ui.mode == GameMode::Skirmish {
         ui.skirmish.apply(&mut game.config);
     }
-    game.setup_demo_battle_with_seed(seed);
+    game.begin_async_setup(seed);
+    *screen = GameScreen::Loading;
+    *player_was_alive = true;
+}
+
+/// Pump budgeted setup from the Loading screen. Hosts call `Game::setup_step`
+/// in a frame-time loop, then this once it reports completion.
+pub fn finish_loading(game: &mut Game, screen: &mut GameScreen, ui: &UiState) {
     if ui.mode == GameMode::Skirmish {
         ui.skirmish.apply_to_game(game);
     }
     *screen = GameScreen::Playing;
-    *player_was_alive = true;
 }
 
 /// Which screen the game is currently showing.
@@ -127,6 +133,7 @@ fn start_battle(
 pub enum GameScreen {
     MainMenu,
     SkirmishSetup,
+    Loading,
     Playing,
     PlayerDeath,
     GameWon,
@@ -603,6 +610,44 @@ pub struct UiState {
     pub scoreboard: ScoreBoard,
     pub initials: InitialsEntry,
     pub pending_score: Option<RunScore>,
+    /// Mirror of `Game::setup_progress`, refreshed by hosts each Loading frame.
+    pub loading_progress: f32,
+}
+
+/// Loading screen: the title ribbon doubles as the progress bar.
+pub fn loading_layout(progress: f32) -> ScreenLayout {
+    let p = progress.clamp(0.0, 1.0) as f64;
+    ScreenLayout {
+        overlay: (0, 0, 0, 190),
+        panel_size: Some((560.0, 200.0)),
+        title_ribbon: Some((0, 78.0, 40.0 + 480.0 * p, 44.0)),
+        title: Some(TextElement {
+            text: "RAISING THE BANNERS".into(),
+            offset_x: 0.0,
+            offset_y: -60.0,
+            size: 30.0,
+            r: 255,
+            g: 215,
+            b: 0,
+            a: 255,
+            bold: true,
+            shadow: false,
+        }),
+        subtitle: Some(TextElement {
+            text: format!("{:.0}%", p * 100.0),
+            offset_x: 0.0,
+            offset_y: 0.0,
+            size: 20.0,
+            r: 230,
+            g: 230,
+            b: 230,
+            a: 255,
+            bold: false,
+            shadow: false,
+        }),
+        buttons: vec![],
+        hints: vec![],
+    }
 }
 
 // ── Layout builders for the new screens ─────────────────────────────────

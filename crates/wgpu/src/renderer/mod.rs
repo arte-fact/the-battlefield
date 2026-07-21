@@ -1716,6 +1716,7 @@ fn draw_screen_overlay(
     let layout = match screen {
         GameScreen::Playing => return Vec::new(),
         GameScreen::MainMenu => ui::main_menu_layout(),
+        GameScreen::Loading => ui::loading_layout(ui_state.loading_progress),
         GameScreen::SkirmishSetup => ui::skirmish_layout(ui_state),
         GameScreen::PlayerDeath => ui::death_layout(),
         GameScreen::GameWon => ui::result_layout(true),

@@ -520,9 +520,50 @@ impl Game {
     }
 
     pub fn setup_demo_battle_with_seed(&mut self, seed: u32) {
-        let n_capitals = 2 + self.config.enemy_count.clamp(1, 3).saturating_sub(1) as u32;
         let (gen_grid, layout) =
-            mapgen::generate_battlefield_n(seed, self.config.playable_size, n_capitals);
+            mapgen::generate_battlefield_n(seed, self.config.playable_size, self.n_capitals());
+        self.finish_setup(seed, gen_grid, layout);
+    }
+
+    fn n_capitals(&self) -> u32 {
+        2 + self.config.enemy_count.clamp(1, 3).saturating_sub(1) as u32
+    }
+
+    /// Start budgeted map generation; hosts pump it with `setup_step`
+    /// while showing the loading screen.
+    pub fn begin_async_setup(&mut self, seed: u32) {
+        self.pending_setup = Some(mapgen::MapGen::new(
+            seed,
+            self.config.playable_size,
+            self.n_capitals(),
+        ));
+    }
+
+    /// Advance pending generation one bounded chunk. Returns true while
+    /// loading; the finishing call completes battle setup before returning
+    /// false.
+    pub fn setup_step(&mut self) -> bool {
+        let Some(job) = self.pending_setup.as_mut() else {
+            return false;
+        };
+        if !job.step() {
+            return true;
+        }
+        let job = self.pending_setup.take().expect("checked above");
+        let seed = job.seed();
+        let (gen_grid, layout) = job.take_result();
+        self.finish_setup(seed, gen_grid, layout);
+        false
+    }
+
+    pub fn setup_progress(&self) -> f32 {
+        self.pending_setup
+            .as_ref()
+            .map(|j| j.progress())
+            .unwrap_or(1.0)
+    }
+
+    fn finish_setup(&mut self, seed: u32, gen_grid: Grid, layout: mapgen::MapLayout) {
         self.grid = gen_grid;
         let tiles = (self.grid.width * self.grid.height) as usize;
         self.visible = vec![false; tiles];
@@ -1000,6 +1041,90 @@ mod tests {
             }
         }
         assert!(red_hurt, "militia must engage intruders in its zone");
+    }
+
+    #[test]
+    fn async_setup_matches_sync_setup() {
+        let mut a = Game::new(960.0, 640.0);
+        a.setup_demo_battle_with_seed(4242);
+
+        let mut b = Game::new(960.0, 640.0);
+        b.begin_async_setup(4242);
+        let mut last = 0.0f32;
+        let mut steps = 0u32;
+        while b.setup_step() {
+            let p = b.setup_progress();
+            assert!(p >= last, "progress must be monotonic ({p} < {last})");
+            last = p;
+            steps += 1;
+        }
+        assert!(steps > 5, "budgeted setup should take several steps");
+        assert!((b.setup_progress() - 1.0).abs() < f32::EPSILON);
+
+        assert_eq!(a.grid.width, b.grid.width);
+        for y in 0..a.grid.height {
+            for x in 0..a.grid.width {
+                assert_eq!(a.grid.get(x, y), b.grid.get(x, y), "tile ({x},{y})");
+            }
+        }
+        assert_eq!(a.zone_manager.zones.len(), b.zone_manager.zones.len());
+        assert_eq!(a.units.len(), b.units.len());
+        assert_eq!(a.buildings.len(), b.buildings.len());
+        assert_eq!(a.pawns.len(), b.pawns.len());
+    }
+
+    #[test]
+    fn militia_sleeps_at_quiet_posts_and_wakes_on_hostiles() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.retain(|u| u.is_player);
+        game.manpower = [0.0, 0.0, 0.0, 0.0];
+        let z = &game.zone_manager.zones[3];
+        let (zx, zy) = (z.center_gx, z.center_gy);
+        let (zwx, zwy) = (z.center_wx, z.center_wy);
+        let mid = game.spawn_unit(UnitKind::Warrior, Faction::Villager, zx + 2, zy, false);
+        if let Some(u) = game.units.iter_mut().find(|u| u.id == mid) {
+            u.order = Some(crate::unit::OrderKind::DefendZone { zone: 3 });
+        }
+        // A hostile far outside the settlement influence radius keeps the
+        // battle running without waking the garrison.
+        let rid = game.spawn_unit(UnitKind::Warrior, Faction::Red, zx.saturating_sub(60), zy, false);
+        let input = crate::player_input::PlayerInput::default();
+        let start = {
+            let m = game.units.iter().find(|u| u.id == mid).unwrap();
+            (m.x, m.y)
+        };
+        for _ in 0..60 {
+            game.tick(&input, 1.0 / 60.0);
+        }
+        let m = game.units.iter().find(|u| u.id == mid).unwrap();
+        assert_eq!(
+            (m.x, m.y),
+            start,
+            "sleeping militia must not move without hostiles nearby"
+        );
+        // The hostile steps into the zone: the garrison wakes and engages.
+        if let Some(r) = game.units.iter_mut().find(|u| u.id == rid) {
+            r.x = zwx + 3.0 * crate::grid::TILE_SIZE;
+            r.y = zwy;
+        }
+        let mut reacted = false;
+        for _ in 0..(60 * 10) {
+            game.tick(&input, 1.0 / 60.0);
+            game.update(1.0 / 60.0);
+            let Some(m) = game.units.iter().find(|u| u.id == mid) else {
+                reacted = true; // died fighting — awake either way
+                break;
+            };
+            if (m.x - start.0).abs() > 1.0
+                || (m.y - start.1).abs() > 1.0
+                || m.hp < m.stats.max_hp
+            {
+                reacted = true;
+                break;
+            }
+        }
+        assert!(reacted, "militia must wake when a hostile enters the zone");
     }
 
     #[test]

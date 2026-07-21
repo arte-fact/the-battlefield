@@ -4,6 +4,7 @@ pub mod village;
 pub use village::{SettlementSpec, VillageTheme};
 
 use crate::grid::{Decoration, Grid, TileKind, BORDER_SIZE, PLAYABLE_SIZE};
+use crate::zone::SettlementTier;
 use simplex::Simplex;
 
 /// Village layout ring around each zone center (tiles). Starts beyond
@@ -86,363 +87,605 @@ fn in_border(x: u32, y: u32) -> bool {
         || y >= BORDER_SIZE + PLAYABLE_SIZE
 }
 
-/// Generate a procedural battlefield grid with BSP layout.
+/// Generate a procedural battlefield grid (drains the budgeted pipeline).
 pub fn generate_battlefield(seed: u32, playable_size: u32) -> (Grid, MapLayout) {
     generate_battlefield_n(seed, playable_size, 2)
 }
 
 /// Generate with `n_capitals` faction start positions (2-4).
 pub fn generate_battlefield_n(seed: u32, playable_size: u32, n_capitals: u32) -> (Grid, MapLayout) {
-    let mut rng = Rng::new(seed);
-    let w = playable_size + 2 * BORDER_SIZE;
-    let h = playable_size + 2 * BORDER_SIZE;
-    let mut grid = Grid::new_grass(w, h);
-    let noise = Simplex::new(seed as u64);
+    let mut job = MapGen::new(seed, playable_size, n_capitals);
+    while !job.step() {}
+    job.take_result()
+}
 
-    // --- Phase A: Simplex noise heightmap with edge elevation bias ---
-    for y in 0..h {
-        for x in 0..w {
-            let val = noise.octave(
-                x as f64 * ELEVATION_SCALE,
-                y as f64 * ELEVATION_SCALE,
-                4,
-                0.5,
-            );
+/// Rough tile budget per generation step; row-banded stages size their
+/// bands from this so one step stays well under a frame.
+const STEP_TILES: u32 = 32_768;
 
-            // Distance from nearest edge, normalized to [0, 1] (0 = edge, 1 = center)
-            let dx = (x as f64).min((w - 1 - x) as f64) / (BORDER_SIZE as f64);
-            let dy = (y as f64).min((h - 1 - y) as f64) / (BORDER_SIZE as f64);
-            let edge_dist = dx.min(dy).clamp(0.0, 1.0);
+enum GenStage {
+    Heightmap { row: u32 },
+    WaterScan { pass: u32, row: u32 },
+    WaterApply { pass: u32 },
+    TreeSeed { row: u32 },
+    TreeCa { iter: u32, row: u32 },
+    TreePlace { row: u32 },
+    Rocks { row: u32 },
+    Bushes { row: u32 },
+    WaterRocks { row: u32 },
+    Network,
+    Clearing,
+    RoadsPlan,
+    RoadEdge { i: usize },
+    RoadsBorder,
+    Settlements,
+    Done,
+}
 
-            // Quadratic bias: 0 in playable center, ramps up to ~1.0 at grid edge
-            let edge_bias = if edge_dist < 16.0 {
-                let t = 1.0 - edge_dist;
-                t * t // smooth quadratic ramp
-            } else {
-                0.0
-            };
+/// Budgeted map generation. The pipeline is a state machine advanced by
+/// `step()`, each step bounded to roughly `STEP_TILES` tiles of work (or
+/// one road A*), so a host can spread generation across frames behind a
+/// loading bar. Draining it synchronously yields byte-identical output.
+pub struct MapGen {
+    seed: u32,
+    playable: u32,
+    n_capitals: u32,
+    w: u32,
+    h: u32,
+    rows_per_step: u32,
+    grid: Grid,
+    rng: Rng,
+    noise: Simplex,
+    stage: GenStage,
+    water_changes: Vec<(u32, u32, bool)>,
+    tree_cur: Vec<bool>,
+    tree_next: Vec<bool>,
+    zone_centers: Vec<(u32, u32)>,
+    tiers: Vec<SettlementTier>,
+    capitals: Vec<(u32, u32)>,
+    road_edges: Vec<(usize, usize)>,
+    result: Option<MapLayout>,
+    steps_done: u32,
+    steps_total: u32,
+}
 
-            let effective_val = val + edge_bias;
-
-            if effective_val < WATER_THRESHOLD {
-                grid.set(x, y, TileKind::Water);
-            } else if effective_val > HILL_THRESHOLD {
-                grid.set_elevation(x, y, 2);
-            }
-            // else: remains Grass, elevation 0
+impl MapGen {
+    pub fn new(seed: u32, playable_size: u32, n_capitals: u32) -> Self {
+        let w = playable_size + 2 * BORDER_SIZE;
+        let h = playable_size + 2 * BORDER_SIZE;
+        let size = (w * h) as usize;
+        let rows_per_step = (STEP_TILES / w).max(1);
+        let bands = h.div_ceil(rows_per_step);
+        // Band stages + fixed stages + a road-edge guess (corrected once
+        // the network is planned). Only feeds the progress bar.
+        let est_zones =
+            ((playable_size as usize * playable_size as usize) / 3500).clamp(9, 28) as u32;
+        let steps_total = bands * 13 + 3 + est_zones * 3 / 2 + 3;
+        Self {
+            seed,
+            playable: playable_size,
+            n_capitals,
+            w,
+            h,
+            rows_per_step,
+            grid: Grid::new_grass(w, h),
+            rng: Rng::new(seed),
+            noise: Simplex::new(seed as u64),
+            stage: GenStage::Heightmap { row: 0 },
+            water_changes: Vec::new(),
+            tree_cur: vec![false; size],
+            tree_next: vec![false; size],
+            zone_centers: Vec::new(),
+            tiers: Vec::new(),
+            capitals: Vec::new(),
+            road_edges: Vec::new(),
+            result: None,
+            steps_done: 0,
+            steps_total,
         }
     }
 
-    // Smooth water with cellular automata to remove small isolated chunks.
-    // birth=5: land becomes water only if 5+ of 8 neighbors are water (conservative)
-    // death=3: water becomes land if fewer than 3 neighbors are water (removes small pools)
-    for _pass in 0..3 {
-        let mut changes: Vec<(u32, u32, bool)> = Vec::new();
-        for y in 1..h - 1 {
-            for x in 1..w - 1 {
-                let mut water_neighbors = 0u32;
-                for dy in -1i32..=1 {
-                    for dx in -1i32..=1 {
-                        if dx == 0 && dy == 0 {
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+
+    pub fn is_done(&self) -> bool {
+        matches!(self.stage, GenStage::Done)
+    }
+
+    /// Fraction complete, for the loading bar.
+    pub fn progress(&self) -> f32 {
+        if self.is_done() {
+            return 1.0;
+        }
+        (self.steps_done as f32 / self.steps_total.max(1) as f32).min(0.99)
+    }
+
+    /// Grid and layout once `step()` has returned true.
+    pub fn take_result(self) -> (Grid, MapLayout) {
+        let layout = self.result.expect("MapGen::take_result before completion");
+        (self.grid, layout)
+    }
+
+    /// Advance one bounded chunk of work. Returns true when generation is
+    /// complete.
+    pub fn step(&mut self) -> bool {
+        self.steps_done += 1;
+        let rps = self.rows_per_step;
+        let (w, h) = (self.w, self.h);
+        match self.stage {
+            GenStage::Heightmap { row } => {
+                for y in row..(row + rps).min(h) {
+                    for x in 0..w {
+                        let val = self.noise.octave(
+                            x as f64 * ELEVATION_SCALE,
+                            y as f64 * ELEVATION_SCALE,
+                            4,
+                            0.5,
+                        );
+
+                        // Distance from nearest edge, normalized (0 = edge)
+                        let dx = (x as f64).min((w - 1 - x) as f64) / (BORDER_SIZE as f64);
+                        let dy = (y as f64).min((h - 1 - y) as f64) / (BORDER_SIZE as f64);
+                        let edge_dist = dx.min(dy).clamp(0.0, 1.0);
+
+                        // Quadratic bias: 0 in playable center, ~1.0 at grid edge
+                        let edge_bias = {
+                            let t = 1.0 - edge_dist;
+                            t * t
+                        };
+
+                        let effective_val = val + edge_bias;
+
+                        if effective_val < WATER_THRESHOLD {
+                            self.grid.set(x, y, TileKind::Water);
+                        } else if effective_val > HILL_THRESHOLD {
+                            self.grid.set_elevation(x, y, 2);
+                        }
+                        // else: remains Grass, elevation 0
+                    }
+                }
+                self.stage = if row + rps >= h {
+                    GenStage::WaterScan { pass: 0, row: 0 }
+                } else {
+                    GenStage::Heightmap { row: row + rps }
+                };
+            }
+            // Smooth water with cellular automata to drop small isolated
+            // chunks. birth=5: land floods only if 5+ of 8 neighbors are
+            // water; death=3: water with fewer than 3 water neighbors dries.
+            GenStage::WaterScan { pass, row } => {
+                let y0 = row.max(1);
+                let y1 = (row + rps).min(h - 1);
+                for y in y0..y1 {
+                    for x in 1..w - 1 {
+                        let mut water_neighbors = 0u32;
+                        for dy in -1i32..=1 {
+                            for dx in -1i32..=1 {
+                                if dx == 0 && dy == 0 {
+                                    continue;
+                                }
+                                if self.grid.get((x as i32 + dx) as u32, (y as i32 + dy) as u32)
+                                    == TileKind::Water
+                                {
+                                    water_neighbors += 1;
+                                }
+                            }
+                        }
+                        let is_water = self.grid.get(x, y) == TileKind::Water;
+                        if is_water && water_neighbors < 3 {
+                            self.water_changes.push((x, y, false)); // kill small water
+                        } else if !is_water && water_neighbors >= 5 {
+                            self.water_changes.push((x, y, true)); // fill gaps
+                        }
+                    }
+                }
+                self.stage = if row + rps >= h - 1 {
+                    GenStage::WaterApply { pass }
+                } else {
+                    GenStage::WaterScan {
+                        pass,
+                        row: row + rps,
+                    }
+                };
+            }
+            GenStage::WaterApply { pass } => {
+                for (x, y, make_water) in self.water_changes.drain(..) {
+                    if make_water {
+                        self.grid.set(x, y, TileKind::Water);
+                        self.grid.set_elevation(x, y, 0);
+                        self.grid.set_decoration(x, y, None);
+                    } else {
+                        self.grid.set(x, y, TileKind::Grass);
+                    }
+                }
+                self.stage = if pass + 1 < 3 {
+                    GenStage::WaterScan {
+                        pass: pass + 1,
+                        row: 0,
+                    }
+                } else {
+                    GenStage::TreeSeed { row: 0 }
+                };
+            }
+            // Trees: seeded from simplex noise at offset, grown by CA.
+            GenStage::TreeSeed { row } => {
+                for y in row..(row + rps).min(h) {
+                    for x in 0..w {
+                        let val = self.noise.octave(
+                            x as f64 * 0.07 + 100.0,
+                            y as f64 * 0.07 + 100.0,
+                            3,
+                            0.5,
+                        );
+                        let normalized = (val + 1.0) * 0.5;
+                        self.tree_cur[(y * w + x) as usize] = normalized < TREE_DENSITY;
+                    }
+                }
+                self.stage = if row + rps >= h {
+                    GenStage::TreeCa { iter: 0, row: 0 }
+                } else {
+                    GenStage::TreeSeed { row: row + rps }
+                };
+            }
+            GenStage::TreeCa { iter, row } => {
+                for y in row..(row + rps).min(h) {
+                    for x in 0..w {
+                        let neighbors = count_neighbors(&self.tree_cur, w, h, x, y);
+                        let i = (y * w + x) as usize;
+                        // birth >= 4 neighbors, survive >= 2
+                        self.tree_next[i] = if self.tree_cur[i] {
+                            neighbors >= 2
+                        } else {
+                            neighbors >= 4
+                        };
+                    }
+                }
+                self.stage = if row + rps >= h {
+                    std::mem::swap(&mut self.tree_cur, &mut self.tree_next);
+                    if iter + 1 < 5 {
+                        GenStage::TreeCa {
+                            iter: iter + 1,
+                            row: 0,
+                        }
+                    } else {
+                        GenStage::TreePlace { row: 0 }
+                    }
+                } else {
+                    GenStage::TreeCa {
+                        iter,
+                        row: row + rps,
+                    }
+                };
+            }
+            GenStage::TreePlace { row } => {
+                for y in row..(row + rps).min(h) {
+                    for x in 0..w {
+                        let i = (y * w + x) as usize;
+                        if self.tree_cur[i]
+                            && self.grid.get(x, y) == TileKind::Grass
+                            && (self.grid.elevation(x, y) == 0 || in_border(x, y))
+                            && !near_cliff(&self.grid, x, y)
+                        {
+                            self.grid.set(x, y, TileKind::Forest);
+                        }
+                    }
+                }
+                self.stage = if row + rps >= h {
+                    GenStage::Rocks { row: 0 }
+                } else {
+                    GenStage::TreePlace { row: row + rps }
+                };
+            }
+            // Rocks: sparse random scatter on grass
+            GenStage::Rocks { row } => {
+                for y in row..(row + rps).min(h) {
+                    for x in 0..w {
+                        if self.rng.chance(ROCK_DENSITY as f32)
+                            && self.grid.get(x, y) == TileKind::Grass
+                            && (self.grid.elevation(x, y) == 0 || in_border(x, y))
+                            && !near_cliff(&self.grid, x, y)
+                        {
+                            self.grid.set(x, y, TileKind::Rock);
+                        }
+                    }
+                }
+                self.stage = if row + rps >= h {
+                    GenStage::Bushes { row: 0 }
+                } else {
+                    GenStage::Rocks { row: row + rps }
+                };
+            }
+            // Bushes: sparse random scatter on grass
+            GenStage::Bushes { row } => {
+                for y in row..(row + rps).min(h) {
+                    for x in 0..w {
+                        if self.rng.chance(BUSH_DENSITY as f32)
+                            && self.grid.get(x, y) == TileKind::Grass
+                            && (self.grid.elevation(x, y) == 0 || in_border(x, y))
+                            && !near_cliff(&self.grid, x, y)
+                        {
+                            self.grid.set_decoration(x, y, Some(Decoration::Bush));
+                        }
+                    }
+                }
+                self.stage = if row + rps >= h {
+                    GenStage::WaterRocks { row: 0 }
+                } else {
+                    GenStage::Bushes { row: row + rps }
+                };
+            }
+            // Water rocks: simple random chance on water tiles
+            GenStage::WaterRocks { row } => {
+                for y in row..(row + rps).min(h) {
+                    for x in 0..w {
+                        if self.grid.get(x, y) == TileKind::Water
+                            && self.rng.chance(WATER_ROCK_DENSITY)
+                        {
+                            self.grid.set_decoration(x, y, Some(Decoration::WaterRock));
+                        }
+                    }
+                }
+                self.stage = if row + rps >= h {
+                    GenStage::Network
+                } else {
+                    GenStage::WaterRocks { row: row + rps }
+                };
+            }
+            GenStage::Network => {
+                self.plan_network();
+                self.stage = GenStage::Clearing;
+            }
+            GenStage::Clearing => {
+                // Clear settlement ground by tier.
+                for (i, &(cx, cy)) in self.zone_centers.iter().enumerate() {
+                    let r = if self.tiers[i] == SettlementTier::City {
+                        crate::building::BASE_BAND_RADIUS + 4
+                    } else {
+                        VILLAGE_CLEAR_RADIUS as i32
+                    };
+                    clear_circle(&mut self.grid, cx, cy, r);
+                }
+                self.stage = GenStage::RoadsPlan;
+            }
+            GenStage::RoadsPlan => {
+                self.road_edges = plan_road_edges(&self.zone_centers);
+                // Correct the progress denominator now the edge count is real.
+                self.steps_total = self.steps_done + self.road_edges.len() as u32 + 2;
+                self.stage = GenStage::RoadEdge { i: 0 };
+            }
+            // Route one road per step: at large map sizes a single A* is
+            // the biggest indivisible chunk in the pipeline.
+            GenStage::RoadEdge { i } => {
+                if let Some(&(a, b)) = self.road_edges.get(i) {
+                    if let Some(path) =
+                        road_astar(&self.grid, self.zone_centers[a], self.zone_centers[b])
+                    {
+                        paint_road_path(&mut self.grid, &path);
+                    }
+                }
+                self.stage = if i + 1 < self.road_edges.len() {
+                    GenStage::RoadEdge { i: i + 1 }
+                } else {
+                    GenStage::RoadsBorder
+                };
+            }
+            GenStage::RoadsBorder => {
+                clear_road_borders(&mut self.grid);
+                self.stage = GenStage::Settlements;
+            }
+            GenStage::Settlements => {
+                let mut connections: Vec<Vec<u8>> = vec![Vec::new(); self.zone_centers.len()];
+                for &(i, j) in &self.road_edges {
+                    connections[i].push(j as u8);
+                    connections[j].push(i as u8);
+                }
+
+                let mut layout = MapLayout {
+                    blue_base: self.capitals[0],
+                    red_base: self.capitals[1],
+                    zone_centers: std::mem::take(&mut self.zone_centers),
+                    blue_gather: self.capitals[0],
+                    red_gather: self.capitals[1],
+                    blue_home_zones: Vec::new(),
+                    red_home_zones: Vec::new(),
+                    connections,
+                    settlements: Vec::new(),
+                    extra_bases: self.capitals[2..].to_vec(),
+                };
+
+                layout.settlements = village::plan_settlements(
+                    &mut self.grid,
+                    &layout.zone_centers,
+                    &self.tiers,
+                    self.seed,
+                );
+                self.result = Some(layout);
+                self.stage = GenStage::Done;
+            }
+            GenStage::Done => {}
+        }
+        self.is_done()
+    }
+
+    /// Settlement network: capitals by farthest-point sampling, the
+    /// countryside by best-candidate sampling (spacing + terrain-damage
+    /// scoring). Zone ids: capitals first (0..n), then the countryside.
+    fn plan_network(&mut self) {
+        let b = BORDER_SIZE;
+        let p = self.playable;
+        let grid = &self.grid;
+        let mut net_rng = Rng::new(self.seed.wrapping_add(0xC17E));
+
+        let margin_city = crate::building::BASE_BAND_RADIUS as u32 + 4;
+        let margin_field = VILLAGE_CLEAR_RADIUS;
+
+        let sample = |rng: &mut Rng, margin: u32| -> (u32, u32) {
+            let span = p - 2 * margin;
+            (
+                b + margin + rng.next() % span,
+                b + margin + rng.next() % span,
+            )
+        };
+        let d2 = |a: (u32, u32), c: (u32, u32)| -> i64 {
+            let dx = a.0 as i64 - c.0 as i64;
+            let dy = a.1 as i64 - c.1 as i64;
+            dx * dx + dy * dy
+        };
+
+        // Capitals: greedy farthest-point over a shared candidate pool,
+        // terrain-damage penalized so cities avoid lakes and cliff fields.
+        let n_capitals = self.n_capitals.clamp(2, 4) as usize;
+        let pool: Vec<(u32, u32)> = (0..48).map(|_| sample(&mut net_rng, margin_city)).collect();
+        let dmg = |c: (u32, u32)| terrain_damage(grid, c.0 as i32, c.1 as i32) as i64;
+        let mut capitals: Vec<(u32, u32)> = Vec::new();
+        {
+            // Seed with the least-damaged pair among genuinely distant ones —
+            // fairness first, then terrain quality.
+            let min_sep = ((p as i64) * 6 / 10).pow(2);
+            type CapitalPair = ((u32, u32), (u32, u32), i64);
+            let mut best: Option<CapitalPair> = None;
+            let mut best_far = (pool[0], pool[1], i64::MIN);
+            for i in 0..pool.len() {
+                for j in (i + 1)..pool.len() {
+                    let dist = d2(pool[i], pool[j]);
+                    if dist > best_far.2 {
+                        best_far = (pool[i], pool[j], dist);
+                    }
+                    if dist < min_sep {
+                        continue;
+                    }
+                    let score = -(dmg(pool[i]) + dmg(pool[j])) * 200 + dist / 8;
+                    if best.map(|(_, _, bs)| score > bs).unwrap_or(true) {
+                        best = Some((pool[i], pool[j], score));
+                    }
+                }
+            }
+            let (a, bcap) = best
+                .map(|(a, b, _)| (a, b))
+                .unwrap_or((best_far.0, best_far.1));
+            capitals.push(a);
+            capitals.push(bcap);
+            while capitals.len() < n_capitals {
+                let next = pool
+                    .iter()
+                    .copied()
+                    .filter(|c| !capitals.contains(c))
+                    .max_by_key(|&c| {
+                        capitals.iter().map(|&k| d2(c, k)).min().unwrap_or(0) - dmg(c) * 200
+                    });
+                match next {
+                    Some(c) => capitals.push(c),
+                    None => break,
+                }
+            }
+        }
+        let blue_base = capitals[0];
+        let red_base = capitals[1];
+
+        // Countryside: total settlement count scales with playable area.
+        let area = (p as usize) * (p as usize);
+        let total = (area / 3500).max(n_capitals + 5);
+        let mut n_field = (total - capitals.len()).clamp(5, 24);
+        if n_capitals == 2 {
+            // Mirrored 1v1 countryside needs an even count.
+            n_field += n_field % 2;
+        }
+        let min_gap: i64 = 26 * 26;
+        let cap_gap: i64 = 32 * 32;
+
+        let mut field: Vec<(u32, u32)> = Vec::new();
+        {
+            let ok = |c: (u32, u32), field: &Vec<(u32, u32)>, capitals: &Vec<(u32, u32)>| -> bool {
+                capitals.iter().all(|&k| d2(c, k) >= cap_gap)
+                    && field.iter().all(|&f| d2(c, f) >= min_gap)
+            };
+            // 1v1 maps mirror the countryside about the capital midpoint for
+            // fairness; bigger FFAs rely on best-candidate spread.
+            let mirror_sum = (
+                (blue_base.0 + red_base.0) as i64,
+                (blue_base.1 + red_base.1) as i64,
+            );
+            let mirrored = n_capitals == 2;
+            let mut attempts = 0;
+            while field.len() < n_field && attempts < 3000 {
+                attempts += 1;
+                let mut best: Option<((u32, u32), i64)> = None;
+                for _ in 0..24 {
+                    let c = sample(&mut net_rng, margin_field);
+                    if !ok(c, &field, &capitals) {
+                        continue;
+                    }
+                    if mirrored {
+                        let m = (mirror_sum.0 - c.0 as i64, mirror_sum.1 - c.1 as i64);
+                        if m.0 < (b + margin_field) as i64
+                            || m.1 < (b + margin_field) as i64
+                            || m.0 >= (b + p - margin_field) as i64
+                            || m.1 >= (b + p - margin_field) as i64
+                        {
                             continue;
                         }
-                        if grid.get((x as i32 + dx) as u32, (y as i32 + dy) as u32)
-                            == TileKind::Water
-                        {
-                            water_neighbors += 1;
+                        let m = (m.0 as u32, m.1 as u32);
+                        if d2(c, m) < min_gap || !ok(m, &field, &capitals) {
+                            continue;
                         }
                     }
+                    let spread = field
+                        .iter()
+                        .chain(capitals.iter())
+                        .map(|&e| d2(c, e))
+                        .min()
+                        .unwrap_or(i64::MAX / 4);
+                    let score = spread - dmg(c) * 300;
+                    if best.map(|(_, bs)| score > bs).unwrap_or(true) {
+                        best = Some((c, score));
+                    }
                 }
-                let is_water = grid.get(x, y) == TileKind::Water;
-                if is_water && water_neighbors < 3 {
-                    changes.push((x, y, false)); // kill small water
-                } else if !is_water && water_neighbors >= 5 {
-                    changes.push((x, y, true)); // fill gaps
-                }
-            }
-        }
-        for (x, y, make_water) in changes {
-            if make_water {
-                grid.set(x, y, TileKind::Water);
-                grid.set_elevation(x, y, 0);
-                grid.set_decoration(x, y, None);
-            } else {
-                grid.set(x, y, TileKind::Grass);
-            }
-        }
-    }
-
-    // --- Phase B: Cellular automata for vegetation & decorations ---
-
-    // Trees: seeded from simplex noise at offset, placed on grass
-    let tree_seed = run_cellular_automaton(
-        &seed_from_noise(&noise, w, h, 100.0, 0.07, TREE_DENSITY),
-        w,
-        h,
-        5,
-        4,
-        2,
-    );
-    // Helper: true if tile is on or adjacent to an elevation cliff
-    let near_cliff = |grid: &Grid, x: u32, y: u32| -> bool {
-        let e = grid.elevation(x, y);
-        for &(dx, dy) in &[(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
-            let nx = x as i32 + dx;
-            let ny = y as i32 + dy;
-            if grid.in_bounds(nx, ny) && grid.elevation(nx as u32, ny as u32) != e {
-                return true;
-            }
-        }
-        false
-    };
-
-    for y in 0..h {
-        for x in 0..w {
-            let i = (y * w + x) as usize;
-            if tree_seed[i]
-                && grid.get(x, y) == TileKind::Grass
-                && (grid.elevation(x, y) == 0 || in_border(x, y))
-                && !near_cliff(&grid, x, y)
-            {
-                grid.set(x, y, TileKind::Forest);
-            }
-        }
-    }
-
-    // Rocks: sparse random scatter on grass
-    for y in 0..h {
-        for x in 0..w {
-            if rng.chance(ROCK_DENSITY as f32)
-                && grid.get(x, y) == TileKind::Grass
-                && (grid.elevation(x, y) == 0 || in_border(x, y))
-                && !near_cliff(&grid, x, y)
-            {
-                grid.set(x, y, TileKind::Rock);
-            }
-        }
-    }
-
-    // Bushes: sparse random scatter on grass
-    for y in 0..h {
-        for x in 0..w {
-            if rng.chance(BUSH_DENSITY as f32)
-                && grid.get(x, y) == TileKind::Grass
-                && (grid.elevation(x, y) == 0 || in_border(x, y))
-                && !near_cliff(&grid, x, y)
-            {
-                grid.set_decoration(x, y, Some(Decoration::Bush));
-            }
-        }
-    }
-
-    // Water rocks: simple random chance on water tiles
-    for y in 0..h {
-        for x in 0..w {
-            if grid.get(x, y) == TileKind::Water && rng.chance(WATER_ROCK_DENSITY) {
-                grid.set_decoration(x, y, Some(Decoration::WaterRock));
-            }
-        }
-    }
-
-    // --- Phase C: Settlement network ---
-    //
-    // Capitals by farthest-point sampling, towns/villages/hamlets by
-    // best-candidate sampling (spacing + terrain-damage scoring), roads
-    // as an MST with loop edges, and the zone adjacency graph derived
-    // from the actual road edges. Zone ids: capitals first (0..n), then
-    // the countryside.
-    use crate::zone::SettlementTier;
-
-    let b = BORDER_SIZE;
-    let p = playable_size;
-    let mut net_rng = Rng::new(seed.wrapping_add(0xC17E));
-
-    let margin_city = crate::building::BASE_BAND_RADIUS as u32 + 4;
-    let margin_field = VILLAGE_CLEAR_RADIUS;
-
-    let sample = |rng: &mut Rng, margin: u32| -> (u32, u32) {
-        let span = p - 2 * margin;
-        (
-            b + margin + rng.next() % span,
-            b + margin + rng.next() % span,
-        )
-    };
-    let d2 = |a: (u32, u32), c: (u32, u32)| -> i64 {
-        let dx = a.0 as i64 - c.0 as i64;
-        let dy = a.1 as i64 - c.1 as i64;
-        dx * dx + dy * dy
-    };
-
-    // Capitals: greedy farthest-point over a shared candidate pool,
-    // terrain-damage penalized so cities avoid lakes and cliff fields.
-    let n_capitals = n_capitals.clamp(2, 4) as usize;
-    let pool: Vec<(u32, u32)> = (0..48).map(|_| sample(&mut net_rng, margin_city)).collect();
-    let dmg = |c: (u32, u32)| terrain_damage(&grid, c.0 as i32, c.1 as i32) as i64;
-    let mut capitals: Vec<(u32, u32)> = Vec::new();
-    {
-        // Seed with the least-damaged pair among genuinely distant ones —
-        // fairness first, then terrain quality.
-        let min_sep = ((p as i64) * 6 / 10).pow(2);
-        type CapitalPair = ((u32, u32), (u32, u32), i64);
-        let mut best: Option<CapitalPair> = None;
-        let mut best_far = (pool[0], pool[1], i64::MIN);
-        for i in 0..pool.len() {
-            for j in (i + 1)..pool.len() {
-                let dist = d2(pool[i], pool[j]);
-                if dist > best_far.2 {
-                    best_far = (pool[i], pool[j], dist);
-                }
-                if dist < min_sep {
-                    continue;
-                }
-                let score = -(dmg(pool[i]) + dmg(pool[j])) * 200 + dist / 8;
-                if best.map(|(_, _, bs)| score > bs).unwrap_or(true) {
-                    best = Some((pool[i], pool[j], score));
-                }
-            }
-        }
-        let (a, bcap) = best
-            .map(|(a, b, _)| (a, b))
-            .unwrap_or((best_far.0, best_far.1));
-        capitals.push(a);
-        capitals.push(bcap);
-        while capitals.len() < n_capitals {
-            let next = pool
-                .iter()
-                .copied()
-                .filter(|c| !capitals.contains(c))
-                .max_by_key(|&c| {
-                    capitals.iter().map(|&k| d2(c, k)).min().unwrap_or(0) - dmg(c) * 200
-                });
-            match next {
-                Some(c) => capitals.push(c),
-                None => break,
-            }
-        }
-    }
-    let blue_base = capitals[0];
-    let red_base = capitals[1];
-
-    // Countryside: total settlement count scales with playable area.
-    let area = (p as usize) * (p as usize);
-    let total = (area / 3500).max(n_capitals + 5);
-    let mut n_field = (total - capitals.len()).clamp(5, 24);
-    if n_capitals == 2 {
-        // Mirrored 1v1 countryside needs an even count.
-        n_field += n_field % 2;
-    }
-    let min_gap: i64 = 26 * 26;
-    let cap_gap: i64 = 32 * 32;
-
-    let mut field: Vec<(u32, u32)> = Vec::new();
-    {
-        let ok = |c: (u32, u32), field: &Vec<(u32, u32)>, capitals: &Vec<(u32, u32)>| -> bool {
-            capitals.iter().all(|&k| d2(c, k) >= cap_gap)
-                && field.iter().all(|&f| d2(c, f) >= min_gap)
-        };
-        // 1v1 maps mirror the countryside about the capital midpoint for
-        // fairness; bigger FFAs rely on best-candidate spread.
-        let mirror_sum = (
-            (blue_base.0 + red_base.0) as i64,
-            (blue_base.1 + red_base.1) as i64,
-        );
-        let mirrored = n_capitals == 2;
-        let mut attempts = 0;
-        while field.len() < n_field && attempts < 3000 {
-            attempts += 1;
-            let mut best: Option<((u32, u32), i64)> = None;
-            for _ in 0..24 {
-                let c = sample(&mut net_rng, margin_field);
-                if !ok(c, &field, &capitals) {
-                    continue;
-                }
+                let Some((c, _)) = best else { continue };
+                field.push(c);
                 if mirrored {
-                    let m = (mirror_sum.0 - c.0 as i64, mirror_sum.1 - c.1 as i64);
-                    if m.0 < (b + margin_field) as i64
-                        || m.1 < (b + margin_field) as i64
-                        || m.0 >= (b + p - margin_field) as i64
-                        || m.1 >= (b + p - margin_field) as i64
-                    {
-                        continue;
-                    }
-                    let m = (m.0 as u32, m.1 as u32);
-                    if d2(c, m) < min_gap || !ok(m, &field, &capitals) {
-                        continue;
-                    }
+                    // Pairs stay together — n_field is even for 1v1.
+                    let m = (
+                        (mirror_sum.0 - c.0 as i64) as u32,
+                        (mirror_sum.1 - c.1 as i64) as u32,
+                    );
+                    field.push(m);
                 }
-                let spread = field
-                    .iter()
-                    .chain(capitals.iter())
-                    .map(|&e| d2(c, e))
-                    .min()
-                    .unwrap_or(i64::MAX / 4);
-                let score = spread - dmg(c) * 300;
-                if best.map(|(_, bs)| score > bs).unwrap_or(true) {
-                    best = Some((c, score));
-                }
-            }
-            let Some((c, _)) = best else { continue };
-            field.push(c);
-            if mirrored {
-                // Pairs stay together — n_field is even for 1v1.
-                let m = (
-                    (mirror_sum.0 - c.0 as i64) as u32,
-                    (mirror_sum.1 - c.1 as i64) as u32,
-                );
-                field.push(m);
             }
         }
+
+        // Zone list: capitals first, then countryside. Tier split for the
+        // countryside: ~1 town per 4, ~1 hamlet per 4, villages otherwise —
+        // mirrored pairs share a tier so 1v1 stays fair.
+        let mut zone_centers: Vec<(u32, u32)> = capitals.clone();
+        zone_centers.extend(field.iter().copied());
+        let mut tiers = vec![SettlementTier::City; capitals.len()];
+        for i in 0..field.len() {
+            let group = if n_capitals == 2 { i / 2 } else { i };
+            tiers.push(match group % 4 {
+                0 => SettlementTier::Town,
+                3 => SettlementTier::Hamlet,
+                _ => SettlementTier::Village,
+            });
+        }
+
+        self.zone_centers = zone_centers;
+        self.tiers = tiers;
+        self.capitals = capitals;
     }
+}
 
-    // Zone list: capitals first, then countryside. Tier split for the
-    // countryside: ~1 town per 4, ~1 hamlet per 4, villages otherwise —
-    // mirrored pairs share a tier so 1v1 stays fair.
-    let mut zone_centers: Vec<(u32, u32)> = capitals.clone();
-    zone_centers.extend(field.iter().copied());
-    let mut tiers = vec![SettlementTier::City; capitals.len()];
-    for i in 0..field.len() {
-        let group = if n_capitals == 2 { i / 2 } else { i };
-        tiers.push(match group % 4 {
-            0 => SettlementTier::Town,
-            3 => SettlementTier::Hamlet,
-            _ => SettlementTier::Village,
-        });
+/// True if the tile is on or adjacent to an elevation cliff.
+fn near_cliff(grid: &Grid, x: u32, y: u32) -> bool {
+    let e = grid.elevation(x, y);
+    for &(dx, dy) in &[(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
+        let nx = x as i32 + dx;
+        let ny = y as i32 + dy;
+        if grid.in_bounds(nx, ny) && grid.elevation(nx as u32, ny as u32) != e {
+            return true;
+        }
     }
-
-    // Clear settlement ground by tier.
-    for (i, &(cx, cy)) in zone_centers.iter().enumerate() {
-        let r = if tiers[i] == SettlementTier::City {
-            crate::building::BASE_BAND_RADIUS + 4
-        } else {
-            VILLAGE_CLEAR_RADIUS as i32
-        };
-        clear_circle(&mut grid, cx, cy, r);
-    }
-
-    // Roads over every settlement; the edges ARE the adjacency graph.
-    let road_edges = generate_roads(&mut grid, &zone_centers);
-    let mut connections: Vec<Vec<u8>> = vec![Vec::new(); zone_centers.len()];
-    for &(i, j) in &road_edges {
-        connections[i].push(j as u8);
-        connections[j].push(i as u8);
-    }
-
-    let mut layout = MapLayout {
-        blue_base,
-        red_base,
-        zone_centers,
-        blue_gather: blue_base,
-        red_gather: red_base,
-        blue_home_zones: Vec::new(),
-        red_home_zones: Vec::new(),
-        connections,
-        settlements: Vec::new(),
-        extra_bases: capitals[2..].to_vec(),
-    };
-
-    layout.settlements = village::plan_settlements(&mut grid, &layout.zone_centers, &tiers, seed);
-
-    (grid, layout)
+    false
 }
 
 /// Water/cliff tiles a village clearing at (cx, cy) would bulldoze.
@@ -486,63 +729,6 @@ fn clear_circle(grid: &mut Grid, cx: u32, cy: u32, radius: i32) {
     }
 }
 
-/// Seed a boolean grid from simplex noise at a given offset and frequency.
-fn seed_from_noise(
-    noise: &Simplex,
-    w: u32,
-    h: u32,
-    seed_offset: f64,
-    frequency: f64,
-    threshold: f64,
-) -> Vec<bool> {
-    let size = (w * h) as usize;
-    let mut grid = vec![false; size];
-    for y in 0..h {
-        for x in 0..w {
-            let val = noise.octave(
-                x as f64 * frequency + seed_offset,
-                y as f64 * frequency + seed_offset,
-                3,
-                0.5,
-            );
-            let normalized = (val + 1.0) * 0.5;
-            grid[(y * w + x) as usize] = normalized < threshold;
-        }
-    }
-    grid
-}
-
-/// Run cellular automaton iterations on a boolean grid.
-fn run_cellular_automaton(
-    initial: &[bool],
-    w: u32,
-    h: u32,
-    iterations: u32,
-    birth_threshold: u32,
-    death_threshold: u32,
-) -> Vec<bool> {
-    let size = (w * h) as usize;
-    let mut current = initial.to_vec();
-    let mut next = vec![false; size];
-
-    for _ in 0..iterations {
-        for y in 0..h {
-            for x in 0..w {
-                let neighbors = count_neighbors(&current, w, h, x, y);
-                let i = (y * w + x) as usize;
-                next[i] = if current[i] {
-                    neighbors >= death_threshold
-                } else {
-                    neighbors >= birth_threshold
-                };
-            }
-        }
-        std::mem::swap(&mut current, &mut next);
-    }
-
-    current
-}
-
 /// Count alive neighbors in a Moore neighborhood (8 surrounding cells).
 fn count_neighbors(grid: &[bool], w: u32, h: u32, x: u32, y: u32) -> u32 {
     let mut count = 0;
@@ -565,11 +751,10 @@ fn count_neighbors(grid: &[bool], w: u32, h: u32, x: u32, y: u32) -> u32 {
     count
 }
 
-/// Generate 2-tile-wide roads connecting all settlements via a Minimum
-/// Spanning Tree plus loop edges (every node reaches degree >= 2 where
-/// possible), routed through A*. Returns the edge list — the settlement
-/// adjacency graph.
-fn generate_roads(grid: &mut Grid, nodes: &[(u32, u32)]) -> Vec<(usize, usize)> {
+/// Plan road edges connecting all settlements: a Minimum Spanning Tree
+/// plus loop edges (every node reaches degree >= 2 where possible). The
+/// edge list is also the settlement adjacency graph.
+fn plan_road_edges(nodes: &[(u32, u32)]) -> Vec<(usize, usize)> {
     let n = nodes.len();
     if n < 2 {
         return Vec::new();
@@ -628,14 +813,12 @@ fn generate_roads(grid: &mut Grid, nodes: &[(u32, u32)]) -> Vec<(usize, usize)> 
         }
     }
 
-    // Route each edge via A* and paint the road
-    for &(i, j) in &mst_edges {
-        if let Some(path) = road_astar(grid, nodes[i], nodes[j]) {
-            paint_road_path(grid, &path);
-        }
-    }
+    mst_edges
+}
 
-    // Enforce 1-tile grass border: clear forest/rock adjacent to road tiles
+/// Enforce a 1-tile grass border: clear forest/rock/cliff adjacent to
+/// road tiles so the 2-wide stamp is always walkable edge to edge.
+fn clear_road_borders(grid: &mut Grid) {
     let w = grid.width;
     let h = grid.height;
     let mut to_clear: Vec<(u32, u32)> = Vec::new();
@@ -676,8 +859,6 @@ fn generate_roads(grid: &mut Grid, nodes: &[(u32, u32)]) -> Vec<(usize, usize)> 
         grid.set_decoration(x, y, None);
         grid.set_elevation(x, y, 0);
     }
-
-    mst_edges
 }
 
 /// A* pathfinding for road generation. Prefers existing roads (zero extra cost)
@@ -1234,12 +1415,4 @@ mod tests {
         assert!(border_bush > 0, "Border should have bush decorations");
     }
 
-    #[test]
-    fn cellular_automaton_produces_change() {
-        let w = 20;
-        let h = 20;
-        let initial: Vec<bool> = (0..w * h).map(|i| i % 3 == 0).collect();
-        let result = run_cellular_automaton(&initial, w as u32, h as u32, 5, 4, 2);
-        assert_ne!(initial, result, "CA should modify the grid");
-    }
 }

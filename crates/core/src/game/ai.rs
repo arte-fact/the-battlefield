@@ -64,11 +64,43 @@ impl Game {
             self.assign_unit_objectives();
         }
 
+        // Militia sleep: garrisons of quiet settlements skip their AI
+        // entirely — live unit cost tracks active fronts, not map size.
+        // A zone is awake when any unit hostile to its garrison stands
+        // within the settlement influence radius.
+        let influence = Self::ZONE_INFLUENCE_TILES as f32 * TILE_SIZE;
+        let mut zone_awake = vec![false; self.zone_manager.zones.len()];
+        for (zi, z) in self.zone_manager.zones.iter().enumerate() {
+            let garrison_faction = z.owner.unwrap_or(Faction::Villager);
+            let awake = self
+                .spatial
+                .query(z.center_wx, z.center_wy, influence)
+                .any(|ui| {
+                    let u = &self.units[ui];
+                    u.alive
+                        && u.faction != garrison_faction
+                        && (u.x - z.center_wx).powi(2) + (u.y - z.center_wy).powi(2)
+                            <= influence * influence
+                });
+            zone_awake[zi] = awake;
+        }
+
         let mut ai_indices: Vec<usize> = self
             .units
             .iter()
             .enumerate()
-            .filter(|(_, u)| u.alive && !u.is_player)
+            .filter(|(_, u)| {
+                if !u.alive || u.is_player {
+                    return false;
+                }
+                if let Some(crate::unit::OrderKind::DefendZone { zone }) = u.order {
+                    // Asleep at a quiet post: hold position, skip AI.
+                    if !zone_awake.get(zone as usize).copied().unwrap_or(true) {
+                        return false;
+                    }
+                }
+                true
+            })
             .map(|(i, _)| i)
             .collect();
 

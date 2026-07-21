@@ -411,6 +411,7 @@ pub(super) fn draw_screen_overlay(
     let layout = match screen {
         GameScreen::Playing => return Vec::new(),
         GameScreen::MainMenu => battlefield_core::ui::main_menu_layout(),
+        GameScreen::Loading => battlefield_core::ui::loading_layout(ui_state.loading_progress),
         GameScreen::SkirmishSetup => battlefield_core::ui::skirmish_layout(ui_state),
         GameScreen::PlayerDeath => battlefield_core::ui::death_layout(),
         GameScreen::GameWon => battlefield_core::ui::result_layout(true),

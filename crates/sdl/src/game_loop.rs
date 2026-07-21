@@ -240,6 +240,20 @@ impl GameLoop {
                     );
                 }
             }
+            GameScreen::Loading => {
+                // Pump budgeted generation inside a frame-time slice.
+                let t0 = Instant::now();
+                loop {
+                    if !self.game.setup_step() {
+                        ui::finish_loading(&mut self.game, &mut self.screen, &self.ui);
+                        break;
+                    }
+                    if t0.elapsed().as_secs_f64() > 0.010 {
+                        break;
+                    }
+                }
+                self.ui.loading_progress = self.game.setup_progress();
+            }
             GameScreen::Playing => {
                 if self.input_state.pressed_this_frame(Scancode::Escape)
                     || self.input_state.gamepad_pressed(Button::Back)

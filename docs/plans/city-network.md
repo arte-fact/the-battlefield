@@ -213,7 +213,7 @@ gates below.
   on AUTO sizes (battles end, durations comparable).
 - [x] 8. Runtime map size in renderers: fog/minimap textures from
   grid dims, recreated on battle setup.
-- [ ] 9. Budgeted generation pipeline + loading bar (no frame >
+- [x] 9. Budgeted generation pipeline + loading bar (no frame >
   50 ms); militia sleep (wake on hostile in influence radius).
 - [ ] 10. Config & UI: ENEMIES row (1/2/3), MAP SIZE row
   (AUTO/LARGE/HUGE, gated), per-faction HUD (manpower, pips,

@@ -148,6 +148,8 @@ pub struct Game {
     /// Time spent in sudden death (all pools empty) without a winner;
     /// forces a resolution when FFA stalemates.
     sudden_death_elapsed: f32,
+    /// In-flight budgeted map generation (loading screen).
+    pending_setup: Option<mapgen::MapGen>,
     /// Per-frame A* pathfind budget (reset each tick, decremented per find_path call).
     pub(crate) astar_budget: u8,
     /// Outcome of the most recent A* attempt: Some(found), None = deferred.
@@ -225,6 +227,7 @@ impl Game {
             objective_timer: 0.0,
             recruit_timer: 0.0,
             sudden_death_elapsed: 0.0,
+            pending_setup: None,
             astar_budget: 0,
             last_path_result: None,
             ai_rotation: 0,
