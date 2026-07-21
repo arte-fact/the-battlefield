@@ -472,7 +472,6 @@ impl Game {
     /// Blends 80% flow direction + 20% separation steering.
     /// Falls back to unified field, then A* toward the nearest objective.
     pub(super) fn ai_move_via_flowfield(&mut self, ai_idx: usize, dt: f32) {
-        let faction = self.units[ai_idx].faction;
         let ux = self.units[ai_idx].x;
         let uy = self.units[ai_idx].y;
         let assigned_zone = self.units[ai_idx].assigned_zone;
