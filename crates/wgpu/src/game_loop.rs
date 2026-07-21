@@ -555,6 +555,8 @@ impl GameLoop {
             return fallback;
         }
         let score = ui::RunScore::from_game(&self.game, victory);
+        self.ui.finish_arcade_run(victory);
+        self.save_scores();
         if self.ui.scoreboard.rank_for(score.total()).is_some() {
             self.ui.pending_score = Some(score);
             self.ui.initials = ui::InitialsEntry::default();

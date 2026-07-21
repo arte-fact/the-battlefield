@@ -215,7 +215,7 @@ gates below.
   grid dims, recreated on battle setup.
 - [x] 9. Budgeted generation pipeline + loading bar (no frame >
   50 ms); militia sleep (wake on hostile in influence radius).
-- [ ] 10. Config & UI: ENEMIES row (1/2/3), MAP SIZE row
+- [x] 10. Config & UI: ENEMIES row (1/2/3), MAP SIZE row
   (AUTO/LARGE/HUGE, gated), per-faction HUD (manpower, pips,
   minimap); arcade escalation ladder (level persisted with scores,
   reset-on-defeat, score × enemy count, level on menu).

@@ -1248,11 +1248,14 @@ fn draw_hud(
     // Zone control pips at top-center
     let zone_count = game.zone_manager.zones.len();
     if zone_count > 0 {
-        let pip_r = 14.0;
-        let pip_gap = 12.0;
-        let pip_d = pip_r * 2.0;
-        let pad = 18.0;
         let n = zone_count as f32;
+        let pad = 18.0;
+        // Shrink pips when the settlement network outgrows the strip.
+        let max_w = vw * 0.55;
+        let scale = ((max_w - pad * 2.0) / (n * 28.0 + (n - 1.0) * 12.0)).clamp(0.35, 1.0);
+        let pip_r = 14.0 * scale;
+        let pip_gap = 12.0 * scale;
+        let pip_d = pip_r * 2.0;
         let total_w = n * pip_d + (n - 1.0) * pip_gap;
         let panel_w = total_w + pad * 2.0;
         let panel_h = pip_d + pad * 2.0;
@@ -1307,22 +1310,20 @@ fn draw_hud(
             prim.stroke_circle(cx, pip_y, pip_r, 1.5, [cr, cg, cb, ca * 0.6]);
         }
 
-        // Manpower counters flanking the zone panel (Blue left, Red right).
-        // Amber while the pool is bleeding from enemy zone majority.
-        let counter_y = panel_y_pos + panel_h * 0.5;
-        for (faction, x) in [
-            (Faction::Blue, panel_x - 30.0),
-            (Faction::Red, panel_x + panel_w + 30.0),
-        ] {
-            let fi = if faction == Faction::Blue { 0 } else { 1 };
+        // Manpower counters in a centered row under the pip panel, one per
+        // active faction in its color. Amber while a pool is bleeding from
+        // settlement-leader deficit.
+        let counter_y = panel_y_pos + panel_h + 12.0;
+        let n_active = game.active_factions().len() as f32;
+        let spacing = 76.0;
+        for (k, &faction) in game.active_factions().iter().enumerate() {
+            let x = vw * 0.5 - (n_active - 1.0) * spacing * 0.5 + k as f32 * spacing;
             let (r, g, b) = if game.manpower_bleeding(faction) {
                 (255u8, 170u8, 50u8)
-            } else if faction == Faction::Blue {
-                (61, 130, 255)
             } else {
-                (255, 61, 61)
+                faction.rgb()
             };
-            let label = format!("{}", game.manpower[fi] as u32);
+            let label = format!("{}", game.manpower[faction.army_idx().unwrap_or(0)] as u32);
             assets
                 .text
                 .draw_text_centered(sprites, gpu, &label, x, counter_y, 20.0, r, g, b, 255);
@@ -1715,7 +1716,7 @@ fn draw_screen_overlay(
 
     let layout = match screen {
         GameScreen::Playing => return Vec::new(),
-        GameScreen::MainMenu => ui::main_menu_layout(),
+        GameScreen::MainMenu => ui::main_menu_layout(ui_state),
         GameScreen::Loading => ui::loading_layout(ui_state.loading_progress),
         GameScreen::SkirmishSetup => ui::skirmish_layout(ui_state),
         GameScreen::PlayerDeath => ui::death_layout(),

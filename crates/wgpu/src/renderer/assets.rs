@@ -167,6 +167,10 @@ impl Assets {
         assets.load_ui(gpu);
 
         // Text cache textures start after all asset textures
+        // Reserve the fog slot before fixing the text-cache base id:
+        // every texture appended after this point would shift the sprite
+        // batch's textures/text boundary and desync all cached text.
+        assets.ensure_fog_texture(gpu, 1, 1);
         assets.text = crate::renderer::text::TextRenderer::new(assets.textures.len());
 
         log::info!("Loaded {} GPU textures", assets.textures.len());
