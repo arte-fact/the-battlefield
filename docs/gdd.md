@@ -12,9 +12,16 @@
 **Perspective:** Top-down, square grid
 **Art:** Tiny Swords asset pack (Pixel Frog) -- chibi pixel art, 64x64 tile grid
 
-**Elevator pitch:** You are one soldier in a massive medieval battle between two armies. Survive. Fight. Earn authority. Turn the tide. Die. Try again.
+**Elevator pitch:** You are one soldier in a massive medieval war between up to four armies fighting over a network of cities, towns and villages. Survive. Fight. Earn authority. Turn the tide. Die. Try again.
 
 **Core fantasy:** You're not the general. You're not the hero -- at least not at first. You're a soldier in the ranks, fighting for your life in a real-time battle much larger than yourself. The armies clash around you whether you act brilliantly or not -- but by fighting well you build a reputation, and soldiers who have seen your deeds will follow your orders.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Capital city](screenshots/capital-city.png) | ![Yellow assaults the Blue capital along the road](screenshots/capital-assault-road-column.png) |
+| ![Field battle, Blue vs Yellow](screenshots/field-battle-blue-yellow.png) | ![A pasture village](screenshots/pasture-village.png) |
 
 ## Core Pillars
 
@@ -24,7 +31,7 @@ Every run is one soldier's experience of one battle. Permadeath means every deci
 
 ### 2. The Battle Is Bigger Than You
 
-Both armies fight autonomously: a faction-level AI planner picks objectives, reinforcement waves march from the bases, and capture zones change hands with or without you. Your actions influence your local area -- and through the authority system, increasingly more than that.
+Every army fights autonomously: each faction's AI planner picks objectives, reinforcement waves march from its cities, and settlements change hands with or without you. Your actions influence your local area -- and through the authority system, increasingly more than that.
 
 ### 3. Authority Is Earned
 
@@ -34,37 +41,56 @@ You start unknown. Kills, assists, and zone captures witnessed by nearby allies 
 
 ### Run Structure
 
-1. **Battle generation** -- A seeded, deterministic map is generated: terrain, two bases at opposing corners, and seven capture zones.
-2. **Deployment** -- You spawn as a Blue Warrior at your base, alongside your army's starting force. The Red army spawns at the opposite corner.
-3. **Battle** -- Real-time gameplay. Fight, capture zones, issue orders to allies who respect you.
-4. **Resolution** -- The run ends when you die (permadeath) or one faction wins: by **domination** (holding all seven zones for 60 continuous seconds) or by **annihilation** (the enemy has no manpower left and no living units).
+1. **Battle generation** -- A seeded, deterministic settlement network is generated: terrain, a capital city per faction, a countryside of towns, villages and hamlets, and the roads that join them. Generation runs in budgeted steps behind a loading bar, so even the largest maps never stall a frame.
+2. **Deployment** -- You spawn as a Blue Warrior at your capital, alongside your army's starting force. One to three AI armies (Red, Yellow, Purple) spawn at their own capitals.
+3. **Battle** -- Real-time free-for-all. Fight, capture settlements, issue orders to allies who respect you.
+4. **Resolution** -- The run ends when you die (permadeath) or one faction wins (see [Victory](#victory-and-attrition)).
 5. **New run** -- Retry from the death/victory/defeat screen; a new seed produces a new battlefield.
+
+### Game Modes
+
+- **Arcade** -- the scored mode. An **escalation ladder** starts at 1v1; each victory raises the enemy count up to 1v3, any defeat resets it to 1v1. The ladder level is persisted with the high scores and shown on the main menu; run scores multiply by the enemy count. Top-10 scoreboard with initials entry.
+- **Skirmish** -- a configurable single battle: map seed, enemy count (1-3), map size, manpower pools, army cap, victory hold time, zone bleed, and starting authority.
 
 ### Screens
 
-`MainMenu → Playing → PlayerDeath | GameWon | GameLost → (retry / new game)`
+`MainMenu → SkirmishSetup? → Loading → Playing → PlayerDeath | GameWon | GameLost → ScoreEntry? → ScoreBoard? → (retry / new game)`
 
 ## Map and Battlefield
 
 ### Grid
 
-The world is a 192x192 tile grid at 64px per tile: a 160x160 playable area surrounded by a 16-tile impassable border (the playable size is a config value; 160 is the default). Positions are continuous (floating point); the grid governs terrain, passability, pathfinding, and auto-tiling. Units render in 192x192 frames (the mounted Lancer in 320x320), Y-sorted for correct overlap.
+The world is a square tile grid at 64px per tile: a playable area surrounded by a 16-tile impassable border. The playable size is configurable -- **AUTO** scales with the enemy count (160/192/224), and the skirmish MAP SIZE row offers **LARGE** (384²), **HUGE** (512²) and **COLOSSAL** (1024²), each validated by a performance gate. Positions are continuous (floating point); the grid governs terrain, passability, pathfinding, and auto-tiling. Units render in 192x192 frames (the mounted Lancer in 320x320), Y-sorted for correct overlap.
 
 ### Terrain
 
-Seeded procedural generation (BSP layout + simplex noise) produces:
+Seeded procedural generation (simplex-noise heightmap, cellular-automata water and forests) produces:
 
 - **Grass** -- open ground, auto-tiled with a 4-bit cardinal bitmask.
 - **Elevated ground** -- raised terrain with cliff faces and shadows.
 - **Water** -- impassable, animated foam edges.
 - **Forest** -- tree decorations; pawns chop trees for ambience.
 - **Rocks** -- impassable decorations.
+- **Roads** -- 2-tile dirt roads routed by A* between settlements. Roads are **highways**: all units move ~25% faster on them, so armies naturally form marching columns.
 
-The same seed always generates the same battlefield; different seeds differ.
+The same seed always generates the same battlefield; different seeds differ. The whole pipeline is a resumable state machine (`MapGen`): terrain phases run in row bands and road routing in bounded A* slices, drained synchronously by tests and across frames by the loading screen -- identical output either way.
 
-### Bases
+### The Settlement Network
 
-Each faction owns a base in its corner of the map, laid out by BSP partitioning and connected by dirt roads. The base **faces the enemy**: layouts are seeded functional bands rotated to the base-to-base axis -- castle and 3-5 defense towers on the front arc, one production building per wave unit kind on the flanks, 8-12 houses and the sheep pasture in the rear:
+The battlefield is a countryside of settlements joined by roads. Capitals are placed by farthest-point sampling (fairness first, then terrain quality); towns, villages and hamlets fill the land by best-candidate sampling -- 1v1 maps mirror the countryside about the capital midpoint so both sides get identical terrain value. Settlement count scales with map area (up to 28). Roads form a minimum spanning tree plus loop edges (every settlement reaches degree 2 where possible), and the road edges **are** the adjacency graph the AI plans over.
+
+| Tier | Capture radius | Garrison cap | Notes |
+|------|:---:|:---:|-------|
+| Hamlet | 5 | 2 | A few houses and one worked resource |
+| Village | 6 | 4 | The standard countryside settlement |
+| Town | 7 | 6 | Larger ring, more houses |
+| City | 8 | 8 | Faction capitals; band-layout stronghold |
+
+**Everything is capturable, including capitals.** A faction that loses its capital fights on from its largest remaining settlement -- reinforcements spawn and rally at the biggest settlement it still controls.
+
+### Capitals
+
+Each faction starts in control of one **City**: a seeded band layout rotated to face the nearest rival -- castle and 3-5 defense towers on the front arc, one production building per wave unit kind on the flanks, 8-12 houses and the sheep pasture in the rear:
 
 | Building | Role |
 |----------|------|
@@ -75,11 +101,9 @@ Each faction owns a base in its corner of the map, laid out by BSP partitioning 
 | Monastery | Produces Monks |
 | Houses | Decorative; pawns and sheep live around them |
 
-### Capture Zones are Villages
+### Settlements are Villages
 
-Seven named capture zones are arranged in a diamond layout across the battlefield, linked by a symmetric adjacency graph that the AI uses for planning. Zone centers nudge within a small window to spare lakes and cliffs, with mirrored offsets so both sides stay equidistant. Each zone tracks the units inside it and moves a capture progress value between fully Red (-1) and fully Blue (+1).
-
-Every zone is a small **village** with one worked resource, themed per seed (all three themes appear on every map):
+Every settlement below City tier is a working **village** with one worked resource, themed per seed (all three themes appear on every map):
 
 | Theme | Resource | Peons | Production building |
 |-------|----------|-------|---------------------|
@@ -87,21 +111,26 @@ Every zone is a small **village** with one worked resource, themed per seed (all
 | Lumber camp | Tree grove | Axe, carry wood | Archery (archers) |
 | Pasture | Sheep pen | Knife, carry meat | Monastery (monks) |
 
-Each village has 3-4 houses (one peon each), its production building (the center zone rolls a second), and the defense tower at its heart. Buildings ring the **outside** of the capture circle, keeping the fighting ground open. Buildings and peons are **Black (neutral) until captured**, then recolor to the owner's faction.
+Each village has houses (one peon each, count by tier), its production buildings, and the defense tower at its heart. Buildings ring the **outside** of the capture circle, keeping the fighting ground open. Buildings and peons are **Black (neutral) until captured**, then recolor to the owner's faction.
 
-**Village economy and garrisons:** each peon delivery banks 1 stock (cap 5). Villages spend stock to raise a small **standing garrison** (cap 4, one soldier every ~6s): neutral villages field **Black villager militia** hostile to both armies -- taking a village means beating its defenders -- and a captured village keeps producing the same garrison in its **owner's color**. Surviving neutral militia pledges to the captor; faction soldiers never defect. Garrison units carry the **defend-zone stance**: they hold scattered points in the circle, engage intruders within a short leash, and return home. They cost stock only (no manpower) and never join the field army. Peons **flee combat**, so scattering a village's workers stalls its garrison without capturing it. Militia contests with swords, not the circle: it does not block capture progress.
+**Village economy and garrisons:** each peon delivery banks 1 stock (cap 5). Settlements spend stock to raise a small **standing garrison** (cap by tier, one soldier every ~6s): neutral settlements field **Black villager militia** hostile to every army -- taking a village means beating its defenders -- and a captured settlement keeps producing the same garrison in its **owner's color**. Surviving neutral militia pledges to the captor; faction soldiers never defect. Garrison units carry the **defend-zone stance**: they hold scattered points in the circle, engage intruders within a short leash, and return home. They cost stock only (no manpower) and never join the field army. Peons **flee combat**, so scattering a village's workers stalls its garrison without capturing it. Militia contests with swords, not the circle: it does not block capture progress. Garrisons of quiet settlements **sleep** (skip their AI entirely) until a hostile enters the settlement's influence radius, so live-unit cost tracks active fronts rather than map size.
 
-**Majority capture:** progress moves at the rate of the *strength difference* between the factions inside (√|blue − red|). Equal forces freeze the zone; a minority garrison slows an assault but cannot hold forever — overwhelming force completes the capture even with defenders still alive. Attacking a defended point is a readable numbers race, not a binary stall.
+**Majority capture:** capture is multi-faction -- a zone tracks every army inside it, and progress moves at the rate of the *strength advantage* of the strongest faction over all others combined (√advantage). Equal forces freeze the zone; a minority garrison slows an assault but cannot hold forever -- overwhelming force completes the capture even with defenders still alive. Attacking a defended point is a readable numbers race, not a binary stall.
 
 Zone states: **Neutral → Contested → Capturing(faction) → Controlled(faction)**.
 
-**Victory:** a faction that controls all seven zones simultaneously starts a 60-second victory timer. If it holds them all for the full duration, it wins by domination. Losing any zone resets the timer. **Sudden death:** once both manpower pools are exhausted, a strict zone majority held for the same duration wins instead.
+### Victory and Attrition
 
-**Manpower and bleed (Conquest attrition):** each faction starts with a finite manpower pool (default 300) -- the reinforcements it can still field. Every reinforcement spawn costs 1; the starting armies are free. Controlling a majority of zones (4+ of 7) bleeds the enemy pool over time, scaling with each zone at or above the threshold. A faction whose pool is empty and whose army is destroyed loses by annihilation -- so any sustained advantage ends the battle eventually, and every kill is a manpower point the enemy must spend to replace.
+- **Domination:** a faction holding **more than half of all settlements** starts the victory timer (default 60s); holding the majority for the full duration wins. Dropping below resets it.
+- **Elimination:** a faction with no manpower left and no living units is eliminated; its surviving settlements are loot for whoever takes them. Last army standing wins.
+- **Player death** ends the run immediately (arcade routes to the score flow).
+- **Sudden death:** once all pools are exhausted, a plurality of settlements held for the hold time wins; if even that stalls, the battle resolves to the faction with the most settlements, then most units.
+
+**Manpower and bleed:** each faction starts with a finite manpower pool (default 300) -- the reinforcements it can still field. Every reinforcement spawn costs 1; the starting armies are free. The **settlement leader** bleeds every rival's pool over time, scaling with the deficit in settlements between them -- so the map position itself is attrition, any sustained advantage ends the battle eventually, and every kill is a manpower point the enemy must spend to replace.
 
 ## Units
 
-Two factions -- **Blue** (the player's side) and **Red** -- field the same four unit types:
+Up to four armies fight -- **Blue** (always the player) against **Red**, **Yellow** and **Purple** AI factions -- plus the neutral **Black** villager militia. It is a true free-for-all: every faction is hostile to every other, and the AIs fight each other as readily as they fight you. All armies field the same four unit types:
 
 | Unit | Role | HP | ATK | DEF | Range (tiles) |
 |------|------|:---:|:---:|:---:|:---:|
@@ -160,18 +189,18 @@ Charge and Defend command **your retinue** -- these soldiers already chose you, 
 
 ### Faction planner
 
-Each faction periodically scores all seven zones with a 3-tier objective system and assigns its units across the top targets (scoring is staggered between factions to spread the cost across frames). A faction holding zero zones focuses its entire force on a single zone -- a desperation push -- rather than spreading thin.
+Each faction periodically scores every settlement with a 3-tier objective system and assigns its units across the top targets (scoring is staggered evenly across the active factions so no two share a frame). The weighting favors frontline value, settlements owned by the current **settlement leader** (gang up on whoever is winning), and settlements road-adjacent to friendly territory (expand along the network). Planner targets are **sticky** -- a challenger objective must clearly beat the current one -- so armies don't whipsaw between goals. A faction holding zero settlements focuses its entire force on a single one -- a desperation push -- rather than spreading thin.
 
 ### Unit behavior
 
-- **Flow fields** -- each faction maintains flow fields toward its objectives; units steer by blending flow direction with local separation to avoid clumping.
+- **Hierarchical navigation** -- long marches hop the settlement road graph (BFS toward the target settlement), steering road-to-road until the destination's local **windowed flow field** (~32-tile influence radius around each settlement, shared across factions since terrain is faction-neutral) takes over for the approach. Flow-field memory stays bounded at any map size; units steer by blending flow direction with local separation to avoid clumping.
 - **A\* pathfinding** -- used for individual paths with a per-tick budget and repath cooldowns so hundreds of units stay cheap.
 - **Combat** -- units engage any visible enemy: melee units close in, archers kite with hysteresis, lancers strike and back off, monks flee and heal. Target commitment timers prevent flip-flopping between targets.
 - **Spatial hash** -- a per-tick spatial grid provides amortised O(1) neighbour queries for separation and enemy searches.
 
 ### Reinforcements
 
-Bases produce units in waves, drawing from the faction's manpower pool. Newly produced units rally at the base until the wave is complete, then march together (a wave cut short by an empty pool still marches). A faction holding zero zones produces double-size waves to fuel its comeback -- burning its pool twice as fast, an all-in gamble.
+Each faction produces units in waves at its **largest controlled settlement**, drawing from its manpower pool (production walks the owned-settlement list by tier, so losing the capital moves the war effort, it doesn't end it). Newly produced units rally until the wave is complete, then march together (a wave cut short by an empty pool still marches). A faction holding zero settlements produces double-size waves to fuel its comeback -- burning its pool twice as fast, an all-in gamble.
 
 ## Ambient Life
 
@@ -197,8 +226,9 @@ Holding the Defend button (~0.5s) stations the retinue at the nearest capture zo
 
 ## User Interface
 
-- **HUD** -- player health, authority rank, retinue counter (current/cap), zone ownership summary, and per-faction manpower counters (tinted amber while a pool is bleeding).
-- **Minimap** -- top-right corner (240px), showing terrain, zones, and unit positions in faction colors.
+- **HUD** -- player health, authority rank, retinue counter (current/cap), a settlement strip whose pips shrink to fit any settlement count, and one manpower counter per active faction in its color (tinted amber while that pool is bleeding).
+- **Minimap** -- top-right corner (240px), showing terrain, settlements, and unit positions in faction colors. Terrain and fog are baked into a cached texture rebuilt only when the fog changes, so the minimap costs the same at 160² and 1024².
+- **Loading screen** -- budgeted map generation renders a progress ribbon; the bar is the ribbon itself.
 - **Order markers** -- floating marker with progress bar above units currently under your command; a command-radius pulse ripples out when an order lands.
 - **Floating text** -- authority gains/losses pop above the player.
 - **Menus** -- main menu, death, victory, and defeat screens built from the Tiny Swords UI kit.
@@ -206,7 +236,7 @@ Holding the Defend button (~0.5s) stations the retinue at the nearest capture zo
 
 ## Visual Style
 
-Top-down chibi pixel art from the Tiny Swords pack -- colorful, readable, charming rather than gritty. Strong faction color coding (Blue vs Red). Draw order: water, ground, foam, decorations, building bases, Y-sorted units, trees/building tops, particles, projectiles, UI.
+Top-down chibi pixel art from the Tiny Swords pack -- colorful, readable, charming rather than gritty. Strong faction color coding (Blue, Red, Yellow, Purple, neutral Black). Draw order: water, ground, foam, decorations, building bases, Y-sorted units, trees/building tops, particles, projectiles, UI.
 
 ## Technical Architecture
 
@@ -225,9 +255,9 @@ Top-down chibi pixel art from the Tiny Swords pack -- colorful, readable, charmi
 | Module | Responsibility |
 |--------|---------------|
 | `game/` | Tick loop, faction AI, orders, authority, combat, FOV, player control, setup |
-| `mapgen/` | Seeded BSP + simplex terrain generation, 7-zone layout |
-| `zone.rs` | Capture zones, adjacency, scoring, victory timer |
-| `flowfield.rs` | Per-faction flow fields |
+| `mapgen/` | Budgeted `MapGen` state machine: noise terrain, settlement network, roads, villages |
+| `zone.rs` | Settlements/capture zones, tiers, adjacency, scoring, victory timer |
+| `flowfield.rs` | Windowed (settlement-local) flow fields, shared across factions |
 | `grid.rs` | Tile grid, passability, A* pathfinding |
 | `autotile.rs` | 4-bit cardinal bitmask auto-tiling |
 | `unit.rs` / `combat.rs` | Unit types, stats, damage |
@@ -238,8 +268,9 @@ Top-down chibi pixel art from the Tiny Swords pack -- colorful, readable, charmi
 ### Performance
 
 - Real-time simulation with hundreds of units at 60 FPS on mid-range mobile hardware.
-- Per-tick A* budget, repath cooldowns, staggered AI scheduling, spatial hashing, throttled FOV.
-- Criterion benchmarks (`game_tick`) and a headless frame benchmark binary track regressions.
+- Per-tick A* budget, repath cooldowns, staggered AI scheduling, spatial hashing, throttled FOV, militia sleep, windowed flow fields, cached minimap/fog textures.
+- Map-size performance gates (native bench, 1v3): 224² P99 1.43 ms · 512² P99 2.36 ms · 1024² P99 2.33 ms, setup 778 ms, 160 MB wasm memory. Generation steps stay under ~10 ms.
+- Criterion benchmarks (`game_tick`) and a headless frame benchmark binary (`bench-headless`, with seed/size/enemy knobs) track regressions.
 
 ### Delivery
 
@@ -254,6 +285,6 @@ Ideas from earlier designs and open threads, not currently implemented:
 - **Morale** -- units breaking and fleeing, rallying, routs as an alternate battle end.
 - **Meta-progression** -- unlockable starting roles (Archer, Lancer, Monk), scenarios, or starting conditions. Should preserve the principle that skill matters more than accumulated power.
 - **Run summary** -- post-battle stats screen (kills, zones captured, peak authority).
-- **More factions** -- the asset pack provides 5 faction colors; battles currently use Blue vs Red.
-- **Commander personalities** -- varied strategic profiles for the enemy faction planner.
+- **Teams** -- the FFA already supports 4 armies; alliances and team victory are open design space.
+- **Commander personalities** -- varied strategic profiles per enemy faction planner.
 - **Battle overview** -- a zoomed-out tactical view beyond the minimap.

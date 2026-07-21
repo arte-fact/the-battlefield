@@ -234,9 +234,21 @@ gates below.
   photo-finish endings — mild Red lean attributed to the idle
   player dragging a retinue without fighting; not a rules
   imbalance, no change made. 1v3 spot checks all end.
-- [ ] 12. Verify: determinism per size/enemy-count, all-seed probes
+- [x] 12. Verify: determinism per size/enemy-count, all-seed probes
   1v1 and 1v3 (all end, no faction stalls), headless screenshots
   (4-color battle, city, town, road column), GDD rewrite, roadmap.
+  Results: map hashes identical across two release runs (5 seed/
+  size/faction combos); sim state identical across two 120 s runs
+  at 512² 1v3 and 224² 1v2. 1v3 across 10 seeds: all end in
+  246-544 s, winners Blue 4 / Red 4 / Yellow 1 / Purple 1 — every
+  faction can win. (1v1 10-seed sweep in item 11.) Headless
+  screenshots committed to docs/screenshots/ and embedded in the
+  GDD: capital city, road-column assault on a capital, Blue-vs-
+  Yellow field battle, pasture village, COLOSSAL loading bar. GDD
+  map/factions/AI/UI/tech sections rewritten for the settlement-
+  network FFA design.
+
+All 12 items complete — the city-network roadmap is done.
 
 ## Decisions taken (flag if you disagree)
 
