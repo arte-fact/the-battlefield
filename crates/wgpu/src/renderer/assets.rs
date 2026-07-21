@@ -80,6 +80,12 @@ pub struct Assets {
     /// Fog of war (dynamic texture, updated per frame).
     pub fog_texture: Option<TextureId>,
     pub fog_wgpu_texture: Option<wgpu::Texture>,
+    /// Cached minimap terrain+fog texture (rebuilt on fog changes).
+    pub minimap_texture: Option<TextureId>,
+    minimap_wgpu_texture: Option<wgpu::Texture>,
+    minimap_tex_size: (u32, u32),
+    /// (grid w, grid h, fog generation) of the last fog/minimap upload.
+    pub fog_upload_key: (u32, u32, u64),
     /// Dimensions the fog texture was created at (recreated when the
     /// battle's grid size changes).
     fog_tex_size: (u32, u32),
@@ -137,6 +143,10 @@ impl Assets {
             shadow_texture: None,
             fog_texture: None,
             fog_wgpu_texture: None,
+            minimap_texture: None,
+            minimap_wgpu_texture: None,
+            minimap_tex_size: (0, 0),
+            fog_upload_key: (0, 0, 0),
             fog_tex_size: (0, 0),
             white_texture: None,
             ui_special_paper: None,
@@ -171,6 +181,7 @@ impl Assets {
         // every texture appended after this point would shift the sprite
         // batch's textures/text boundary and desync all cached text.
         assets.ensure_fog_texture(gpu, 1, 1);
+        assets.ensure_minimap_texture(gpu, 1, 1);
         assets.text = crate::renderer::text::TextRenderer::new(assets.textures.len());
 
         log::info!("Loaded {} GPU textures", assets.textures.len());
@@ -818,6 +829,75 @@ impl Assets {
             }
         }
         self.fog_wgpu_texture = Some(texture);
+    }
+
+    /// (Re)create the minimap texture at the given size. Returns true when
+    /// a new texture was created (contents must be re-uploaded).
+    pub fn ensure_minimap_texture(&mut self, gpu: &GpuContext, w: u32, h: u32) -> bool {
+        if self.minimap_wgpu_texture.is_some() && self.minimap_tex_size == (w, h) {
+            return false;
+        }
+        self.minimap_tex_size = (w, h);
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("minimap"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = gpu.create_texture_bind_group(&view, &gpu.linear_sampler);
+        let entry = GpuTexture {
+            _texture: texture.clone(),
+            view,
+            bind_group,
+            width: w,
+            height: h,
+            scale: 1.0,
+        };
+        // Reuse the existing slot on recreation so ids stay stable.
+        match self.minimap_texture {
+            Some(id) => self.textures[id] = entry,
+            None => {
+                let id = self.textures.len();
+                self.textures.push(entry);
+                self.minimap_texture = Some(id);
+            }
+        }
+        self.minimap_wgpu_texture = Some(texture);
+        true
+    }
+
+    /// Upload minimap RGBA pixels (w×h×4 bytes).
+    pub fn update_minimap(&self, gpu: &GpuContext, pixels: &[u8], w: u32, h: u32) {
+        if let Some(tex) = &self.minimap_wgpu_texture {
+            gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(h),
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
     }
 
     fn create_white_texture(&mut self, gpu: &GpuContext) {

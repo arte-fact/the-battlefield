@@ -434,7 +434,12 @@ pub const BLEED_LEVELS: [(&str, f32); 4] =
     [("OFF", 0.0), ("LOW", 0.1), ("NORMAL", 0.25), ("HIGH", 0.5)];
 
 /// MAP SIZE row values; 0 scales with the enemy count.
-pub const MAP_SIZES: [(&str, u32); 3] = [("AUTO", 0), ("LARGE", 384), ("HUGE", 512)];
+pub const MAP_SIZES: [(&str, u32); 4] = [
+    ("AUTO", 0),
+    ("LARGE", 384),
+    ("HUGE", 512),
+    ("COLOSSAL", 1024),
+];
 
 /// Default playable size for a given enemy count (AUTO map size).
 pub fn auto_playable_size(enemies: u8) -> u32 {
@@ -976,6 +981,9 @@ mod mode_tests {
         c.adjust(2, 1, 0);
         c.apply(&mut cfg);
         assert_eq!(cfg.playable_size, 512);
+        c.adjust(2, 1, 0);
+        c.apply(&mut cfg);
+        assert_eq!(cfg.playable_size, 1024);
     }
 
     #[test]

@@ -662,7 +662,8 @@
     </script>
     <script type="module">
         import init, { get_ai_config, set_ai_config, get_scores, set_scores } from './battlefield_wgpu_native.js';
-        await init();
+        const initOut = await init();
+        window.__wasmMemory = initOut.memory;
         document.getElementById('loading').style.display = 'none';
 
         // Expose wasm functions for the config panel

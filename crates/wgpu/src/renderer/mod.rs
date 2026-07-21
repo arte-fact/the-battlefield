@@ -240,7 +240,7 @@ pub fn render_frame(
     }
 
     // Fog of war — upload visibility data; rendered with fog pipeline in the render pass
-    upload_fog_visibility(gpu, game, assets);
+    upload_fog_and_minimap(gpu, game, assets);
 
     // HP bars + unit markers + order labels (on top of fog)
     draw_unit_overlays(&mut prim_batch, &mut sprite_batch, gpu, game, assets, cam);
@@ -1046,9 +1046,20 @@ fn draw_unit_overlays(
     }
 }
 
-/// Upload visibility data to the fog texture. The fog shader computes smoothing on the GPU.
-fn upload_fog_visibility(gpu: &GpuContext, game: &Game, assets: &mut Assets) {
+/// Upload fog visibility and the baked minimap texture — only when the
+/// fog actually changed (keyed on grid dims + fog generation). Per-frame
+/// uploads and per-tile minimap rects made large maps render-bound.
+fn upload_fog_and_minimap(gpu: &GpuContext, game: &Game, assets: &mut Assets) {
+    let key = (game.grid.width, game.grid.height, game.fog_generation);
+    let mm_w = (game.grid.width / 2).max(1);
+    let mm_h = (game.grid.height / 2).max(1);
+    let recreated = assets.ensure_minimap_texture(gpu, mm_w, mm_h);
     assets.ensure_fog_texture(gpu, game.grid.width, game.grid.height);
+    if assets.fog_upload_key == key && !recreated {
+        return;
+    }
+    assets.fog_upload_key = key;
+
     // Convert bool visibility to u8: true → 255 (1.0 in R8Unorm), false → 0
     let pixels: Vec<u8> = game
         .visible
@@ -1056,6 +1067,44 @@ fn upload_fog_visibility(gpu: &GpuContext, game: &Game, assets: &mut Assets) {
         .map(|&v| if v { 255 } else { 0 })
         .collect();
     assets.update_fog(gpu, &pixels, game.grid.width, game.grid.height);
+
+    // Minimap: step-2 sampled terrain with the fog dim baked in.
+    let srgb = |c: f32| (c.max(0.0).powf(1.0 / 2.2) * 255.0) as u8;
+    let mut mm = vec![0u8; (mm_w * mm_h * 4) as usize];
+    for my in 0..mm_h {
+        for mx in 0..mm_w {
+            let gx = mx * 2;
+            let gy = my * 2;
+            let (r, g, b) = minimap_tile_color(game, gx, gy);
+            let idx = (gy * game.grid.width + gx) as usize;
+            let vis = game.visible.get(idx).copied().unwrap_or(false);
+            let dim = if vis { 1.0 } else { 0.45 };
+            let px = ((my * mm_w + mx) * 4) as usize;
+            mm[px] = srgb(r * dim);
+            mm[px + 1] = srgb(g * dim);
+            mm[px + 2] = srgb(b * dim);
+            mm[px + 3] = 255;
+        }
+    }
+    assets.update_minimap(gpu, &mm, mm_w, mm_h);
+}
+
+fn minimap_tile_color(game: &Game, gx: u32, gy: u32) -> (f32, f32, f32) {
+    match game.grid.get(gx, gy) {
+        TileKind::Water => (0.12, 0.24, 0.47),
+        TileKind::Forest => (0.12, 0.31, 0.12),
+        TileKind::Rock => (0.35, 0.33, 0.29),
+        TileKind::Road => (0.63, 0.55, 0.39),
+        TileKind::Grass => {
+            if game.grid.elevation(gx, gy) >= 2 {
+                (0.39, 0.37, 0.27)
+            } else if game.grid.decoration(gx, gy) == Some(Decoration::Bush) {
+                (0.22, 0.39, 0.18)
+            } else {
+                (0.27, 0.43, 0.20)
+            }
+        }
+    }
 }
 
 /// Render fog quad using the dedicated fog pipeline.
@@ -1421,51 +1470,17 @@ fn draw_minimap(
     }
     prim.fill_rect(mm_x, mm_y, mm_size, mm_size, [0.0, 0.0, 0.0, 0.63]);
 
-    // Terrain dots (step 2 for performance)
-    let step = 2u32;
-    let rw = (sx * step as f32).ceil();
-    let rh = (sy * step as f32).ceil();
-    let mut gy = 0u32;
-    while gy < game.grid.height {
-        let mut gx = 0u32;
-        while gx < game.grid.width {
-            let (r, g, b) = match game.grid.get(gx, gy) {
-                TileKind::Water => (0.12, 0.24, 0.47),
-                TileKind::Forest => (0.12, 0.31, 0.12),
-                TileKind::Rock => (0.35, 0.33, 0.29),
-                TileKind::Road => (0.63, 0.55, 0.39),
-                TileKind::Grass => {
-                    if game.grid.elevation(gx, gy) >= 2 {
-                        (0.39, 0.37, 0.27)
-                    } else if game.grid.decoration(gx, gy) == Some(Decoration::Bush) {
-                        (0.22, 0.39, 0.18)
-                    } else {
-                        (0.27, 0.43, 0.20)
-                    }
-                }
-            };
-            let rx = mm_x + gx as f32 * sx;
-            let ry = mm_y + gy as f32 * sy;
-            prim.fill_rect(rx, ry, rw.max(1.0), rh.max(1.0), [r, g, b, 1.0]);
-            gx += step;
-        }
-        gy += step;
-    }
-
-    // Fog overlay
-    gy = 0;
-    while gy < game.grid.height {
-        let mut gx = 0u32;
-        while gx < game.grid.width {
-            let idx = (gy * game.grid.width + gx) as usize;
-            if idx < game.visible.len() && !game.visible[idx] {
-                let rx = mm_x + gx as f32 * sx;
-                let ry = mm_y + gy as f32 * sy;
-                prim.fill_rect(rx, ry, rw.max(1.0), rh.max(1.0), [0.0, 0.0, 0.0, 0.55]);
-            }
-            gx += step;
-        }
-        gy += step;
+    // Terrain + fog: one cached texture (rebuilt only on fog changes)
+    if let Some(id) = assets.minimap_texture {
+        let tex = &assets.textures[id];
+        bg.draw_sprite(
+            id,
+            [0.0, 0.0, tex.width as f32, tex.height as f32],
+            [mm_x, mm_y, mm_size, mm_size],
+            (tex.width, tex.height),
+            false,
+            [1.0, 1.0, 1.0, 1.0],
+        );
     }
 
     // Zone circles on minimap

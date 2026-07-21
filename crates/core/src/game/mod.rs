@@ -99,6 +99,9 @@ pub struct Game {
     pub revealed: Vec<bool>,
     /// Set to true when FOV changes; renderer clears it after updating fog cache.
     pub fog_dirty: bool,
+    /// Monotonic fog-change counter; renderers key their fog/minimap
+    /// caches on (grid dims, generation).
+    pub fog_generation: u64,
     /// Pre-computed: true if land tile is adjacent to water (for foam rendering).
     pub water_adjacency: Vec<bool>,
     /// Turn events recorded during game logic for animation playback.
@@ -204,6 +207,7 @@ impl Game {
             visible: vec![false; size],
             revealed: vec![true; size],
             fog_dirty: true,
+            fog_generation: 1,
             water_adjacency: vec![false; size],
             turn_events: Vec::new(),
             last_fov_cell: (0, 0),

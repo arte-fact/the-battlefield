@@ -257,7 +257,12 @@ pub(super) fn draw_hud(
     }
 }
 
-pub(super) fn draw_minimap(canvas: &mut Canvas<Window>, game: &Game, assets: &Assets) {
+pub(super) fn draw_minimap<'a>(
+    canvas: &mut Canvas<Window>,
+    tc: &'a TextureCreator<WindowContext>,
+    game: &Game,
+    assets: &mut Assets<'a>,
+) {
     let (canvas_w, _canvas_h) = canvas.output_size().unwrap_or((960, 640));
     let mm_size = 240_u32;
     let pad = 20_i32;
@@ -297,56 +302,57 @@ pub(super) fn draw_minimap(canvas: &mut Canvas<Window>, game: &Game, assets: &As
     canvas.set_draw_color(Color::RGBA(0, 0, 0, 160));
     let _ = canvas.fill_rect(Rect::new(mm_x, mm_y, mm_size, mm_size));
 
-    // Terrain dots
-    let step = 2_u32;
-    let rect_w = (scale_x * step as f32).ceil() as u32;
-    let rect_h = (scale_y * step as f32).ceil() as u32;
-    let mut gy = 0_u32;
-    while gy < grid_h {
-        let mut gx = 0_u32;
-        while gx < grid_w {
-            let (r, g, b) = match game.grid.get(gx, gy) {
-                grid::TileKind::Water => (30, 60, 120),
-                grid::TileKind::Forest => (30, 80, 30),
-                grid::TileKind::Rock => (90, 85, 75),
-                grid::TileKind::Road => (160, 140, 100),
-                grid::TileKind::Grass => {
-                    if game.grid.elevation(gx, gy) >= 2 {
-                        (100, 95, 70)
-                    } else if game.grid.decoration(gx, gy) == Some(grid::Decoration::Bush) {
-                        (55, 100, 45)
-                    } else {
-                        (70, 110, 50)
+    // Terrain + fog: one cached texture, rebuilt only on fog changes.
+    let mm_w = (grid_w / 2).max(1);
+    let mm_h = (grid_h / 2).max(1);
+    let key = (grid_w, grid_h, game.fog_generation);
+    let recreated = assets.ensure_minimap_texture(tc, mm_w, mm_h);
+    if (recreated || assets.minimap_key != key) && assets.minimap_texture.is_some() {
+        assets.minimap_key = key;
+        let mut pixels = vec![0u8; (mm_w * mm_h * 4) as usize];
+        for my in 0..mm_h {
+            for mx in 0..mm_w {
+                let gx = mx * 2;
+                let gy = my * 2;
+                let (r, g, b) = match game.grid.get(gx, gy) {
+                    grid::TileKind::Water => (30u32, 60u32, 120u32),
+                    grid::TileKind::Forest => (30, 80, 30),
+                    grid::TileKind::Rock => (90, 85, 75),
+                    grid::TileKind::Road => (160, 140, 100),
+                    grid::TileKind::Grass => {
+                        if game.grid.elevation(gx, gy) >= 2 {
+                            (100, 95, 70)
+                        } else if game.grid.decoration(gx, gy) == Some(grid::Decoration::Bush) {
+                            (55, 100, 45)
+                        } else {
+                            (70, 110, 50)
+                        }
                     }
-                }
-            };
-            let rx = mm_x + (gx as f32 * scale_x) as i32;
-            let ry = mm_y + (gy as f32 * scale_y) as i32;
-            canvas.set_draw_color(Color::RGB(r, g, b));
-            let _ = canvas.fill_rect(Rect::new(rx, ry, rect_w.max(1), rect_h.max(1)));
-            gx += step;
-        }
-        gy += step;
-    }
-
-    // Fog overlay on minimap
-    canvas.set_draw_color(Color::RGBA(0, 0, 0, 140));
-    let mut gy = 0_u32;
-    while gy < grid_h {
-        let mut gx = 0_u32;
-        while gx < grid_w {
-            let idx = (gy * grid_w + gx) as usize;
-            if idx < game.visible.len() && !game.visible[idx] {
-                let rx = mm_x + (gx as f32 * scale_x) as i32;
-                let ry = mm_y + (gy as f32 * scale_y) as i32;
-                let _ = canvas.fill_rect(Rect::new(rx, ry, rect_w.max(1), rect_h.max(1)));
+                };
+                let idx = (gy * grid_w + gx) as usize;
+                let vis = game.visible.get(idx).copied().unwrap_or(false);
+                let dim: u32 = if vis { 256 } else { 116 };
+                let px = ((my * mm_w + mx) * 4) as usize;
+                // ABGR8888 little-endian: bytes are R, G, B, A
+                pixels[px] = (r * dim / 256) as u8;
+                pixels[px + 1] = (g * dim / 256) as u8;
+                pixels[px + 2] = (b * dim / 256) as u8;
+                pixels[px + 3] = 255;
             }
-            gx += step;
         }
-        gy += step;
+        if let Some(tex) = assets.minimap_texture.as_mut() {
+            let _ = tex.update(None, &pixels, (mm_w * 4) as usize);
+        }
+    }
+    if let Some(tex) = assets.minimap_texture.as_ref() {
+        let _ = canvas.copy(
+            tex,
+            None,
+            Rect::new(mm_x, mm_y, mm_size, mm_size),
+        );
     }
 
-    // Zone circles
+    // Zone circles    // Zone circles
     for zone in &game.zone_manager.zones {
         let zx = mm_x + (zone.center_gx as f32 * scale_x) as i32;
         let zy = mm_y + (zone.center_gy as f32 * scale_y) as i32;

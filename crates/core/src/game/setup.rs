@@ -565,6 +565,7 @@ impl Game {
 
     fn finish_setup(&mut self, seed: u32, gen_grid: Grid, layout: mapgen::MapLayout) {
         self.grid = gen_grid;
+        self.fog_generation = self.fog_generation.wrapping_add(1);
         let tiles = (self.grid.width * self.grid.height) as usize;
         self.visible = vec![false; tiles];
         self.revealed = vec![true; tiles];

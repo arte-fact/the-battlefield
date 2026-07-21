@@ -219,9 +219,21 @@ gates below.
   (AUTO/LARGE/HUGE, gated), per-faction HUD (manpower, pips,
   minimap); arcade escalation ladder (level persisted with scores,
   reset-on-defeat, score × enemy count, level on menu).
-- [ ] 11. Perf gates: A (224² 1v3 ≤ 2 ms), B (512² ≤ 3 ms, unlocks
+- [x] 11. Perf gates: A (224² 1v3 ≤ 2 ms), B (512² ≤ 3 ms, unlocks
   LARGE/HUGE), C (1024² ≤ 4 ms + generation budget, unlocks the
   ceiling).
+  Measured (native bench, 1v3, seed 42): A = P99 1.43 ms, setup
+  53 ms. B = P99 2.36 ms, setup 200 ms. C = P99 2.33 ms, setup
+  778 ms, max generation step 9.2 ms (road A* split by 20k-pop
+  budget), wasm memory 160 MB < 300 MB. COLOSSAL 1024 unlocked in
+  the skirmish MAP SIZE row. Browser (SwiftShader headless) at
+  COLOSSAL 1v3: 16.7 ms median frame in loading and play; one
+  known ~100 ms frame at the loading→playing transition
+  (finish_setup + first flow-field build, unsplit).
+  1v1 idle-player recheck (10 seeds): Blue 3 / Red 7 with several
+  photo-finish endings — mild Red lean attributed to the idle
+  player dragging a retinue without fighting; not a rules
+  imbalance, no change made. 1v3 spot checks all end.
 - [ ] 12. Verify: determinism per size/enemy-count, all-seed probes
   1v1 and 1v3 (all end, no faction stalls), headless screenshots
   (4-color battle, city, town, road column), GDD rewrite, roadmap.

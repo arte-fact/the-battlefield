@@ -102,6 +102,9 @@ pub fn generate_battlefield_n(seed: u32, playable_size: u32, n_capitals: u32) ->
 /// Rough tile budget per generation step; row-banded stages size their
 /// bands from this so one step stays well under a frame.
 const STEP_TILES: u32 = 32_768;
+/// A* expansions per step while routing a road: one long road at 1024²
+/// would otherwise be a single 30+ ms chunk.
+const ROAD_POPS_PER_STEP: u32 = 20_000;
 
 enum GenStage {
     Heightmap { row: u32 },
@@ -144,6 +147,7 @@ pub struct MapGen {
     tiers: Vec<SettlementTier>,
     capitals: Vec<(u32, u32)>,
     road_edges: Vec<(usize, usize)>,
+    road_job: Option<RoadAstarJob>,
     result: Option<MapLayout>,
     steps_done: u32,
     steps_total: u32,
@@ -179,6 +183,7 @@ impl MapGen {
             tiers: Vec::new(),
             capitals: Vec::new(),
             road_edges: Vec::new(),
+            road_job: None,
             result: None,
             steps_done: 0,
             steps_total,
@@ -454,14 +459,26 @@ impl MapGen {
                 self.steps_total = self.steps_done + self.road_edges.len() as u32 + 2;
                 self.stage = GenStage::RoadEdge { i: 0 };
             }
-            // Route one road per step: at large map sizes a single A* is
-            // the biggest indivisible chunk in the pipeline.
+            // Route roads with a bounded A* expansion budget per step;
+            // long edges span several steps and resume where they left off.
             GenStage::RoadEdge { i } => {
                 if let Some(&(a, b)) = self.road_edges.get(i) {
-                    if let Some(path) =
-                        road_astar(&self.grid, self.zone_centers[a], self.zone_centers[b])
-                    {
-                        paint_road_path(&mut self.grid, &path);
+                    if self.road_job.is_none() {
+                        self.road_job = Some(RoadAstarJob::new(
+                            &self.grid,
+                            self.zone_centers[a],
+                            self.zone_centers[b],
+                        ));
+                    }
+                    let job = self.road_job.as_mut().expect("created above");
+                    match job.run(&self.grid, ROAD_POPS_PER_STEP) {
+                        None => return self.is_done(), // still routing this edge
+                        Some(path) => {
+                            self.road_job = None;
+                            if let Some(path) = path {
+                                paint_road_path(&mut self.grid, &path);
+                            }
+                        }
                     }
                 }
                 self.stage = if i + 1 < self.road_edges.len() {
@@ -861,118 +878,144 @@ fn clear_road_borders(grid: &mut Grid) {
     }
 }
 
-/// A* pathfinding for road generation. Prefers existing roads (zero extra cost)
-/// and avoids water/elevation. Forest tiles are traversable but expensive.
-fn road_astar(grid: &Grid, from: (u32, u32), to: (u32, u32)) -> Option<Vec<(u32, u32)>> {
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
+/// Resumable A* for road generation. Prefers existing roads (zero extra
+/// cost) and avoids water/elevation; forest is traversable but expensive.
+/// `run` expands at most `max_pops` nodes per call so generation steps
+/// stay frame-sized on large maps.
+struct RoadAstarJob {
+    from: (u32, u32),
+    to: (u32, u32),
+    g_score: Vec<u32>,
+    came_from: Vec<u32>,
+    open: std::collections::BinaryHeap<std::cmp::Reverse<(u32, u32, u32)>>,
+}
 
-    let w = grid.width;
-    let h = grid.height;
-    let size = (w * h) as usize;
-    let idx = |x: u32, y: u32| (y * w + x) as usize;
-
-    let (sx, sy) = from;
-    let (gx, gy) = to;
-
-    let mut g_score = vec![u32::MAX; size];
-    let mut came_from = vec![u32::MAX; size];
-    g_score[idx(sx, sy)] = 0;
-
-    // Octile heuristic (admissible with cardinal=2, diagonal=3, min tile cost=1)
-    let heuristic = |x: u32, y: u32| -> u32 {
-        let dx = (x as i32 - gx as i32).unsigned_abs();
-        let dy = (y as i32 - gy as i32).unsigned_abs();
-        let (min, max) = if dx < dy { (dx, dy) } else { (dy, dx) };
-        min * 3 + (max - min) * 2
-    };
-
-    // Cardinal=2, Diagonal=3
-    const DIRS: [(i32, i32, u32); 8] = [
-        (0, -1, 2),
-        (1, 0, 2),
-        (0, 1, 2),
-        (-1, 0, 2),
-        (1, -1, 3),
-        (1, 1, 3),
-        (-1, 1, 3),
-        (-1, -1, 3),
-    ];
-
-    let mut open: BinaryHeap<Reverse<(u32, u32, u32)>> = BinaryHeap::new();
-    open.push(Reverse((heuristic(sx, sy), sx, sy)));
-
-    while let Some(Reverse((_, x, y))) = open.pop() {
-        if x == gx && y == gy {
-            // Reconstruct path
-            let mut path = vec![(gx, gy)];
-            let mut ci = idx(gx, gy);
-            while ci != idx(sx, sy) {
-                let cx = (ci as u32) % w;
-                let cy = (ci as u32) / w;
-                if path.last() != Some(&(cx, cy)) {
-                    path.push((cx, cy));
-                }
-                ci = came_from[ci] as usize;
-            }
-            path.push((sx, sy));
-            path.reverse();
-            return Some(path);
-        }
-
-        let g = g_score[idx(x, y)];
-        if g == u32::MAX {
-            continue;
-        }
-
-        for &(dx, dy, dir_cost) in &DIRS {
-            let nx = x as i32 + dx;
-            let ny = y as i32 + dy;
-            if !grid.in_bounds(nx, ny) {
-                continue;
-            }
-            let nx = nx as u32;
-            let ny = ny as u32;
-            // Skip impassable (water) only; elevated terrain is traversable but costly
-            if grid.get(nx, ny) == TileKind::Water {
-                continue;
-            }
-            // Diagonal corner-cutting check
-            if !grid.can_move_diagonal(x, y, dx, dy) {
-                continue;
-            }
-            // Tile cost: existing road=1 (free merge), grass=3, forest=8, elevation=12
-            // Tiles adjacent to water get a penalty so the 2×2 road stamp has room
-            let base_cost = match grid.get(nx, ny) {
-                TileKind::Road => 1,
-                TileKind::Forest => 8,
-                _ => 3,
-            };
-            let near_water = [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)]
-                .iter()
-                .any(|&(ddx, ddy)| {
-                    let wx = nx as i32 + ddx;
-                    let wy = ny as i32 + ddy;
-                    grid.in_bounds(wx, wy) && grid.get(wx as u32, wy as u32) == TileKind::Water
-                });
-            let tile_cost = if grid.elevation(nx, ny) > 1 {
-                12
-            } else if near_water {
-                15
-            } else {
-                base_cost
-            };
-            let new_g = g + tile_cost * dir_cost;
-            let ni = idx(nx, ny);
-            if new_g < g_score[ni] {
-                g_score[ni] = new_g;
-                came_from[ni] = idx(x, y) as u32;
-                open.push(Reverse((new_g + heuristic(nx, ny), nx, ny)));
-            }
-        }
+impl RoadAstarJob {
+    fn new(grid: &Grid, from: (u32, u32), to: (u32, u32)) -> Self {
+        let size = (grid.width * grid.height) as usize;
+        let mut job = Self {
+            from,
+            to,
+            g_score: vec![u32::MAX; size],
+            came_from: vec![u32::MAX; size],
+            open: std::collections::BinaryHeap::new(),
+        };
+        job.g_score[(from.1 * grid.width + from.0) as usize] = 0;
+        job.open
+            .push(std::cmp::Reverse((job.heuristic(from.0, from.1), from.0, from.1)));
+        job
     }
 
-    None // unreachable
+    // Octile heuristic (admissible with cardinal=2, diagonal=3, min tile cost=1)
+    fn heuristic(&self, x: u32, y: u32) -> u32 {
+        let dx = (x as i32 - self.to.0 as i32).unsigned_abs();
+        let dy = (y as i32 - self.to.1 as i32).unsigned_abs();
+        let (min, max) = if dx < dy { (dx, dy) } else { (dy, dx) };
+        min * 3 + (max - min) * 2
+    }
+
+    /// Expand up to `max_pops` nodes. Returns None while still running,
+    /// Some(None) when unreachable, Some(Some(path)) on arrival.
+    #[allow(clippy::option_option)]
+    fn run(&mut self, grid: &Grid, max_pops: u32) -> Option<Option<Vec<(u32, u32)>>> {
+        use std::cmp::Reverse;
+
+        let w = grid.width;
+        let idx = |x: u32, y: u32| (y * w + x) as usize;
+        let (sx, sy) = self.from;
+        let (gx, gy) = self.to;
+
+        // Cardinal=2, Diagonal=3
+        const DIRS: [(i32, i32, u32); 8] = [
+            (0, -1, 2),
+            (1, 0, 2),
+            (0, 1, 2),
+            (-1, 0, 2),
+            (1, -1, 3),
+            (1, 1, 3),
+            (-1, 1, 3),
+            (-1, -1, 3),
+        ];
+
+        let mut pops = 0u32;
+        while let Some(Reverse((_, x, y))) = self.open.pop() {
+            if x == gx && y == gy {
+                // Reconstruct path
+                let mut path = vec![(gx, gy)];
+                let mut ci = idx(gx, gy);
+                while ci != idx(sx, sy) {
+                    let cx = (ci as u32) % w;
+                    let cy = (ci as u32) / w;
+                    if path.last() != Some(&(cx, cy)) {
+                        path.push((cx, cy));
+                    }
+                    ci = self.came_from[ci] as usize;
+                }
+                path.push((sx, sy));
+                path.reverse();
+                return Some(Some(path));
+            }
+
+            let g = self.g_score[idx(x, y)];
+            if g == u32::MAX {
+                continue;
+            }
+
+            for &(dx, dy, dir_cost) in &DIRS {
+                let nx = x as i32 + dx;
+                let ny = y as i32 + dy;
+                if !grid.in_bounds(nx, ny) {
+                    continue;
+                }
+                let nx = nx as u32;
+                let ny = ny as u32;
+                // Skip impassable (water) only; elevated terrain is traversable but costly
+                if grid.get(nx, ny) == TileKind::Water {
+                    continue;
+                }
+                // Diagonal corner-cutting check
+                if !grid.can_move_diagonal(x, y, dx, dy) {
+                    continue;
+                }
+                // Tile cost: existing road=1 (free merge), grass=3, forest=8, elevation=12
+                // Tiles adjacent to water get a penalty so the 2×2 road stamp has room
+                let base_cost = match grid.get(nx, ny) {
+                    TileKind::Road => 1,
+                    TileKind::Forest => 8,
+                    _ => 3,
+                };
+                let near_water = [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)]
+                    .iter()
+                    .any(|&(ddx, ddy)| {
+                        let wx = nx as i32 + ddx;
+                        let wy = ny as i32 + ddy;
+                        grid.in_bounds(wx, wy) && grid.get(wx as u32, wy as u32) == TileKind::Water
+                    });
+                let tile_cost = if grid.elevation(nx, ny) > 1 {
+                    12
+                } else if near_water {
+                    15
+                } else {
+                    base_cost
+                };
+                let new_g = g + tile_cost * dir_cost;
+                let ni = idx(nx, ny);
+                if new_g < self.g_score[ni] {
+                    self.g_score[ni] = new_g;
+                    self.came_from[ni] = idx(x, y) as u32;
+                    self.open
+                        .push(Reverse((new_g + self.heuristic(nx, ny), nx, ny)));
+                }
+            }
+
+            pops += 1;
+            if pops >= max_pops {
+                return None; // budget spent; resume next step
+            }
+        }
+
+        Some(None) // open set exhausted: unreachable
+    }
 }
 
 /// Paint a 2-tile-wide road along an A*-generated path.

@@ -37,6 +37,7 @@ impl Game {
         }
 
         self.fog_dirty = true;
+        self.fog_generation = self.fog_generation.wrapping_add(1);
     }
 
     /// Bresenham grid raycast: returns true if no intermediate tile blocks light.

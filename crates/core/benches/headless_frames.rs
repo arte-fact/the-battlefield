@@ -35,7 +35,22 @@ fn main() {
     {
         game.config.bleed_per_extra_zone = bleed;
     }
+    if let Some(size) = std::env::var("BENCH_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        game.config.playable_size = size;
+    }
+    let setup_start = Instant::now();
     game.setup_demo_battle_with_seed(seed);
+    println!(
+        "Setup: {:.0} ms ({} playable, {} zones, {} units, {} pawns)",
+        setup_start.elapsed().as_secs_f64() * 1000.0,
+        game.config.playable_size,
+        game.zone_manager.zones.len(),
+        game.units.len(),
+        game.pawns.len()
+    );
 
     let input = PlayerInput {
         move_x: 0.5,

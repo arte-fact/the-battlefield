@@ -58,6 +58,11 @@ pub struct Assets<'a> {
     pub(super) _ui_wood_table: Option<(Texture<'a>, u32, u32)>,
     // Fog
     pub fog_texture: Option<Texture<'a>>,
+    /// Cached minimap terrain+fog texture (rebuilt on fog changes).
+    pub minimap_texture: Option<Texture<'a>>,
+    pub minimap_tex_size: (u32, u32),
+    /// (grid w, grid h, fog generation) of the last minimap rebuild.
+    pub minimap_key: (u32, u32, u64),
     /// Grid size the fog texture was created for.
     pub fog_tex_size: (u32, u32),
     // Sheep: (texture, frame_count) for Idle, Move, Grass
@@ -237,6 +242,24 @@ fn count_frames(path: &str, frame_w: u32) -> u32 {
 }
 
 impl<'a> Assets<'a> {
+    /// Create (or recreate) the streaming minimap texture. Returns true
+    /// when a new texture was created (contents must be re-uploaded).
+    pub fn ensure_minimap_texture(
+        &mut self,
+        tc: &'a TextureCreator<WindowContext>,
+        w: u32,
+        h: u32,
+    ) -> bool {
+        if self.minimap_texture.is_some() && self.minimap_tex_size == (w, h) {
+            return false;
+        }
+        self.minimap_texture = tc
+            .create_texture_streaming(Some(PixelFormatEnum::ABGR8888), w, h)
+            .ok();
+        self.minimap_tex_size = (w, h);
+        true
+    }
+
     /// Create (or recreate) the streaming fog texture at the battle's
     /// grid size — map size is runtime now.
     pub fn ensure_fog_texture(&mut self, tc: &'a TextureCreator<WindowContext>, w: u32, h: u32) {
@@ -623,6 +646,9 @@ impl<'a> Assets<'a> {
                 v
             },
             fog_texture: None,
+            minimap_texture: None,
+            minimap_tex_size: (0, 0),
+            minimap_key: (0, 0, 0),
             fog_tex_size: (0, 0),
             text: TextRenderer::new(),
             drawable_buf: Vec::with_capacity(512),
