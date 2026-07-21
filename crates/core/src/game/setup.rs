@@ -137,11 +137,25 @@ impl Game {
 
         if self.winner.is_none() && !self.untimed {
             let hold = self.config.victory_hold_time;
-            // A pool below 1.0 cannot field a unit — effectively exhausted
+            // Stagnation: pools that no longer move (e.g. a leftover pool
+            // pinned behind the army cap) must not stall the endgame.
+            let moved = self
+                .active_factions()
+                .iter()
+                .any(|&f| (self.manpower[f.idx()] - self.last_manpower[f.idx()]).abs() > 0.01);
+            if moved {
+                self.manpower_stagnant = 0.0;
+                self.last_manpower = self.manpower;
+            } else {
+                self.manpower_stagnant += dt;
+            }
+            // A pool below 1.0 cannot field a unit — effectively exhausted;
+            // a long-frozen endgame counts as exhausted too.
             let exhausted = self
                 .active_factions()
                 .iter()
-                .all(|&f| self.manpower[f.idx()] < 1.0);
+                .all(|&f| self.manpower[f.idx()] < 1.0)
+                || self.manpower_stagnant >= hold * 3.0;
             let won = if exhausted {
                 self.sudden_death_elapsed += dt;
                 self.zone_manager
@@ -643,6 +657,7 @@ impl Game {
                 cy,
                 seed.wrapping_add(0x1000 * f.idx() as u32),
                 facing,
+                self.config.playable_size,
             );
             for b in &mut batch {
                 b.zone_id = Some(capital_zone(k));
@@ -1169,6 +1184,66 @@ mod tests {
             }
         }
         assert!(reacted, "militia must wake when a hostile enters the zone");
+    }
+
+    #[test]
+    fn stagnant_endgame_still_resolves() {
+        // A leftover pool pinned behind the army cap must not stall the
+        // battle forever: stagnation arms sudden death.
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.config.victory_hold_time = 5.0;
+        game.manpower = [18.0, 0.0, 0.0, 0.0];
+        game.config.max_units_per_faction = 1; // nobody can spend
+        let input = crate::player_input::PlayerInput::default();
+        for _ in 0..(60 * 60) {
+            game.tick(&input, 1.0 / 60.0);
+            if game.winner.is_some() {
+                break;
+            }
+        }
+        assert!(
+            game.winner.is_some(),
+            "stagnant endgame must resolve via sudden death"
+        );
+    }
+
+    #[test]
+    fn capitals_have_buildings_at_every_map_size() {
+        // Regression: the base placer clamped to the PLAYABLE_SIZE const,
+        // leaving capitals beyond tile 176 bare on large maps; and extra
+        // capitals could land side by side, interleaving their bands.
+        for &(size, enemies) in &[(384u32, 3u8), (512, 2)] {
+            let mut game = Game::new(960.0, 640.0);
+            game.config.playable_size = size;
+            game.config.enemy_count = enemies;
+            game.setup_demo_battle_with_seed(777);
+            let n_caps = 1 + enemies as usize;
+            for zi in 0..n_caps {
+                let z = &game.zone_manager.zones[zi];
+                let prod = game
+                    .buildings
+                    .iter()
+                    .filter(|b| {
+                        b.produces.is_some()
+                            && b.zone_id == Some(zi as u8)
+                    })
+                    .count();
+                assert!(
+                    prod >= 3,
+                    "size {size} 1v{enemies}: capital {zi} has {prod} production buildings"
+                );
+                for other in game.zone_manager.zones[..n_caps].iter().skip(zi + 1) {
+                    let dx = z.center_gx as f32 - other.center_gx as f32;
+                    let dy = z.center_gy as f32 - other.center_gy as f32;
+                    let d = (dx * dx + dy * dy).sqrt();
+                    assert!(
+                        d >= size as f32 * 0.3,
+                        "size {size} 1v{enemies}: capitals only {d:.0} tiles apart"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

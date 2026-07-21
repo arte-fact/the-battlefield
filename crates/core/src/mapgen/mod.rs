@@ -583,14 +583,23 @@ impl MapGen {
                 .unwrap_or((best_far.0, best_far.1));
             capitals.push(a);
             capitals.push(bcap);
+            // Extra capitals keep a hard separation gate: without it the
+            // terrain-damage penalty can outweigh distance and drop two
+            // capitals side by side, interleaving their building bands.
+            let min_sep_extra = ((p as i64) * 35 / 100).pow(2);
             while capitals.len() < n_capitals {
-                let next = pool
-                    .iter()
-                    .copied()
-                    .filter(|c| !capitals.contains(c))
-                    .max_by_key(|&c| {
-                        capitals.iter().map(|&k| d2(c, k)).min().unwrap_or(0) - dmg(c) * 200
-                    });
+                let pick = |gate: i64, capitals: &Vec<(u32, u32)>| {
+                    pool.iter()
+                        .copied()
+                        .filter(|c| !capitals.contains(c))
+                        .filter(|&c| {
+                            capitals.iter().map(|&k| d2(c, k)).min().unwrap_or(i64::MAX) >= gate
+                        })
+                        .max_by_key(|&c| {
+                            capitals.iter().map(|&k| d2(c, k)).min().unwrap_or(0) - dmg(c) * 200
+                        })
+                };
+                let next = pick(min_sep_extra, &capitals).or_else(|| pick(0, &capitals));
                 match next {
                     Some(c) => capitals.push(c),
                     None => break,

@@ -1,4 +1,4 @@
-use crate::grid::{BORDER_SIZE, PLAYABLE_SIZE, TILE_SIZE};
+use crate::grid::{BORDER_SIZE, TILE_SIZE};
 use crate::unit::{Faction, UnitKind};
 use std::collections::HashSet;
 
@@ -148,16 +148,21 @@ struct BasePlacer {
     faction: Faction,
     cx: i32,
     cy: i32,
+    /// Playable-area bounds in tiles (min inclusive, max exclusive) —
+    /// from the live grid, never the compile-time default size.
+    bounds: (i32, i32),
     occupied: HashSet<(i32, i32)>,
     out: Vec<BaseBuilding>,
 }
 
 impl BasePlacer {
-    fn new(faction: Faction, cx: i32, cy: i32) -> Self {
+    fn new(faction: Faction, cx: i32, cy: i32, playable_size: u32) -> Self {
+        let b = BORDER_SIZE as i32;
         Self {
             faction,
             cx,
             cy,
+            bounds: (b, b + playable_size as i32),
             occupied: HashSet::new(),
             out: Vec::new(),
         }
@@ -200,9 +205,8 @@ impl BasePlacer {
             return false;
         }
         // Must stay within the playable area
-        let b = BORDER_SIZE as i32;
-        let p = PLAYABLE_SIZE as i32;
-        if bx < b || bx >= b + p || by < b || by >= b + p {
+        let (lo, hi) = self.bounds;
+        if bx < lo || bx >= hi || by < lo || by >= hi {
             return false;
         }
         // Collision check
@@ -253,11 +257,12 @@ pub fn generate_base_buildings(
     cy: u32,
     seed: u32,
     facing: (f32, f32),
+    playable_size: u32,
 ) -> Vec<BaseBuilding> {
     let icx = cx as i32;
     let icy = cy as i32;
     let mut rng = Rng::new(seed);
-    let mut p = BasePlacer::new(faction, icx, icy);
+    let mut p = BasePlacer::new(faction, icx, icy, playable_size);
     let (fx, fy) = facing;
     let (px, py) = (-fy, fx);
     let pos = |forward: f32, lateral: f32| -> (i32, i32) {
@@ -356,6 +361,7 @@ pub fn generate_base_buildings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::PLAYABLE_SIZE;
 
     #[test]
     fn building_for_unit_mapping() {
@@ -376,9 +382,9 @@ mod tests {
         let cy_blue = b + 15;
         let cx_red = b + p - 16;
         let cy_red = b + p - 16;
-        for building in generate_base_buildings(Faction::Blue, cx_blue, cy_blue, 42, F_DOWN)
+        for building in generate_base_buildings(Faction::Blue, cx_blue, cy_blue, 42, F_DOWN, PLAYABLE_SIZE)
             .iter()
-            .chain(generate_base_buildings(Faction::Red, cx_red, cy_red, 42, F_UP).iter())
+            .chain(generate_base_buildings(Faction::Red, cx_red, cy_red, 42, F_UP, PLAYABLE_SIZE).iter())
         {
             assert!(
                 building.grid_x >= b && building.grid_x < b + p,
@@ -399,7 +405,7 @@ mod tests {
     fn generate_base_buildings_has_required_types() {
         for seed in [1, 42, 777, 31337] {
             let b = BORDER_SIZE;
-            let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, seed, F_DOWN);
+            let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, seed, F_DOWN, PLAYABLE_SIZE);
             let count = |k: BuildingKind| buildings.iter().filter(|b| b.kind == k).count();
             assert_eq!(count(BuildingKind::Castle), 1, "must have 1 castle");
             let towers = count(BuildingKind::DefenseTower);
@@ -417,7 +423,7 @@ mod tests {
         for seed in [1, 42, 777, 31337] {
             let b = BORDER_SIZE;
             let (cx, cy) = (b + 20, b + 20);
-            let buildings = generate_base_buildings(Faction::Blue, cx, cy, seed, F_DOWN);
+            let buildings = generate_base_buildings(Faction::Blue, cx, cy, seed, F_DOWN, PLAYABLE_SIZE);
             let front_towers = buildings
                 .iter()
                 .filter(|bl| bl.kind == BuildingKind::DefenseTower && bl.grid_y as i32 > cy as i32)
@@ -440,7 +446,7 @@ mod tests {
     #[test]
     fn base_production_covers_every_wave_kind() {
         let b = BORDER_SIZE;
-        let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, 42, F_DOWN);
+        let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, 42, F_DOWN, PLAYABLE_SIZE);
         for kind in [
             UnitKind::Warrior,
             UnitKind::Lancer,
@@ -457,8 +463,8 @@ mod tests {
     #[test]
     fn generate_base_buildings_is_deterministic() {
         let b = BORDER_SIZE;
-        let a = generate_base_buildings(Faction::Blue, b + 20, b + 20, 1337, F_DOWN);
-        let c = generate_base_buildings(Faction::Blue, b + 20, b + 20, 1337, F_DOWN);
+        let a = generate_base_buildings(Faction::Blue, b + 20, b + 20, 1337, F_DOWN, PLAYABLE_SIZE);
+        let c = generate_base_buildings(Faction::Blue, b + 20, b + 20, 1337, F_DOWN, PLAYABLE_SIZE);
         assert_eq!(a.len(), c.len());
         for (x, y) in a.iter().zip(c.iter()) {
             assert_eq!(x.kind, y.kind);
@@ -470,7 +476,7 @@ mod tests {
     #[test]
     fn house_variants_distributed() {
         let b = BORDER_SIZE;
-        let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, 42, F_DOWN);
+        let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, 42, F_DOWN, PLAYABLE_SIZE);
         let houses: Vec<u8> = buildings
             .iter()
             .filter(|b| b.kind == BuildingKind::House)
@@ -489,7 +495,7 @@ mod tests {
     #[test]
     fn production_buildings_have_produces() {
         let b = BORDER_SIZE;
-        let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, 42, F_DOWN);
+        let buildings = generate_base_buildings(Faction::Blue, b + 20, b + 20, 42, F_DOWN, PLAYABLE_SIZE);
         let warriors: Vec<_> = buildings
             .iter()
             .filter(|b| b.produces == Some(UnitKind::Warrior))

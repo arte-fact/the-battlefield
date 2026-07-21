@@ -151,6 +151,10 @@ pub struct Game {
     /// Time spent in sudden death (all pools empty) without a winner;
     /// forces a resolution when FFA stalemates.
     sudden_death_elapsed: f32,
+    /// Seconds since any manpower pool last moved; a long-stagnant
+    /// endgame arms sudden death even with unspendable pool left over.
+    pub(crate) manpower_stagnant: f32,
+    pub(crate) last_manpower: [f32; 4],
     /// In-flight budgeted map generation (loading screen).
     pending_setup: Option<mapgen::MapGen>,
     /// The army the player fights for. None while unaligned (free-mode
@@ -244,6 +248,8 @@ impl Game {
             objective_timer: 0.0,
             recruit_timer: 0.0,
             sudden_death_elapsed: 0.0,
+            manpower_stagnant: 0.0,
+            last_manpower: [f32::MIN; 4],
             pending_setup: None,
             player_faction: Some(Faction::Blue),
             untimed: false,
