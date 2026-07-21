@@ -122,6 +122,12 @@ pub fn draw_foreground(
 
 fn draw_unit(backend: &mut impl DrawBackend, game: &Game, idx: usize, elapsed: f64) {
     let unit = &game.units[idx];
+    // Free-mode pawn phase: the unaligned player is a villager, not a
+    // soldier — wear the neutral pawn skin until enlistment.
+    if unit.is_player && game.player_faction.is_none() {
+        draw_player_pawn(backend, game, idx, elapsed);
+        return;
+    }
     let key = SpriteKey::Unit {
         faction: unit.faction,
         kind: unit.kind,
@@ -385,6 +391,31 @@ fn draw_sheep(backend: &mut impl DrawBackend, game: &Game, idx: usize) {
         flip,
         1.0,
     );
+}
+
+/// The unaligned player, drawn from the neutral pawn sheets: idle when
+/// standing, the empty-handed run while moving.
+fn draw_player_pawn(backend: &mut impl DrawBackend, game: &Game, idx: usize, elapsed: f64) {
+    let unit = &game.units[idx];
+    const VILLAGER_FOLDER: usize = 2; // PAWN_COLOR_FOLDERS: neutral (Black)
+    let sheet = if unit.current_anim == crate::unit::UnitAnim::Run {
+        1 // Pawn_Run
+    } else {
+        0 // Pawn_Idle
+    };
+    let key = SpriteKey::Pawn(VILLAGER_FOLDER * asset_manifest::PAWN_SPECS.len() + sheet);
+    let Some(info) = backend.sprite_info(key) else {
+        return;
+    };
+
+    let frame = ((elapsed * 10.0) as u32) % info.frame_count.max(1);
+    let size = PAWN_FRAME_SIZE as f64;
+    let alpha = render_util::unit_opacity(unit.alive, unit.death_fade, unit.hit_flash);
+    let flip = unit.facing == Facing::Left;
+    let dx = unit.x as f64 - size / 2.0;
+    let dy = unit.y as f64 - size / 2.0;
+
+    backend.draw_sprite(key, frame, dx, dy, size, size, flip, alpha);
 }
 
 fn draw_pawn(backend: &mut impl DrawBackend, game: &Game, idx: usize) {
