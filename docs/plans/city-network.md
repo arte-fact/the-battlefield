@@ -207,7 +207,7 @@ gates below.
   reachability).
 - [x] 6. Roads as highways: +25% speed on Road tiles; road-following
   steering polish so columns look right.
-- [ ] 7. Hierarchical navigation: shared (deduped) then bounded local
+- [x] 7. Hierarchical navigation: shared (deduped) then bounded local
   flow fields (~32-tile influence), settlement-graph A* +
   polyline following, handoff at influence edge; equivalence checks
   on AUTO sizes (battles end, durations comparable).

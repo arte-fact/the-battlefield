@@ -10,6 +10,10 @@ pub struct FlowField {
     directions: Vec<(i8, i8)>,
     /// Integration cost to reach the nearest goal from each cell. u32::MAX = unreachable.
     integration: Vec<u32>,
+    /// Window origin in grid coords: the field only covers
+    /// [origin_x, origin_x + width) x [origin_y, origin_y + height).
+    origin_x: u32,
+    origin_y: u32,
     width: u32,
     height: u32,
 }
@@ -33,14 +37,36 @@ impl FlowField {
         Self::generate_multi_source(grid, &[(goal_gx, goal_gy, 0)])
     }
 
-    /// Generate a multi-source flow field from multiple goals using Dijkstra.
-    /// Each goal is `(gx, gy, initial_cost)` — lower initial_cost = higher priority.
-    /// Uses the same cost model as A*: cardinal=2, diagonal=3, × tile movement_cost.
+    /// Full-map field (legacy behavior): window covers the whole grid.
     pub fn generate_multi_source(grid: &Grid, goals: &[(u32, u32, u32)]) -> Self {
-        let w = grid.width;
-        let h = grid.height;
+        Self::generate_windowed(grid, goals, None)
+    }
+
+    /// Generate a multi-source flow field via Dijkstra, optionally bounded
+    /// to a window `(center_x, center_y, radius)` — memory and compute stay
+    /// constant per settlement regardless of map size. Cells outside the
+    /// window read as unreachable; long-range navigation hands off to the
+    /// settlement road graph before entering the window.
+    /// Uses the same cost model as A*: cardinal=2, diagonal=3, × tile movement_cost.
+    pub fn generate_windowed(
+        grid: &Grid,
+        goals: &[(u32, u32, u32)],
+        window: Option<(u32, u32, u32)>,
+    ) -> Self {
+        let (origin_x, origin_y, w, h) = match window {
+            Some((cx, cy, r)) => {
+                let x0 = cx.saturating_sub(r);
+                let y0 = cy.saturating_sub(r);
+                let x1 = (cx + r + 1).min(grid.width);
+                let y1 = (cy + r + 1).min(grid.height);
+                (x0, y0, x1 - x0, y1 - y0)
+            }
+            None => (0, 0, grid.width, grid.height),
+        };
         let size = (w * h) as usize;
-        let idx = |x: u32, y: u32| (y * w + x) as usize;
+        let idx = |x: u32, y: u32| ((y - origin_y) * w + (x - origin_x)) as usize;
+        let inside =
+            |x: u32, y: u32| x >= origin_x && y >= origin_y && x < origin_x + w && y < origin_y + h;
 
         let mut integration = vec![u32::MAX; size];
         let mut directions = vec![(0i8, 0i8); size];
@@ -48,7 +74,7 @@ impl FlowField {
 
         // Seed all valid goals
         for &(gx, gy, initial_cost) in goals {
-            if grid.in_bounds(gx as i32, gy as i32) && grid.is_passable(gx, gy) {
+            if grid.in_bounds(gx as i32, gy as i32) && inside(gx, gy) && grid.is_passable(gx, gy) {
                 let i = idx(gx, gy);
                 if initial_cost < integration[i] {
                     integration[i] = initial_cost;
@@ -61,6 +87,8 @@ impl FlowField {
             return Self {
                 directions,
                 integration,
+                origin_x,
+                origin_y,
                 width: w,
                 height: h,
             };
@@ -78,13 +106,16 @@ impl FlowField {
             for &(dx, dy, dir_cost) in &DIRS {
                 let nx = x as i32 + dx;
                 let ny = y as i32 + dy;
-                if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
+                if nx < 0 || ny < 0 || nx >= grid.width as i32 || ny >= grid.height as i32 {
                     continue;
                 }
                 let nx = nx as u32;
                 let ny = ny as u32;
+                if !inside(nx, ny) {
+                    continue;
+                }
                 let ni = idx(nx, ny);
-                if !passable[ni] {
+                if !passable[(ny * grid.width + nx) as usize] {
                     continue;
                 }
                 if grid.is_cliff_between(x, y, nx, ny) {
@@ -107,30 +138,49 @@ impl FlowField {
         Self {
             directions,
             integration,
+            origin_x,
+            origin_y,
             width: w,
             height: h,
         }
     }
 
     /// O(1) direction lookup at grid cell (gx, gy).
-    /// Returns (0, 0) if out of bounds, unreachable, or at goal.
+    /// Returns (0, 0) if outside the window, unreachable, or at goal.
     pub fn direction_at(&self, gx: u32, gy: u32) -> (i8, i8) {
-        if gx >= self.width || gy >= self.height {
+        if gx < self.origin_x
+            || gy < self.origin_y
+            || gx >= self.origin_x + self.width
+            || gy >= self.origin_y + self.height
+        {
             return (0, 0);
         }
-        self.directions[(gy * self.width + gx) as usize]
+        self.directions[((gy - self.origin_y) * self.width + (gx - self.origin_x)) as usize]
     }
 
-    /// Integration cost at cell. u32::MAX = unreachable.
+    /// Integration cost at cell. u32::MAX = outside window or unreachable.
     pub fn cost_at(&self, gx: u32, gy: u32) -> u32 {
-        if gx >= self.width || gy >= self.height {
+        if gx < self.origin_x
+            || gy < self.origin_y
+            || gx >= self.origin_x + self.width
+            || gy >= self.origin_y + self.height
+        {
             return u32::MAX;
         }
-        self.integration[(gy * self.width + gx) as usize]
+        self.integration[((gy - self.origin_y) * self.width + (gx - self.origin_x)) as usize]
+    }
+
+    /// True when the cell lies within the field's computed window.
+    pub fn covers(&self, gx: u32, gy: u32) -> bool {
+        gx >= self.origin_x
+            && gy >= self.origin_y
+            && gx < self.origin_x + self.width
+            && gy < self.origin_y + self.height
     }
 }
 
-/// Per-faction cached flow field state.
+/// Shared per-zone flow state: zone fields are terrain-only, so every
+/// faction reads the same set.
 #[derive(Default)]
 pub struct FactionFlowState {
     /// Per-zone flow fields, indexed by zone id.
@@ -149,6 +199,21 @@ impl FactionFlowState {
 mod tests {
     use super::*;
     use crate::grid::{Grid, TileKind};
+
+    #[test]
+    fn windowed_field_bounds_computation() {
+        let grid = Grid::new_grass(128, 128);
+        let field = FlowField::generate_windowed(&grid, &[(64, 64, 0)], Some((64, 64, 16)));
+        // Inside the window: directions lead toward the goal.
+        assert!(field.covers(64, 64));
+        assert!(field.covers(50, 64));
+        assert_ne!(field.direction_at(50, 64), (0, 0));
+        assert!(field.cost_at(50, 64) < u32::MAX);
+        // Outside the window: unreachable, direction dead.
+        assert!(!field.covers(20, 64));
+        assert_eq!(field.direction_at(20, 64), (0, 0));
+        assert_eq!(field.cost_at(20, 64), u32::MAX);
+    }
 
     #[test]
     fn directions_point_toward_goal_on_clear_grid() {

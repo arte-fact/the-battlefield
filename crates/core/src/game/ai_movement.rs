@@ -148,7 +148,11 @@ impl Game {
 
     /// Update per-zone flow fields for a faction.
     /// Each zone gets its own Dijkstra field (cached until zone position changes).
-    fn update_per_zone_fields(&mut self, faction: Faction) {
+    /// Influence radius of a settlement's local flow field, in tiles.
+    /// Units outside it navigate by the settlement road graph.
+    pub const ZONE_INFLUENCE_TILES: u32 = 32;
+
+    fn update_per_zone_fields(&mut self) {
         let zone_count = self.zone_manager.zones.len();
         if zone_count == 0 {
             return;
@@ -166,28 +170,15 @@ impl Game {
             zone_goals.push((gx, gy));
         }
 
-        // Ensure vectors are properly sized
-        let ensure_size = |state: &mut crate::flowfield::FactionFlowState, n: usize| {
-            state.zone_fields.resize_with(n, || None);
-            state.cached_zone_goals.resize_with(n, || None);
-        };
-        match faction {
-            Faction::Blue => ensure_size(&mut self.blue_flow, zone_count),
-            _ => ensure_size(&mut self.red_flow, zone_count),
-        }
+        self.zone_flow.zone_fields.resize_with(zone_count, || None);
+        self.zone_flow
+            .cached_zone_goals
+            .resize_with(zone_count, || None);
 
         // Generate/update per-zone fields (only when zone position changes)
         for (zi, &(gx, gy)) in zone_goals.iter().enumerate() {
-            let needs_regen = match faction {
-                Faction::Blue => {
-                    self.blue_flow.cached_zone_goals[zi] != Some((gx, gy))
-                        || self.blue_flow.zone_fields[zi].is_none()
-                }
-                _ => {
-                    self.red_flow.cached_zone_goals[zi] != Some((gx, gy))
-                        || self.red_flow.zone_fields[zi].is_none()
-                }
-            };
+            let needs_regen = self.zone_flow.cached_zone_goals[zi] != Some((gx, gy))
+                || self.zone_flow.zone_fields[zi].is_none();
             if !needs_regen {
                 continue;
             }
@@ -211,24 +202,71 @@ impl Game {
             if goals.is_empty() {
                 goals.push((gx, gy, 0));
             }
-            let field = crate::flowfield::FlowField::generate_multi_source(&self.grid, &goals);
-            match faction {
-                Faction::Blue => {
-                    self.blue_flow.zone_fields[zi] = Some(field);
-                    self.blue_flow.cached_zone_goals[zi] = Some((gx, gy));
-                }
-                _ => {
-                    self.red_flow.zone_fields[zi] = Some(field);
-                    self.red_flow.cached_zone_goals[zi] = Some((gx, gy));
-                }
-            }
+            let field = crate::flowfield::FlowField::generate_windowed(
+                &self.grid,
+                &goals,
+                Some((gx, gy, Self::ZONE_INFLUENCE_TILES)),
+            );
+            self.zone_flow.zone_fields[zi] = Some(field);
+            self.zone_flow.cached_zone_goals[zi] = Some((gx, gy));
         }
     }
 
-    /// Update the unified multi-source flow field for a faction.
-    /// Seeds Dijkstra from every scored zone; higher-score zones get lower initial cost.
-    pub(super) fn update_flow_fields(&mut self, faction: Faction) {
-        self.update_per_zone_fields(faction);
+    /// Build any missing shared per-zone fields (cached across frames).
+    pub(super) fn update_flow_fields(&mut self) {
+        self.update_per_zone_fields();
+    }
+
+    /// Next settlement to march through on the road graph from the
+    /// unit's position toward `target` — BFS over the road adjacency
+    /// (a handful of nodes) from the nearest settlement.
+    fn next_settlement_hop(&self, ux: f32, uy: f32, target: u8) -> Option<(f32, f32)> {
+        let zones = &self.zone_manager.zones;
+        let n = zones.len();
+        if n == 0 || target as usize >= n {
+            return None;
+        }
+        let nearest = zones
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, z)| {
+                let dx = (z.center_wx - ux) as i64;
+                let dy = (z.center_wy - uy) as i64;
+                dx * dx + dy * dy
+            })
+            .map(|(i, _)| i)?;
+        if nearest == target as usize {
+            // Already closest to the target settlement: head straight in.
+            let z = &zones[target as usize];
+            return Some((z.center_wx, z.center_wy));
+        }
+        // BFS from target back to nearest so parent pointers give the next hop.
+        let mut prev = vec![usize::MAX; n];
+        let mut queue = std::collections::VecDeque::new();
+        prev[target as usize] = target as usize;
+        queue.push_back(target as usize);
+        while let Some(cur) = queue.pop_front() {
+            if cur == nearest {
+                break;
+            }
+            if let Some(adj) = self.zone_manager.connections.get(cur) {
+                for &nb in adj {
+                    let nb = nb as usize;
+                    if nb < n && prev[nb] == usize::MAX {
+                        prev[nb] = cur;
+                        queue.push_back(nb);
+                    }
+                }
+            }
+        }
+        let hop = if prev[nearest] == usize::MAX {
+            // Disconnected in the graph (shouldn't happen): march direct.
+            target as usize
+        } else {
+            prev[nearest]
+        };
+        let z = &zones[hop];
+        Some((z.center_wx, z.center_wy))
     }
 
     /// Assign a unit to a zone, resetting arrival state when the target changes.
@@ -331,19 +369,27 @@ impl Game {
                     let n_defend =
                         ((available.len() as f32 * 0.4).ceil() as usize).min(available.len());
 
-                    // Sort by flow cost to defend zone (nearest first)
-                    let flow_state = match faction {
-                        Faction::Blue => &self.blue_flow,
-                        _ => &self.red_flow,
-                    };
+                    // Sort by flow cost to defend zone (nearest first);
+                    // outside the window fall back to squared distance.
+                    let def_zone = &self.zone_manager.zones[def_zi as usize];
+                    let (dzx, dzy) = (def_zone.center_wx, def_zone.center_wy);
                     available.sort_by_key(|&ui| {
                         let (gx, gy) = self.units[ui].grid_cell();
-                        flow_state
+                        let flow_cost = self
+                            .zone_flow
                             .zone_fields
                             .get(def_zi as usize)
                             .and_then(|f| f.as_ref())
                             .map(|f| f.cost_at(gx, gy))
-                            .unwrap_or(u32::MAX)
+                            .unwrap_or(u32::MAX);
+                        if flow_cost != u32::MAX {
+                            flow_cost as u64
+                        } else {
+                            let dx = (self.units[ui].x - dzx) as i64;
+                            let dy = (self.units[ui].y - dzy) as i64;
+                            // Distance ranks after any in-window cost.
+                            1_000_000_000 + (dx * dx + dy * dy) as u64
+                        }
                     });
 
                     // Nearest n_defend → defend, rest → attack
@@ -497,21 +543,29 @@ impl Game {
             }
         }
 
-        // Read direction from assigned zone's per-zone flow field
+        // Inside the target's influence window: follow its local flow
+        // field. Outside: hop the settlement road graph toward it.
         let (gx, gy) = self.units[ai_idx].grid_cell();
-        let dir = {
-            let flow_state = match faction {
-                Faction::Blue => &self.blue_flow,
-                _ => &self.red_flow,
-            };
-            assigned_zone.and_then(|zi| {
-                flow_state
-                    .zone_fields
-                    .get(zi as usize)
-                    .and_then(|f| f.as_ref())
-                    .map(|f| f.direction_at(gx, gy))
-            })
-        };
+        let in_window = assigned_zone
+            .and_then(|zi| self.zone_flow.zone_fields.get(zi as usize))
+            .and_then(|f| f.as_ref())
+            .map(|f| f.covers(gx, gy))
+            .unwrap_or(false);
+        if !in_window {
+            if let Some(zi) = assigned_zone {
+                if let Some((hx, hy)) = self.next_settlement_hop(ux, uy, zi) {
+                    self.ai_move_toward_continuous(ai_idx, hx, hy, dt);
+                    return;
+                }
+            }
+        }
+        let dir = assigned_zone.and_then(|zi| {
+            self.zone_flow
+                .zone_fields
+                .get(zi as usize)
+                .and_then(|f| f.as_ref())
+                .map(|f| f.direction_at(gx, gy))
+        });
 
         if let Some(dir) = dir {
             if dir != (0, 0) {
@@ -583,12 +637,10 @@ impl Game {
     /// Diagnostic snapshot of unit movement state (bench/debug tooling).
     pub fn flow_diagnostics(&self) -> String {
         let mut out = String::new();
-        for (fi, faction) in [(0usize, Faction::Blue), (1, Faction::Red)] {
-            let flow = if fi == 0 {
-                &self.blue_flow
-            } else {
-                &self.red_flow
-            };
+        for &faction in self.active_factions() {
+            let fi = faction.idx();
+            let flow = &self.zone_flow;
+            let _ = fi;
             let mut unassigned = 0;
             let mut idle_in_zone = 0;
             let mut flowing = 0;
@@ -732,6 +784,37 @@ pub(super) fn zone_hold_point(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn far_marches_hop_the_settlement_graph() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.update_flow_fields();
+        // From the blue capital (zone 0), a march to the red capital
+        // (zone 1) must route via a road neighbor, not beeline.
+        let z0 = &game.zone_manager.zones[0];
+        let (ux, uy) = (z0.center_wx, z0.center_wy);
+        let hop = game.next_settlement_hop(ux, uy, 1).expect("hop");
+        let z1 = &game.zone_manager.zones[1];
+        let direct = ((z1.center_wx - ux).powi(2) + (z1.center_wy - uy).powi(2)).sqrt();
+        let hop_dist = ((hop.0 - ux).powi(2) + (hop.1 - uy).powi(2)).sqrt();
+        assert!(
+            hop_dist < direct,
+            "the first hop must be closer than the far capital"
+        );
+        // The hop is a road neighbor of the blue capital.
+        let neighbors = &game.zone_manager.connections[0];
+        let is_neighbor = neighbors.iter().any(|&n| {
+            let z = &game.zone_manager.zones[n as usize];
+            (z.center_wx - hop.0).abs() < 1.0 && (z.center_wy - hop.1).abs() < 1.0
+        });
+        assert!(is_neighbor, "hop must follow the road graph");
+        // Inside the target's influence, the local field takes over.
+        let (gx, gy) = (z1.center_gx - 10, z1.center_gy);
+        let field = game.zone_flow.zone_fields[1].as_ref().unwrap();
+        assert!(field.covers(gx, gy));
+        assert_ne!(field.direction_at(gx, gy), (0, 0));
+    }
+
     #[test]
     fn zone_hold_points_are_standable() {
         for seed in [42, 777, 9999] {

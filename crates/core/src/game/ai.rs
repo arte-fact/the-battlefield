@@ -55,10 +55,9 @@ impl Game {
             }
         }
 
-        // Stagger flow field updates: one faction per frame round-robin.
-        let turn = self.flow_field_rotation as usize % active.len();
-        self.update_flow_fields(active[turn]);
-        self.flow_field_rotation = self.flow_field_rotation.wrapping_add(1);
+        // Zone fields are shared (terrain-only) and cached; this pass only
+        // builds fields that are still missing.
+        self.update_flow_fields();
 
         // Assign per-unit zone objectives when macro objectives are refreshed
         if refresh_objectives {

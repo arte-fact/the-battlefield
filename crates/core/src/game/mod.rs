@@ -133,10 +133,9 @@ pub struct Game {
     spawn_timer: [f32; 4],
     /// Per-faction flag: skip rally_hold when dominating (all zones held).
     skip_rally: [bool; 4],
-    /// Unified flow field for Blue faction (multi-source, all map objectives).
-    blue_flow: FactionFlowState,
-    /// Unified flow field for Red faction (multi-source, all map objectives).
-    red_flow: FactionFlowState,
+    /// Shared per-zone flow fields (terrain-only, faction-agnostic),
+    /// bounded to each settlement's influence window.
+    zone_flow: FactionFlowState,
     /// Macro objectives per army faction: [(wx, wy, score); 3] each.
     pub macro_objectives: [Vec<(f32, f32, f32)>; 4],
     /// Sticky planner picks per faction: (defend, attack). A new candidate
@@ -146,8 +145,6 @@ pub struct Game {
     objective_timer: f32,
     /// Timer for periodic auto-recruitment passes.
     recruit_timer: f32,
-    /// Round-robin counter staggering per-faction flow field updates.
-    flow_field_rotation: u32,
     /// Time spent in sudden death (all pools empty) without a winner;
     /// forces a resolution when FFA stalemates.
     sudden_death_elapsed: f32,
@@ -222,13 +219,11 @@ impl Game {
             spawn_queue: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             spawn_timer: [0.0; 4],
             skip_rally: [false; 4],
-            blue_flow: FactionFlowState::new(),
-            red_flow: FactionFlowState::new(),
+            zone_flow: FactionFlowState::new(),
             macro_objectives: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             planner_targets: [(None, None); 4],
             objective_timer: 0.0,
             recruit_timer: 0.0,
-            flow_field_rotation: 0,
             sudden_death_elapsed: 0.0,
             astar_budget: 0,
             last_path_result: None,
