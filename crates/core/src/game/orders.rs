@@ -86,7 +86,8 @@ impl Game {
         (h % 100) < (follow_chance * 100.0) as u32
     }
 
-    /// Allied units in command radius with no active order roll the
+    /// Allied units in command radius with no active order — including
+    /// same-color garrisons, whose village refills from stock — roll the
     /// acceptance check and join as sticky followers, up to the cap.
     pub(super) fn recruitment_pass(&mut self) {
         let (px, py, pf) = match self.player_unit() {
@@ -111,10 +112,12 @@ impl Game {
             .iter()
             .enumerate()
             .filter(|(_, u)| {
+                let recruitable =
+                    u.order.is_none() || matches!(u.order, Some(OrderKind::DefendZone { .. }));
                 u.alive
                     && !u.is_player
                     && u.faction == pf
-                    && u.order.is_none()
+                    && recruitable
                     && u.re_recruit_cooldown <= 0.0
                     && u.distance_to_pos(px, py) <= radius
             })
@@ -455,6 +458,39 @@ impl Game {
                     UnitKind::Archer => self.ai_archer_tick(ai_idx, dt),
                     UnitKind::Lancer => self.ai_lancer_tick(ai_idx, dt),
                     UnitKind::Warrior => self.ai_melee_tick(ai_idx, dt),
+                }
+                return;
+            }
+        }
+
+        // Quiet zone, stationed monk: patrol to the most wounded friendly
+        // inside the leash and stand in heal range (the passive heal in
+        // ai_unit_tick does the rest). Pastures become healing stops.
+        if self.units[ai_idx].kind == UnitKind::Monk {
+            let faction = self.units[ai_idx].faction;
+            let ai_id = self.units[ai_idx].id;
+            let heal_range = self.units[ai_idx].stats.range as f32 * TILE_SIZE;
+            let wounded = self
+                .units
+                .iter()
+                .filter(|u| {
+                    u.alive && u.faction == faction && u.id != ai_id && u.hp < u.stats.max_hp
+                })
+                .filter(|u| {
+                    let dx = u.x - zx;
+                    let dy = u.y - zy;
+                    dx * dx + dy * dy <= leash * leash
+                })
+                .min_by_key(|u| u.hp)
+                .map(|u| (u.x, u.y));
+            if let Some((tx, ty)) = wounded {
+                let ux = self.units[ai_idx].x;
+                let uy = self.units[ai_idx].y;
+                let d_sq = (ux - tx) * (ux - tx) + (uy - ty) * (uy - ty);
+                if d_sq > heal_range * heal_range * 0.64 {
+                    self.ai_move_toward_continuous(ai_idx, tx, ty, dt);
+                } else {
+                    self.units[ai_idx].set_anim(UnitAnim::Idle);
                 }
                 return;
             }

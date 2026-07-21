@@ -85,6 +85,38 @@ impl Game {
             zone_awake[zi] = awake;
         }
 
+        // Monk exception: a sleeping zone with a wounded friendly inside
+        // still wakes its stationed monks so they can patrol-heal. Only
+        // zones that actually garrison a monk pay for the scan.
+        let mut zone_monk_awake = zone_awake.clone();
+        for u in self.units.iter() {
+            if !u.alive || u.kind != crate::unit::UnitKind::Monk {
+                continue;
+            }
+            let Some(crate::unit::OrderKind::DefendZone { zone }) = u.order else {
+                continue;
+            };
+            let zi = zone as usize;
+            if zi >= zone_monk_awake.len() || zone_monk_awake[zi] {
+                continue;
+            }
+            let z = &self.zone_manager.zones[zi];
+            let leash =
+                (z.radius as f32 + self.config.zone_defend_leash_tiles) * TILE_SIZE;
+            let garrison_faction = u.faction;
+            zone_monk_awake[zi] = self
+                .spatial
+                .query(z.center_wx, z.center_wy, leash)
+                .any(|wi| {
+                    let w = &self.units[wi];
+                    w.alive
+                        && w.faction == garrison_faction
+                        && w.hp < w.stats.max_hp
+                        && (w.x - z.center_wx).powi(2) + (w.y - z.center_wy).powi(2)
+                            <= leash * leash
+                });
+        }
+
         let mut ai_indices: Vec<usize> = self
             .units
             .iter()
@@ -95,7 +127,12 @@ impl Game {
                 }
                 if let Some(crate::unit::OrderKind::DefendZone { zone }) = u.order {
                     // Asleep at a quiet post: hold position, skip AI.
-                    if !zone_awake.get(zone as usize).copied().unwrap_or(true) {
+                    let awake = if u.kind == crate::unit::UnitKind::Monk {
+                        &zone_monk_awake
+                    } else {
+                        &zone_awake
+                    };
+                    if !awake.get(zone as usize).copied().unwrap_or(true) {
                         return false;
                     }
                 }

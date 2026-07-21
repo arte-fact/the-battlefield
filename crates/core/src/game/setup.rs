@@ -1129,6 +1129,102 @@ mod tests {
     }
 
     #[test]
+    fn garrison_joins_retinue_and_village_refills() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.authority = 100.0; // guaranteed acceptance rolls
+        let zi = 3usize;
+        let (zx, zy) = {
+            let z = &game.zone_manager.zones[zi];
+            (z.center_gx, z.center_gy)
+        };
+        game.zone_manager.zones[zi].set_controlled(Faction::Blue);
+        game.village_stock[zi] = 5;
+        let gid = game.spawn_unit(UnitKind::Warrior, Faction::Blue, zx + 2, zy, false);
+        let mid = game.spawn_unit(UnitKind::Warrior, Faction::Villager, zx - 2, zy, false);
+        for &(id, zone) in &[(gid, zi as u8), (mid, zi as u8)] {
+            if let Some(u) = game.units.iter_mut().find(|u| u.id == id) {
+                u.order = Some(crate::unit::OrderKind::DefendZone { zone });
+            }
+        }
+        // Park the player inside the zone.
+        if let Some(p) = game.units.iter_mut().find(|u| u.is_player) {
+            p.x = zx as f32 * crate::grid::TILE_SIZE;
+            p.y = zy as f32 * crate::grid::TILE_SIZE;
+        }
+        let input = crate::player_input::PlayerInput::default();
+        let mut joined = false;
+        for _ in 0..(60 * 20) {
+            game.tick(&input, 1.0 / 60.0);
+            let g = game.units.iter().find(|u| u.id == gid).unwrap();
+            if g.order == Some(crate::unit::OrderKind::Follow) {
+                joined = true;
+                break;
+            }
+        }
+        assert!(joined, "own-color garrison must join the passing player");
+        let m = game.units.iter().find(|u| u.id == mid).unwrap();
+        assert!(
+            matches!(m.order, Some(crate::unit::OrderKind::DefendZone { .. })),
+            "neutral militia must never join the retinue"
+        );
+        // The village spends stock to replace the recruited defender.
+        let mut refilled = false;
+        for _ in 0..(60 * 30) {
+            game.tick(&input, 1.0 / 60.0);
+            let replacement = game.units.iter().any(|u| {
+                u.alive
+                    && u.id != gid
+                    && u.faction == Faction::Blue
+                    && u.order == Some(crate::unit::OrderKind::DefendZone { zone: zi as u8 })
+            });
+            if replacement {
+                refilled = true;
+                break;
+            }
+        }
+        assert!(refilled, "village must refill the garrison from stock");
+    }
+
+    #[test]
+    fn garrison_monk_heals_wounded_in_quiet_zone() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.retain(|u| u.is_player);
+        game.manpower = [0.0, 0.0, 0.0, 0.0];
+        let zi = 3usize;
+        let (zx, zy, zwx, zwy) = {
+            let z = &game.zone_manager.zones[zi];
+            (z.center_gx, z.center_gy, z.center_wx, z.center_wy)
+        };
+        game.zone_manager.zones[zi].set_controlled(Faction::Blue);
+        let monk = game.spawn_unit(UnitKind::Monk, Faction::Blue, zx + 2, zy, false);
+        if let Some(u) = game.units.iter_mut().find(|u| u.id == monk) {
+            u.order = Some(crate::unit::OrderKind::DefendZone { zone: zi as u8 });
+        }
+        // A wounded ally rests at the zone edge, no hostiles anywhere near.
+        let hurt = game.spawn_unit(UnitKind::Warrior, Faction::Blue, zx - 3, zy, false);
+        if let Some(u) = game.units.iter_mut().find(|u| u.id == hurt) {
+            u.hp = 3;
+            u.x = zwx - 3.0 * crate::grid::TILE_SIZE;
+            u.y = zwy;
+        }
+        // Distant Red keeps the battle alive without waking the zone.
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, zx.saturating_sub(60), zy, false);
+        let input = crate::player_input::PlayerInput::default();
+        let mut healed = false;
+        for _ in 0..(60 * 30) {
+            game.tick(&input, 1.0 / 60.0);
+            let h = game.units.iter().find(|u| u.id == hurt).unwrap();
+            if h.hp > 3 {
+                healed = true;
+                break;
+            }
+        }
+        assert!(healed, "stationed monk must patrol to and heal the wounded ally");
+    }
+
+    #[test]
     fn hold_zone_order_stations_retinue() {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
