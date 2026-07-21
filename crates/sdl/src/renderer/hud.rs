@@ -3,7 +3,6 @@
 use battlefield_core::game::Game;
 use battlefield_core::grid::{self, TILE_SIZE};
 use battlefield_core::render_util;
-use battlefield_core::unit::Faction;
 use battlefield_core::zone::ZoneState;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;

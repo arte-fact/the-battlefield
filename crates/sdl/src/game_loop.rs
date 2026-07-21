@@ -1,7 +1,6 @@
 use battlefield_core::game::Game;
 use battlefield_core::grid::TILE_SIZE;
 use battlefield_core::ui;
-use battlefield_core::unit::Faction;
 
 use crate::input::InputState;
 use crate::renderer::GameScreen;
