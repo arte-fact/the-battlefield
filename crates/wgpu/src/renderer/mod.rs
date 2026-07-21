@@ -1047,18 +1047,15 @@ fn draw_unit_overlays(
 }
 
 /// Upload visibility data to the fog texture. The fog shader computes smoothing on the GPU.
-fn upload_fog_visibility(gpu: &GpuContext, game: &Game, assets: &Assets) {
-    if assets.fog_texture.is_none() {
-        return;
-    }
-    let size = game.grid.width;
+fn upload_fog_visibility(gpu: &GpuContext, game: &Game, assets: &mut Assets) {
+    assets.ensure_fog_texture(gpu, game.grid.width, game.grid.height);
     // Convert bool visibility to u8: true → 255 (1.0 in R8Unorm), false → 0
     let pixels: Vec<u8> = game
         .visible
         .iter()
         .map(|&v| if v { 255 } else { 0 })
         .collect();
-    assets.update_fog(gpu, &pixels, size);
+    assets.update_fog(gpu, &pixels, game.grid.width, game.grid.height);
 }
 
 /// Render fog quad using the dedicated fog pipeline.

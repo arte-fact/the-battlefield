@@ -211,7 +211,7 @@ gates below.
   flow fields (~32-tile influence), settlement-graph A* +
   polyline following, handoff at influence edge; equivalence checks
   on AUTO sizes (battles end, durations comparable).
-- [ ] 8. Runtime map size in renderers: fog/minimap textures from
+- [x] 8. Runtime map size in renderers: fog/minimap textures from
   grid dims, recreated on battle setup.
 - [ ] 9. Budgeted generation pipeline + loading bar (no frame >
   50 ms); militia sleep (wake on hostile in influence radius).

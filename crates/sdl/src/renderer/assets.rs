@@ -58,6 +58,8 @@ pub struct Assets<'a> {
     pub(super) _ui_wood_table: Option<(Texture<'a>, u32, u32)>,
     // Fog
     pub fog_texture: Option<Texture<'a>>,
+    /// Grid size the fog texture was created for.
+    pub fog_tex_size: (u32, u32),
     // Sheep: (texture, frame_count) for Idle, Move, Grass
     pub(super) sheep_textures: Vec<(Texture<'a>, u32)>,
     // Pawn: (texture, frame_w, frame_h, frame_count) — 5 per faction × 2 factions = 10
@@ -235,6 +237,24 @@ fn count_frames(path: &str, frame_w: u32) -> u32 {
 }
 
 impl<'a> Assets<'a> {
+    /// Create (or recreate) the streaming fog texture at the battle's
+    /// grid size — map size is runtime now.
+    pub fn ensure_fog_texture(&mut self, tc: &'a TextureCreator<WindowContext>, w: u32, h: u32) {
+        if self.fog_texture.is_some() && self.fog_tex_size == (w, h) {
+            return;
+        }
+        sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "1");
+        self.fog_texture = tc
+            .create_texture_streaming(Some(PixelFormatEnum::ABGR8888), w, h)
+            .ok()
+            .map(|mut t| {
+                t.set_blend_mode(BlendMode::Blend);
+                t
+            });
+        sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "0");
+        self.fog_tex_size = (w, h);
+    }
+
     pub fn load(tc: &'a TextureCreator<WindowContext>) -> Self {
         let mut unit_textures = HashMap::new();
         let mut particle_textures = HashMap::new();
@@ -602,19 +622,8 @@ impl<'a> Assets<'a> {
                 }
                 v
             },
-            fog_texture: {
-                use battlefield_core::grid::GRID_SIZE;
-                sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "1");
-                let tex = tc
-                    .create_texture_streaming(Some(PixelFormatEnum::ABGR8888), GRID_SIZE, GRID_SIZE)
-                    .ok()
-                    .map(|mut t| {
-                        t.set_blend_mode(BlendMode::Blend);
-                        t
-                    });
-                sdl2::hint::set("SDL_RENDER_SCALE_QUALITY", "0");
-                tex
-            },
+            fog_texture: None,
+            fog_tex_size: (0, 0),
             text: TextRenderer::new(),
             drawable_buf: Vec::with_capacity(512),
         }

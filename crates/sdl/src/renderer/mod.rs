@@ -110,11 +110,11 @@ fn src_rect(sx: f64, sy: f64, sw: f64, sh: f64) -> Rect {
 // Main render entry point
 // ───────────────────────────────────────────────────────────────────────────
 
-pub fn render_frame(
+pub fn render_frame<'a>(
     canvas: &mut Canvas<Window>,
-    tc: &TextureCreator<WindowContext>,
+    tc: &'a TextureCreator<WindowContext>,
     game: &Game,
-    assets: &mut Assets,
+    assets: &mut Assets<'a>,
     screen: GameScreen,
     elapsed: f64,
     mouse_x: i32,
@@ -126,6 +126,7 @@ pub fn render_frame(
     touch_dpr: f64,
     ui_state: &battlefield_core::ui::UiState,
 ) -> Vec<ClickableButton> {
+    assets.ensure_fog_texture(tc, game.grid.width, game.grid.height);
     let ts = TILE_SIZE * game.camera.zoom;
     let cam = &game.camera;
     let (min_gx, min_gy, max_gx, max_gy) =

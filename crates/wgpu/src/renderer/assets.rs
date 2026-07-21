@@ -80,6 +80,9 @@ pub struct Assets {
     /// Fog of war (dynamic texture, updated per frame).
     pub fog_texture: Option<TextureId>,
     pub fog_wgpu_texture: Option<wgpu::Texture>,
+    /// Dimensions the fog texture was created at (recreated when the
+    /// battle's grid size changes).
+    fog_tex_size: (u32, u32),
 
     /// 1x1 white pixel texture for drawing colored rects in the sprite batch.
     pub white_texture: Option<TextureId>,
@@ -134,6 +137,7 @@ impl Assets {
             shadow_texture: None,
             fog_texture: None,
             fog_wgpu_texture: None,
+            fog_tex_size: (0, 0),
             white_texture: None,
             ui_special_paper: None,
             ui_blue_btn: None,
@@ -159,7 +163,6 @@ impl Assets {
         assets.load_sheep(gpu);
         assets.load_pawns(gpu);
         assets.load_avatars(gpu);
-        assets.create_fog_texture(gpu);
         assets.create_white_texture(gpu);
         assets.load_ui(gpu);
 
@@ -765,15 +768,20 @@ impl Assets {
 
     // ── Fog of war texture ──────────────────────────────────────────────
 
-    fn create_fog_texture(&mut self, gpu: &GpuContext) {
-        let size = battlefield_core::grid::GRID_SIZE;
+    /// Create (or recreate) the fog texture for the given grid size.
+    /// Called lazily from the upload path so map size stays runtime.
+    pub fn ensure_fog_texture(&mut self, gpu: &GpuContext, w: u32, h: u32) {
+        if self.fog_wgpu_texture.is_some() && self.fog_tex_size == (w, h) {
+            return;
+        }
+        self.fog_tex_size = (w, h);
         // R8Unorm: 1 byte per tile (0.0=hidden, 1.0=visible).
         // The fog shader computes smooth alpha on the GPU.
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("fog_vis"),
             size: wgpu::Extent3d {
-                width: size,
-                height: size,
+                width: w,
+                height: h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -788,16 +796,23 @@ impl Assets {
         // Linear sampler — bilinear interpolation gives smooth sub-tile fog gradients
         let bind_group = gpu.create_texture_bind_group(&view, &gpu.linear_sampler);
 
-        let id = self.textures.len();
-        self.textures.push(GpuTexture {
+        let entry = GpuTexture {
             _texture: texture.clone(),
             view,
             bind_group,
-            width: size,
-            height: size,
+            width: w,
+            height: h,
             scale: 1.0,
-        });
-        self.fog_texture = Some(id);
+        };
+        // Reuse the existing slot on recreation so ids stay stable.
+        match self.fog_texture {
+            Some(id) => self.textures[id] = entry,
+            None => {
+                let id = self.textures.len();
+                self.textures.push(entry);
+                self.fog_texture = Some(id);
+            }
+        }
         self.fog_wgpu_texture = Some(texture);
     }
 
@@ -807,7 +822,7 @@ impl Assets {
     }
 
     /// Update fog visibility texture (R8Unorm, 1 byte per tile: 0=hidden, 255=visible).
-    pub fn update_fog(&self, gpu: &GpuContext, pixels: &[u8], size: u32) {
+    pub fn update_fog(&self, gpu: &GpuContext, pixels: &[u8], w: u32, h: u32) {
         if let Some(tex) = &self.fog_wgpu_texture {
             gpu.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -819,12 +834,12 @@ impl Assets {
                 pixels,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(size), // 1 byte per pixel
-                    rows_per_image: Some(size),
+                    bytes_per_row: Some(w), // 1 byte per pixel
+                    rows_per_image: Some(h),
                 },
                 wgpu::Extent3d {
-                    width: size,
-                    height: size,
+                    width: w,
+                    height: h,
                     depth_or_array_layers: 1,
                 },
             );
