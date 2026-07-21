@@ -128,14 +128,14 @@ impl Game {
             {
                 self.on_zone_lost(in_fov, zx, zy);
             }
-            if before == ZoneState::Controlled(Faction::Red)
-                && after != ZoneState::Controlled(Faction::Red)
-            {
-                self.on_zone_decaptured(in_fov, zx, zy);
+            if let ZoneState::Controlled(rival) = before {
+                if rival != army && after != before {
+                    self.on_zone_decaptured(in_fov, zx, zy);
+                }
             }
         }
 
-        if self.winner.is_none() {
+        if self.winner.is_none() && !self.untimed {
             let hold = self.config.victory_hold_time;
             // A pool below 1.0 cannot field a unit — effectively exhausted
             let exhausted = self
@@ -172,7 +172,9 @@ impl Game {
             }
         }
 
-        self.tick_manpower_bleed(dt);
+        if !self.untimed {
+            self.tick_manpower_bleed(dt);
+        }
         self.check_annihilation();
     }
 
@@ -254,7 +256,10 @@ impl Game {
             .collect();
         if active.len() > 1 && standing.len() == 1 {
             self.winner = Some(standing[0]);
-        } else if active.len() > 1 && !standing.contains(&self.player_army()) {
+        } else if active.len() > 1
+            && self.player_faction.is_some()
+            && !standing.contains(&self.player_army())
+        {
             // The player's faction is annihilated while rivals still fight:
             // the run ends now — credit the current settlement leader.
             let leader = standing
@@ -778,14 +783,45 @@ impl Game {
             }
         }
 
-        // Spawn player at their army's capital center
-        let army = self.player_army();
-        let (pcx, pcy) = if army == Faction::Blue {
-            (blue_cx, blue_cy)
-        } else {
-            base_pos[army.idx()]
-        };
-        self.spawn_unit(UnitKind::Warrior, army, pcx, pcy, true);
+        // Spawn the player: enlisted runs start as a Warrior at their
+        // army's capital; unaligned (free-mode) runs start as a villager
+        // at the countryside settlement farthest from every capital.
+        match self.player_faction {
+            Some(army) => {
+                let (pcx, pcy) = if army == Faction::Blue {
+                    (blue_cx, blue_cy)
+                } else {
+                    base_pos[army.idx()]
+                };
+                self.spawn_unit(UnitKind::Warrior, army, pcx, pcy, true);
+            }
+            None => {
+                let n_caps = active.len();
+                let capitals: Vec<(f32, f32)> = self.zone_manager.zones[..n_caps]
+                    .iter()
+                    .map(|z| (z.center_wx, z.center_wy))
+                    .collect();
+                let (pcx, pcy) = self.zone_manager.zones[n_caps..]
+                    .iter()
+                    .max_by_key(|z| {
+                        capitals
+                            .iter()
+                            .map(|&(cx, cy)| {
+                                ((z.center_wx - cx).powi(2) + (z.center_wy - cy).powi(2)) as i64
+                            })
+                            .min()
+                            .unwrap_or(0)
+                    })
+                    .map(|z| (z.center_gx, z.center_gy))
+                    .unwrap_or((blue_cx, blue_cy));
+                let id = self.spawn_unit(UnitKind::Warrior, Faction::Villager, pcx, pcy, true);
+                if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
+                    // A villager, not a soldier: fragile, unarmed in spirit.
+                    u.stats.max_hp = 5;
+                    u.hp = 5;
+                }
+            }
+        }
 
         // Spawn starting armies around each base — same composition as a wave, no rally hold
         for &(faction, base_cx, base_cy) in active
@@ -1133,6 +1169,122 @@ mod tests {
             }
         }
         assert!(reacted, "militia must wake when a hostile enters the zone");
+    }
+
+    #[test]
+    fn unaligned_villager_enlists_at_a_production_building() {
+        let mut game = Game::new(960.0, 640.0);
+        game.player_faction = None;
+        game.untimed = true;
+        game.setup_demo_battle_with_seed(42);
+
+        let p = game.player_unit().expect("player spawns");
+        assert_eq!(p.faction, Faction::Villager);
+        assert_eq!(p.stats.max_hp, 5, "villager is fragile");
+        let start_zone = game
+            .zone_manager
+            .zones
+            .iter()
+            .position(|z| {
+                let d = (z.center_wx - p.x).powi(2) + (z.center_wy - p.y).powi(2);
+                d < (z.radius as f32 * crate::grid::TILE_SIZE).powi(2)
+            })
+            .expect("pawn starts inside a settlement");
+        assert!(
+            game.zone_manager.zones[start_zone].owner.is_none(),
+            "pawn starts at a neutral settlement"
+        );
+
+        // Soldiers never target the bystander.
+        let (px, py) = (p.x, p.y);
+        let rid = game.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Red,
+            (px / crate::grid::TILE_SIZE) as u32 + 2,
+            (py / crate::grid::TILE_SIZE) as u32,
+            false,
+        );
+        let input = crate::player_input::PlayerInput::default();
+        for _ in 0..120 {
+            game.tick(&input, 1.0 / 60.0);
+        }
+        let pid = game.player_unit().unwrap().id;
+        let r = game.units.iter().find(|u| u.id == rid).unwrap();
+        assert_ne!(
+            r.combat_target,
+            Some(pid),
+            "armies must not target the unaligned villager"
+        );
+        assert!(!game.player_attack(), "a bystander cannot attack");
+
+        // Walk into a Blue production building: instant enlistment.
+        let (bx, by, produced) = game
+            .buildings
+            .iter()
+            .find(|b| {
+                b.produces.is_some()
+                    && b.zone_id.is_some_and(|z| {
+                        game.zone_manager.zones[z as usize].effective_faction()
+                            == Some(Faction::Blue)
+                    })
+            })
+            .map(|b| (b.grid_x, b.grid_y, b.produces.unwrap()))
+            .expect("blue capital has production");
+        if let Some(u) = game.units.iter_mut().find(|u| u.is_player) {
+            let (wx, wy) = crate::grid::grid_to_world(bx, by);
+            u.x = wx;
+            u.y = wy;
+        }
+        game.tick(&input, 1.0 / 60.0);
+        assert_eq!(game.player_faction, Some(Faction::Blue));
+        let p = game.player_unit().unwrap();
+        assert_eq!(p.faction, Faction::Blue);
+        assert_eq!(p.kind, produced);
+        assert_eq!(p.hp, p.stats.max_hp, "enlistment heals to full");
+    }
+
+    #[test]
+    fn untimed_battle_ignores_domination_and_bleed() {
+        let mut game = Game::new(960.0, 640.0);
+        game.untimed = true;
+        game.setup_demo_battle_with_seed(42);
+        for z in game.zone_manager.zones.iter_mut() {
+            z.set_controlled(Faction::Red);
+        }
+        game.config.bleed_per_extra_zone = 0.5;
+        let input = crate::player_input::PlayerInput::default();
+        for _ in 0..(60 * 70) {
+            game.tick(&input, 1.0 / 60.0);
+            if game.winner.is_some() {
+                break;
+            }
+        }
+        assert!(
+            game.winner.is_none(),
+            "untimed battles have no domination victory (got {:?})",
+            game.winner
+        );
+
+        // Same map with the clock on: the settlement leader's bleed must
+        // drain far more than untimed production spend alone.
+        let drained = |untimed: bool| -> f32 {
+            let mut g = Game::new(960.0, 640.0);
+            g.untimed = untimed;
+            g.setup_demo_battle_with_seed(42);
+            for z in g.zone_manager.zones.iter_mut() {
+                z.set_controlled(Faction::Red);
+            }
+            g.config.bleed_per_extra_zone = 0.5;
+            let input = crate::player_input::PlayerInput::default();
+            for _ in 0..(60 * 20) {
+                g.tick(&input, 1.0 / 60.0);
+            }
+            300.0 - g.manpower[0]
+        };
+        assert!(
+            drained(false) > drained(true) + 10.0,
+            "untimed battles must not bleed pools"
+        );
     }
 
     #[test]

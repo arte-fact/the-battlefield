@@ -17,7 +17,7 @@ impl Game {
         let mut friendly_positions: Vec<(i32, i32)> = self
             .units
             .iter()
-            .filter(|u| u.alive && (u.is_player || u.faction == self.player_army()))
+            .filter(|u| u.alive && (u.is_player || Some(u.faction) == self.player_faction))
             .map(|u| {
                 let (gx, gy) = u.grid_cell();
                 (gx as i32, gy as i32)

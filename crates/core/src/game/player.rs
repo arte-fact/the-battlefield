@@ -16,11 +16,67 @@ impl Game {
         self.player_unit().is_some()
     }
 
+    /// Free-mode enlistment: an unaligned player standing at an
+    /// army-owned production building converts to the unit kind it
+    /// trains, in the owner's color, and the full player kit unlocks.
+    pub(super) fn tick_conversion(&mut self) {
+        if self.player_faction.is_some() {
+            return;
+        }
+        let (px, py) = match self.player_unit() {
+            Some(p) if p.alive => (p.x, p.y),
+            _ => return,
+        };
+        let range = crate::grid::TILE_SIZE * 2.5;
+        let mut best: Option<(usize, f32)> = None;
+        for (i, b) in self.buildings.iter().enumerate() {
+            if b.produces.is_none() {
+                continue;
+            }
+            let (bx, by) = grid::grid_to_world(b.grid_x, b.grid_y);
+            let d_sq = (px - bx).powi(2) + (py - by).powi(2);
+            if d_sq <= range * range && best.map(|(_, bd)| d_sq < bd).unwrap_or(true) {
+                best = Some((i, d_sq));
+            }
+        }
+        let Some((bi, _)) = best else { return };
+        let b = &self.buildings[bi];
+        let owner = match b.zone_id {
+            Some(z) => self
+                .zone_manager
+                .zones
+                .get(z as usize)
+                .and_then(|zone| zone.effective_faction())
+                .unwrap_or(Faction::Villager),
+            None => b.faction,
+        };
+        if owner == Faction::Villager {
+            return; // this village serves no lord
+        }
+        let kind = self.buildings[bi].produces.expect("filtered above");
+        let stats = kind.stats_from_config(&self.config);
+        if let Some(p) = self.units.iter_mut().find(|u| u.is_player) {
+            p.kind = kind;
+            p.faction = owner;
+            p.stats = stats;
+            p.hp = stats.max_hp;
+        }
+        self.player_faction = Some(owner);
+        // Ceremony: the command ring ripples out from the new soldier.
+        self.order_pulse = 1.0;
+        self.order_pulse_radius = self.authority_command_radius();
+        log::info!("Player enlisted: {:?} {:?}", owner, kind);
+    }
+
     /// Try to attack the nearest enemy in range. Returns true if an attack was executed.
     /// Called explicitly from attack key/button — never auto-attacks.
     /// Player attack: hit enemies in cone if any, otherwise whiff swing.
     /// Returns true if the attack hit at least one enemy.
     pub fn player_attack(&mut self) -> bool {
+        // An unaligned villager has no blade worth swinging.
+        if self.player_faction.is_none() {
+            return false;
+        }
         let player_idx = match self.units.iter().position(|u| u.is_player && u.alive) {
             Some(i) => i,
             None => return false,

@@ -282,7 +282,7 @@ impl GameLoop {
                 if self.input_state.pressed_this_frame(KeyCode::Enter)
                     || self.input_state.pressed_this_frame(KeyCode::Space)
                 {
-                    self.activate_button(ui::ButtonAction::Play, vw, vh, "key");
+                    self.activate_button(ui::ButtonAction::PlayFree, vw, vh, "key");
                 }
             }
             GameScreen::Loading => {
@@ -366,7 +366,7 @@ impl GameLoop {
 
                 // Check for game end
                 if let Some(winner) = self.game.winner {
-                    if winner == self.game.player_army() {
+                    if Some(winner) == self.game.player_faction {
                         self.screen = self.end_screen(true, GameScreen::GameWon);
                     } else {
                         self.screen = self.end_screen(false, GameScreen::GameLost);

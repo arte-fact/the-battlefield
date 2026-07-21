@@ -215,6 +215,9 @@ impl Game {
             if u.faction == faction {
                 continue;
             }
+            if u.is_player && self.player_faction.is_none() {
+                continue; // the unaligned villager is a bystander, not a target
+            }
             let dist = u.distance_to_pos(ax, ay);
             if dist <= vision_range
                 && self.has_line_of_sight(ax, ay, u.x, u.y)
@@ -288,6 +291,9 @@ impl Game {
             let u = &self.units[i];
             if u.faction == faction {
                 continue;
+            }
+            if u.is_player && self.player_faction.is_none() {
+                continue; // the unaligned villager is a bystander, not a target
             }
             let dist = u.distance_to_pos(x, y);
             if dist <= range

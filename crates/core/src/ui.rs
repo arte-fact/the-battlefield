@@ -5,6 +5,7 @@
 
 use crate::config::GameConfig;
 use crate::game::Game;
+use crate::unit::Faction;
 use serde::{Deserialize, Serialize};
 
 /// Derive a fresh seed from the previous one (splitmix32 step).
@@ -30,6 +31,20 @@ pub fn handle_button_action(
     source: &str,
 ) {
     match action {
+        ButtonAction::PlayFree => {
+            *seed = next_seed(*seed);
+            ui.mode = GameMode::Free;
+            start_battle(
+                game,
+                screen,
+                player_was_alive,
+                viewport_w,
+                viewport_h,
+                *seed,
+                ui,
+            );
+            log::info!("Free mode, seed {} ({source})", *seed);
+        }
         ButtonAction::Play => {
             *seed = next_seed(*seed);
             ui.mode = GameMode::Arcade;
@@ -112,10 +127,20 @@ fn start_battle(
 ) {
     *game = Game::new(viewport_w as f32, viewport_h as f32);
     match ui.mode {
-        GameMode::Skirmish => ui.skirmish.apply(&mut game.config),
+        GameMode::Skirmish => {
+            ui.skirmish.apply(&mut game.config);
+            game.player_faction = ui.skirmish.start_faction();
+        }
         GameMode::Arcade => {
             game.config.enemy_count = ui.scoreboard.arcade_level;
             game.config.playable_size = auto_playable_size(ui.scoreboard.arcade_level);
+        }
+        GameMode::Free => {
+            // The full world, no clocks: pick a side by walking into it.
+            game.config.enemy_count = 3;
+            game.config.playable_size = auto_playable_size(3);
+            game.player_faction = None;
+            game.untimed = true;
         }
     }
     game.begin_async_setup(seed);
@@ -149,6 +174,8 @@ pub enum GameScreen {
 /// Action triggered by clicking a UI button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonAction {
+    /// Start a free-mode run (villager origin, untimed).
+    PlayFree,
     Play,
     Retry,
     NewGame,
@@ -249,29 +276,38 @@ pub fn main_menu_layout(ui: &UiState) -> ScreenLayout {
         }),
         buttons: vec![
             ButtonDesc {
-                label: "ARCADE".into(),
+                label: "FREE PLAY".into(),
                 offset_x: 0.0,
-                offset_y: 5.0,
+                offset_y: -14.0,
                 w: 220.0,
                 h: 54.0,
                 style: ButtonStyle::Blue,
+                action: ButtonAction::PlayFree,
+            },
+            ButtonDesc {
+                label: "ARCADE".into(),
+                offset_x: 0.0,
+                offset_y: 47.0,
+                w: 220.0,
+                h: 54.0,
+                style: ButtonStyle::Red,
                 action: ButtonAction::Play,
             },
             ButtonDesc {
                 label: "SKIRMISH".into(),
                 offset_x: 0.0,
-                offset_y: 68.0,
+                offset_y: 105.0,
                 w: 220.0,
-                h: 54.0,
-                style: ButtonStyle::Red,
+                h: 44.0,
+                style: ButtonStyle::Blue,
                 action: ButtonAction::OpenSkirmish,
             },
             ButtonDesc {
                 label: "SCORES".into(),
                 offset_x: 0.0,
-                offset_y: 128.0,
+                offset_y: 152.0,
                 w: 220.0,
-                h: 44.0,
+                h: 40.0,
                 style: ButtonStyle::Blue,
                 action: ButtonAction::OpenScores,
             },
@@ -411,7 +447,9 @@ pub fn result_layout(is_victory: bool) -> ScreenLayout {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum GameMode {
+    /// The default mode: full game, no timed objectives, villager origin.
     #[default]
+    Free,
     Arcade,
     Skirmish,
 }
@@ -422,6 +460,8 @@ pub struct SkirmishConfig {
     pub seed: u32,
     pub enemies: u8,
     pub map_size_idx: usize,
+    /// 0 = NEUTRAL (villager origin), 1..=4 = Blue/Red/Yellow/Purple.
+    pub start_as: usize,
     pub manpower_you: f32,
     pub manpower_enemy: f32,
     pub army_cap: usize,
@@ -452,6 +492,7 @@ impl Default for SkirmishConfig {
             seed: 42,
             enemies: 1,
             map_size_idx: 0,
+            start_as: 1,
             manpower_you: 300.0,
             manpower_enemy: 300.0,
             army_cap: 35,
@@ -463,7 +504,22 @@ impl Default for SkirmishConfig {
 }
 
 impl SkirmishConfig {
-    pub const ROWS: usize = 9;
+    pub const ROWS: usize = 10;
+
+    pub const START_AS: [(&'static str, Option<Faction>); 5] = [
+        ("NEUTRAL", None),
+        ("BLUE", Some(Faction::Blue)),
+        ("RED", Some(Faction::Red)),
+        ("YELLOW", Some(Faction::Yellow)),
+        ("PURPLE", Some(Faction::Purple)),
+    ];
+
+    /// The chosen starting faction, clamped to the armies on the map.
+    pub fn start_faction(&self) -> Option<Faction> {
+        let max = 1 + self.enemies as usize;
+        let idx = if self.start_as > max { 1 } else { self.start_as };
+        Self::START_AS[idx].1
+    }
 
     pub fn apply(&self, cfg: &mut GameConfig) {
         cfg.enemy_count = self.enemies;
@@ -492,6 +548,7 @@ impl SkirmishConfig {
             "MAP SEED",
             "ENEMIES",
             "MAP SIZE",
+            "START AS",
             "MANPOWER (YOU)",
             "MANPOWER (ENEMY)",
             "ARMY SIZE CAP",
@@ -506,12 +563,17 @@ impl SkirmishConfig {
             0 => format!("{}", self.seed),
             1 => format!("1v{}", self.enemies),
             2 => MAP_SIZES[self.map_size_idx].0.to_string(),
-            3 => format!("{}", self.manpower_you as u32),
-            4 => format!("{}", self.manpower_enemy as u32),
-            5 => format!("{}", self.army_cap),
-            6 => format!("{}s", self.victory_hold as u32),
-            7 => BLEED_LEVELS[self.bleed_idx].0.to_string(),
-            8 => format!("{}", self.start_authority as u32),
+            3 => {
+                let max = 1 + self.enemies as usize;
+                let idx = if self.start_as > max { 1 } else { self.start_as };
+                Self::START_AS[idx].0.to_string()
+            }
+            4 => format!("{}", self.manpower_you as u32),
+            5 => format!("{}", self.manpower_enemy as u32),
+            6 => format!("{}", self.army_cap),
+            7 => format!("{}s", self.victory_hold as u32),
+            8 => BLEED_LEVELS[self.bleed_idx].0.to_string(),
+            9 => format!("{}", self.start_authority as u32),
             _ => String::new(),
         }
     }
@@ -527,14 +589,19 @@ impl SkirmishConfig {
                 self.map_size_idx =
                     (self.map_size_idx as i32 + dir).rem_euclid(MAP_SIZES.len() as i32) as usize;
             }
-            3 => self.manpower_you = step(self.manpower_you, dir, 50.0, 100.0, 900.0),
-            4 => self.manpower_enemy = step(self.manpower_enemy, dir, 50.0, 100.0, 900.0),
-            5 => {
+            3 => {
+                // NEUTRAL + the armies actually on the map.
+                let n = 2 + self.enemies as i32;
+                self.start_as = ((self.start_as as i32 + dir).rem_euclid(n)) as usize;
+            }
+            4 => self.manpower_you = step(self.manpower_you, dir, 50.0, 100.0, 900.0),
+            5 => self.manpower_enemy = step(self.manpower_enemy, dir, 50.0, 100.0, 900.0),
+            6 => {
                 let caps = [20usize, 35, 50];
                 let i = caps.iter().position(|&c| c == self.army_cap).unwrap_or(1);
                 self.army_cap = caps[(i as i32 + dir).rem_euclid(3) as usize];
             }
-            6 => {
+            7 => {
                 let holds = [30.0f32, 60.0, 90.0];
                 let i = holds
                     .iter()
@@ -542,11 +609,11 @@ impl SkirmishConfig {
                     .unwrap_or(1);
                 self.victory_hold = holds[(i as i32 + dir).rem_euclid(3) as usize];
             }
-            7 => {
+            8 => {
                 self.bleed_idx =
                     (self.bleed_idx as i32 + dir).rem_euclid(BLEED_LEVELS.len() as i32) as usize;
             }
-            8 => self.start_authority = step(self.start_authority, dir, 25.0, 0.0, 50.0),
+            9 => self.start_authority = step(self.start_authority, dir, 25.0, 0.0, 50.0),
             _ => {}
         }
     }
@@ -734,7 +801,7 @@ const ROW_H: f64 = 34.0;
 
 pub fn skirmish_layout(ui: &UiState) -> ScreenLayout {
     let mut buttons = Vec::new();
-    let top = -140.0;
+    let top = -157.0;
     for row in 0..SkirmishConfig::ROWS {
         let focused = row == ui.focused_row;
         buttons.push(ButtonDesc {
@@ -759,7 +826,7 @@ pub fn skirmish_layout(ui: &UiState) -> ScreenLayout {
     buttons.push(ButtonDesc {
         label: "START".into(),
         offset_x: -85.0,
-        offset_y: 185.0,
+        offset_y: 202.0,
         w: 150.0,
         h: 50.0,
         style: ButtonStyle::Blue,
@@ -768,7 +835,7 @@ pub fn skirmish_layout(ui: &UiState) -> ScreenLayout {
     buttons.push(ButtonDesc {
         label: "BACK".into(),
         offset_x: 85.0,
-        offset_y: 185.0,
+        offset_y: 202.0,
         w: 150.0,
         h: 50.0,
         style: ButtonStyle::Red,
@@ -776,12 +843,12 @@ pub fn skirmish_layout(ui: &UiState) -> ScreenLayout {
     });
     ScreenLayout {
         overlay: (0, 0, 0, 190),
-        panel_size: Some((560.0, 490.0)),
+        panel_size: Some((560.0, 524.0)),
         title_ribbon: Some((0, 22.0, 380.0, 60.0)),
         title: Some(TextElement {
             text: "SKIRMISH".into(),
             offset_x: 0.0,
-            offset_y: -193.0,
+            offset_y: -210.0,
             size: 34.0,
             r: 255,
             g: 215,
@@ -945,20 +1012,37 @@ mod mode_tests {
     fn skirmish_adjust_clamps_and_cycles() {
         let mut c = SkirmishConfig::default();
         for _ in 0..30 {
-            c.adjust(3, 1, 0);
+            c.adjust(4, 1, 0);
         }
         assert_eq!(c.manpower_you, 900.0);
-        c.adjust(7, 1, 0);
+        c.adjust(8, 1, 0);
         assert_eq!(c.bleed_idx, 3);
-        c.adjust(7, 1, 0);
+        c.adjust(8, 1, 0);
         assert_eq!(c.bleed_idx, 0);
         c.adjust(0, 1, 777);
         assert_eq!(c.seed, 777);
         let mut cfg = GameConfig::default();
-        c.adjust(6, -1, 0);
+        c.adjust(7, -1, 0);
         c.apply(&mut cfg);
         assert_eq!(cfg.victory_hold_time, 30.0);
         assert_eq!(cfg.bleed_per_extra_zone, 0.0);
+    }
+
+    #[test]
+    fn skirmish_start_as_row() {
+        let mut c = SkirmishConfig::default();
+        assert_eq!(c.start_faction(), Some(crate::unit::Faction::Blue));
+        c.adjust(3, -1, 0); // BLUE -> NEUTRAL
+        assert_eq!(c.start_faction(), None);
+        // 1v1: only NEUTRAL/BLUE/RED cycle.
+        c.adjust(3, -1, 0);
+        assert_eq!(c.start_faction(), Some(crate::unit::Faction::Red));
+        // Purple selected at 1v3 falls back to Blue when enemies drop to 1.
+        c.enemies = 3;
+        c.start_as = 4;
+        assert_eq!(c.start_faction(), Some(crate::unit::Faction::Purple));
+        c.enemies = 1;
+        assert_eq!(c.start_faction(), Some(crate::unit::Faction::Blue));
     }
 
     #[test]

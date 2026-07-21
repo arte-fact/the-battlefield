@@ -156,6 +156,9 @@ pub struct Game {
     /// The army the player fights for. None while unaligned (free-mode
     /// pawn phase); every player-side rule reads `player_army()`.
     pub player_faction: Option<Faction>,
+    /// Free mode: no timed objectives — domination timer, sudden death
+    /// and leader bleed are off; wars end by annihilation or death.
+    pub untimed: bool,
     /// Per-frame A* pathfind budget (reset each tick, decremented per find_path call).
     pub(crate) astar_budget: u8,
     /// Outcome of the most recent A* attempt: Some(found), None = deferred.
@@ -243,6 +246,7 @@ impl Game {
             sudden_death_elapsed: 0.0,
             pending_setup: None,
             player_faction: Some(Faction::Blue),
+            untimed: false,
             astar_budget: 0,
             last_path_result: None,
             ai_rotation: 0,
@@ -409,6 +413,8 @@ impl Game {
         if self.authority > self.score_peak_authority {
             self.score_peak_authority = self.authority;
         }
+
+        self.tick_conversion();
 
         self.tick_cooldowns(dt);
         self.tick_village_garrisons(dt);

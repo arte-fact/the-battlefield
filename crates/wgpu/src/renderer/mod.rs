@@ -1274,12 +1274,13 @@ fn draw_hud(
             }
         }
 
-        // Follower count next to the authority bar
-        let followers = format!(
-            "{}/{}",
-            game.follower_count(),
-            game.authority_max_followers()
-        );
+        // Follower count next to the authority bar (soldiers only)
+        if let Some(_army) = game.player_faction {
+            let followers = format!(
+                "{}/{}",
+                game.follower_count(),
+                game.authority_max_followers()
+            );
         assets.text.draw_text_centered(
             sprites,
             gpu,
@@ -1292,6 +1293,7 @@ fn draw_hud(
             255,
             230,
         );
+        }
     }
 
     // Zone control pips at top-center
@@ -1357,6 +1359,23 @@ fn draw_hud(
             let inner_r = pip_r * progress.max(0.15);
             prim.fill_circle(cx, pip_y, inner_r, [cr, cg, cb, ca]);
             prim.stroke_circle(cx, pip_y, pip_r, 1.5, [cr, cg, cb, ca * 0.6]);
+        }
+
+        // Unaligned villager: no pools to read, just the way in.
+        if game.player_faction.is_none() {
+            assets.text.draw_text_centered(
+                sprites,
+                gpu,
+                "ENTER A PRODUCTION BUILDING TO ENLIST",
+                vw * 0.5,
+                panel_y_pos + panel_h + 16.0,
+                18.0,
+                255,
+                215,
+                0,
+                230,
+            );
+            return;
         }
 
         // Manpower counters in a centered row under the pip panel, one per
@@ -1503,7 +1522,7 @@ fn draw_minimap(
             continue;
         }
         let (ugx, ugy) = grid::world_to_grid(unit.x, unit.y);
-        if unit.faction != game.player_army() {
+        if Some(unit.faction) != game.player_faction {
             let idx = (ugy as u32 * game.grid.width + ugx as u32) as usize;
             if idx >= game.visible.len() || !game.visible[idx] {
                 continue;

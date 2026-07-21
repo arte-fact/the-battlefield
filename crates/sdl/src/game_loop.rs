@@ -227,7 +227,7 @@ impl GameLoop {
                     || self.input_state.gamepad_pressed(Button::Start)
                 {
                     ui::handle_button_action(
-                        ui::ButtonAction::Play,
+                        ui::ButtonAction::PlayFree,
                         &mut self.screen,
                         &mut self.game,
                         &mut self.seed,
@@ -346,7 +346,7 @@ impl GameLoop {
 
                 // Check for game end
                 if let Some(winner) = self.game.winner {
-                    if winner == self.game.player_army() {
+                    if Some(winner) == self.game.player_faction {
                         self.screen = self.end_screen(true, GameScreen::GameWon);
                     } else {
                         self.screen = self.end_screen(false, GameScreen::GameLost);

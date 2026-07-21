@@ -90,6 +90,9 @@ impl Game {
     /// same-color garrisons, whose village refills from stock — roll the
     /// acceptance check and join as sticky followers, up to the cap.
     pub(super) fn recruitment_pass(&mut self) {
+        if self.player_faction.is_none() {
+            return; // nobody follows a bystander
+        }
         let (px, py, pf) = match self.player_unit() {
             Some(p) => (p.x, p.y, p.faction),
             None => return,
@@ -200,6 +203,9 @@ impl Game {
     /// Command the retinue. Charge/Defend re-task non-committed followers;
     /// Dismiss releases everyone and sets their re-recruit cooldown.
     pub fn issue_order(&mut self, req: OrderRequest) -> OrderOutcome {
+        if self.player_faction.is_none() {
+            return OrderOutcome::NoPlayer; // a bystander commands no one
+        }
         let (player_x, player_y) = match self.player_unit() {
             Some(p) => (p.x, p.y),
             None => return OrderOutcome::NoPlayer,

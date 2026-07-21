@@ -171,6 +171,9 @@ impl Game {
     }
 
     fn apply_authority_at(&mut self, delta: f32, x: f32, y: f32) {
+        if self.player_faction.is_none() {
+            return; // reputation only exists inside an army
+        }
         let old = self.authority;
         self.authority = (self.authority + delta).clamp(0.0, 100.0);
         let actual = self.authority - old;
