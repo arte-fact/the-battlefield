@@ -597,7 +597,6 @@ impl SkirmishConfig {
 pub const SCORE_PER_KILL: u32 = 100;
 pub const SCORE_PER_ZONE: u32 = 500;
 pub const SCORE_AUTHORITY_MULT: u32 = 10;
-pub const SCORE_PER_SURVIVAL_SEC: u32 = 1;
 pub const SCORE_VICTORY_BONUS: u32 = 5000;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -623,11 +622,11 @@ impl RunScore {
         }
     }
 
+    /// Deeds only: what the soldier did, not how long they hid.
     pub fn total(&self) -> u32 {
         (self.kills * SCORE_PER_KILL
             + self.zone_caps * SCORE_PER_ZONE
             + self.peak_authority * SCORE_AUTHORITY_MULT
-            + self.survival_secs * SCORE_PER_SURVIVAL_SEC
             + if self.victory { SCORE_VICTORY_BONUS } else { 0 })
             * self.enemies.max(1)
     }
@@ -1078,8 +1077,8 @@ mod mode_tests {
             victory: true,
             enemies: 1,
         };
-        assert_eq!(s.total(), 300 + 1000 + 400 + 100 + 5000);
+        assert_eq!(s.total(), 300 + 1000 + 400 + 5000);
         s.enemies = 3;
-        assert_eq!(s.total(), (300 + 1000 + 400 + 100 + 5000) * 3);
+        assert_eq!(s.total(), (300 + 1000 + 400 + 5000) * 3);
     }
 }

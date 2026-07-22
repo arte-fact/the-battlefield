@@ -49,9 +49,9 @@ You start unknown. Kills, assists, and zone captures witnessed by nearby allies 
 
 ### Game Modes
 
-- **Free Play** (default) -- the full game with **no timed objectives**: domination timer, sudden death and leader bleed are off, and the war ends only by annihilation or your death. Every run begins as a **neutral villager** (5 HP) at the countryside settlement farthest from the capitals. Soldiers ignore the bystander, but stray cone swings and arrows still hurt -- crossing a battle line is a choice. Walking into any army-owned production building **enlists you on the spot**: you become the unit kind it trains, in its owner's color, and the full player kit (attack, orders, authority, retinue) unlocks. Neutral villages' buildings serve no lord. Unscored.
-- **Arcade** -- the scored mode, classic Blue-soldier start. An **escalation ladder** starts at 1v1; each victory raises the enemy count up to 1v3, any defeat resets it to 1v1. The ladder level is persisted with the high scores and shown on the main menu; run scores multiply by the enemy count. Top-10 scoreboard with initials entry.
-- **Skirmish** -- a configurable single battle: map seed, enemy count (1-3), map size, **starting side** (any army color, or NEUTRAL for the villager origin), manpower pools, army cap, victory hold time, zone bleed, and starting authority.
+- **Free Play** (default) -- the full game at its own pace: the war ends only by conquest or your death. Every run begins as a **neutral villager** (5 HP) at the countryside settlement farthest from the capitals. Soldiers ignore the bystander, but stray cone swings and arrows still hurt -- crossing a battle line is a choice. Walking into any army-owned production building **enlists you on the spot**: you become the unit kind it trains, in its owner's color, and the full player kit (attack, orders, authority, retinue) unlocks. Neutral villages' buildings serve no lord. Unscored.
+- **Arcade** -- the scored mode, classic Blue-soldier start. An **escalation ladder** starts at 1v1; each victory raises the enemy count up to 1v3, any defeat resets it to 1v1. The ladder level is persisted with the high scores and shown on the main menu. Score counts **deeds only** -- kills, settlement captures, peak authority, victory bonus, all multiplied by the enemy count; no points for hiding. Top-10 scoreboard with initials entry.
+- **Skirmish** -- a configurable single battle: map seed, enemy count (1-3), map size, **starting side** (any army color, or NEUTRAL for the villager origin), production pace, army cap, and starting authority.
 
 ### Screens
 
@@ -114,20 +114,19 @@ Every settlement below City tier is a working **village** with one worked resour
 
 Each village has houses (one peon each, count by tier), its production buildings, and the defense tower at its heart. Buildings ring the **outside** of the capture circle, keeping the fighting ground open. Buildings and peons are **Black (neutral) until captured**, then recolor to the owner's faction.
 
-**Village economy and garrisons:** each peon delivery banks 1 stock (cap 5). Settlements spend stock to raise a small **standing garrison** (garrisons of your color are ordinary recruits: walk by with authority and they join your retinue, and the village spends stock to replace them -- draining a garrison leaves it exposed; stationed monks patrol their zone healing any wounded friendly, making pasture villages the road network's healing stops) (cap by tier, one soldier every ~6s): neutral settlements field **Black villager militia** hostile to every army -- taking a village means beating its defenders -- and a captured settlement keeps producing the same garrison in its **owner's color**. Surviving neutral militia pledges to the captor; faction soldiers never defect. Garrison units carry the **defend-zone stance**: they hold scattered points in the circle, engage intruders within a short leash, and return home. They cost stock only (no manpower) and never join the field army. Peons **flee combat**, so scattering a village's workers stalls its garrison without capturing it. Militia contests with swords, not the circle: it does not block capture progress. Garrisons of quiet settlements **sleep** (skip their AI entirely) until a hostile enters the settlement's influence radius, so live-unit cost tracks active fronts rather than map size.
+**The settlement economy:** each peon delivery banks 1 **stock** (cap 5) at its settlement -- capitals included, their worked resource rings deliver like any village. Stock is the only war currency: every **production building** in an owned settlement spends 1 stock to train 1 normal soldier of its kind on a fixed interval, throttled by the army cap. Reinforcement flow scales with territory and arrives **distributed across the empire** -- no waves, no rally phase; recruits march to the planner's objectives from wherever they were born. Neutral settlements run the same rule in Black: their militia stays home (defend-zone stance, tier-capped), engages intruders within a short leash, and pledges to a captor when the village falls. Peons **flee combat**, so scattering a village's workers stalls its training without capturing it. Militia contests with swords, not the circle: it does not block capture progress. Militia of quiet settlements **sleeps** (skips its AI entirely) until a hostile enters the settlement's influence radius. Soldiers of your color stationed at settlements are ordinary recruits: walk by with authority and they rejoin your retinue; stationed monks patrol their zone healing any wounded friendly, making pasture villages the road network's healing stops.
 
 **Majority capture:** capture is multi-faction -- a zone tracks every army inside it, and progress moves at the rate of the *strength advantage* of the strongest faction over all others combined (√advantage). Equal forces freeze the zone; a minority garrison slows an assault but cannot hold forever -- overwhelming force completes the capture even with defenders still alive. Attacking a defended point is a readable numbers race, not a binary stall.
 
 Zone states: **Neutral → Contested → Capturing(faction) → Controlled(faction)**.
 
-### Victory and Attrition
+### Victory: Conquest Only
 
-- **Domination:** a faction holding **more than half of all settlements** starts the victory timer (default 60s); holding the majority for the full duration wins. Dropping below resets it.
-- **Elimination:** a faction with no manpower left and no living units is eliminated; its surviving settlements are loot for whoever takes them. Last army standing wins.
-- **Player death** ends the run immediately (arcade routes to the score flow).
-- **Sudden death:** once all pools are exhausted, a plurality of settlements held for the hold time wins; if even that stalls, the battle resolves to the faction with the most settlements, then most units.
+- **Elimination:** a faction is eliminated when it owns **no settlements** and fields **no living units**. A landless remnant army fights on and can recapture -- but without a supply line it **starves** (units wither after a short grace), so remnants cannot stall a decided war.
+- **Last banner standing wins.** No domination timer, no sudden death, no clocks: the settlement economy makes stalemates self-resolving -- every captured village compounds into more soldiers.
+- **Player death** ends the run immediately; if the player's faction is eliminated while rivals still fight, the run ends crediting the current settlement leader.
 
-**Manpower and bleed:** each faction starts with a finite manpower pool (default 300) -- the reinforcements it can still field. Every reinforcement spawn costs 1; the starting armies are free. The **settlement leader** bleeds every rival's pool over time, scaling with the deficit in settlements between them -- so the map position itself is attrition, any sustained advantage ends the battle eventually, and every kill is a manpower point the enemy must spend to replace.
+**War score:** the HUD shows each faction's tier-weighted holdings (City 4, Town 3, Village 2, Hamlet 1). The AI planner reads the same number to gang up on whoever is winning.
 
 ## Units
 
@@ -201,7 +200,7 @@ Each faction periodically scores every settlement with a 3-tier objective system
 
 ### Reinforcements
 
-Each faction produces units in waves at its **largest controlled settlement**, drawing from its manpower pool (production walks the owned-settlement list by tier, so losing the capital moves the war effort, it doesn't end it). Newly produced units rally until the wave is complete, then march together (a wave cut short by an empty pool still marches). A faction holding zero settlements produces double-size waves to fuel its comeback -- burning its pool twice as fast, an all-in gamble.
+Reinforcements are trained locally by the settlement economy (see above): every owned production building converts banked stock into soldiers, so the army's composition reflects the territory held -- mining villages raise warriors, lumber camps archers, pastures monks, capitals a full mix. Losing ground literally starves the war effort; taking a settlement seizes its production line.
 
 ## Ambient Life
 
@@ -227,7 +226,7 @@ Holding the Defend button (~0.5s) stations the retinue at the nearest capture zo
 
 ## User Interface
 
-- **HUD** -- player health, authority rank, retinue counter (current/cap), a settlement strip whose pips shrink to fit any settlement count, and one manpower counter per active faction in its color (tinted amber while that pool is bleeding).
+- **HUD** -- player health, authority rank, retinue counter (current/cap), a settlement strip whose pips shrink to fit any settlement count, and one war-score counter per active faction in its color.
 - **Minimap** -- top-right corner (240px), showing terrain, settlements, and unit positions in faction colors. Terrain and fog are baked into a cached texture rebuilt only when the fog changes, so the minimap costs the same at 160² and 1024².
 - **Loading screen** -- budgeted map generation renders a progress ribbon; the bar is the ribbon itself.
 - **Order markers** -- floating marker with progress bar above units currently under your command; a command-radius pulse ripples out when an order lands.

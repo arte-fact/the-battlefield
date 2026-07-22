@@ -117,6 +117,11 @@ initials, and the ladder are unchanged.
 
 ## 7. Implementation order
 
+All five steps landed 2026-07-22. Starvation (landless armies wither
+after a 20 s grace, 1 damage per 3 s) closes the remnant-stall hole the
+probes found; the full 1v1/1v3 matrix ends in 139-351 s with mixed
+winners.
+
 1. **Economy core**: stock-fed training at all owned buildings
    (capitals included), waves/manpower removed, militia via the same
    rule; probes must still end on the default matrix.

@@ -449,13 +449,13 @@ impl ZoneManager {
             return Vec::new();
         }
 
-        // Settlement leader (a RIVAL with the most zones): its holdings
-        // score higher — the pack turns on whoever is winning.
+        // Settlement leader (the RIVAL with the highest war score): its
+        // holdings score higher — the pack turns on whoever is winning.
         let leader: Option<Faction> = crate::unit::ARMY_FACTIONS
             .iter()
             .copied()
             .filter(|&f| f != faction)
-            .map(|f| (f, self.controlled_count(f)))
+            .map(|f| (f, self.war_score(f)))
             .filter(|&(_, c)| c > 0)
             .max_by_key(|&(_, c)| c)
             .map(|(f, _)| f);
