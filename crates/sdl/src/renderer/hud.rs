@@ -258,13 +258,9 @@ pub(super) fn draw_hud(
         let spacing = 76i32;
         for (k, &faction) in game.active_factions().iter().enumerate() {
             let x = w as i32 / 2 - (n_active - 1) * spacing / 2 + k as i32 * spacing;
-            let color = if game.manpower_bleeding(faction) {
-                Color::RGBA(255, 170, 50, 255)
-            } else {
-                let (r, g, b) = faction.rgb();
-                Color::RGBA(r, g, b, 255)
-            };
-            let label = format!("{}", game.manpower[faction.army_idx().unwrap_or(0)] as u32);
+            let (r, g, b) = faction.rgb();
+            let color = Color::RGBA(r, g, b, 255);
+            let label = format!("{}", game.zone_manager.war_score(faction));
             assets
                 .text
                 .draw_text_centered(canvas, tc, &label, x, counter_y, counter_size, color);

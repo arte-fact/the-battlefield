@@ -100,14 +100,12 @@ pub struct GameConfig {
     pub arrow_arc_base: f32,
     pub tower_damage: i32,
     pub tower_range_tiles: f32,
-    pub spawn_interval: f32,
 
     // ── Zone & Game Rules ───────────────────────────────────────────
     pub base_capture_time: f32,
     pub max_capture_multiplier: f32,
     pub max_units_per_faction: usize,
     pub zone_radius: u32,
-    pub victory_hold_time: f32,
     /// Side length of the playable map area in tiles (border added on top).
     #[serde(default = "default_playable_size")]
     pub playable_size: u32,
@@ -117,12 +115,12 @@ pub struct GameConfig {
     /// AI opponents in the battle (1-3): Red, +Yellow, +Purple.
     #[serde(default = "default_enemy_count")]
     pub enemy_count: u8,
-    /// Standing garrison size a village maintains (per village).
-    #[serde(default = "default_garrison_cap")]
-    pub garrison_cap: u8,
-    /// Seconds between garrison spawn attempts per village.
-    #[serde(default = "default_garrison_spawn_interval")]
-    pub garrison_spawn_interval: f32,
+    /// Seconds between training attempts per production building.
+    #[serde(default = "default_train_interval")]
+    pub train_interval: f32,
+    /// Global training pace multiplier (skirmish PRODUCTION row).
+    #[serde(default = "default_train_speed_mult")]
+    pub train_speed_mult: f32,
 
     // ── Retinue / Recruitment ───────────────────────────────────────
     /// Seconds between auto-recruitment passes.
@@ -138,16 +136,6 @@ pub struct GameConfig {
     #[serde(default = "default_re_recruit_cooldown_secs")]
     pub re_recruit_cooldown_secs: f32,
 
-    // ── Manpower / Conquest ─────────────────────────────────────────
-    /// Reinforcements each faction can field over the battle (spawns cost 1).
-    #[serde(default = "default_manpower_start")]
-    pub manpower_start: f32,
-    /// Zones a faction must control before the enemy pool starts bleeding.
-    #[serde(default = "default_bleed_zone_threshold")]
-    pub bleed_zone_threshold: usize,
-    /// Enemy manpower drained per second per zone at or above the threshold.
-    #[serde(default = "default_bleed_per_extra_zone")]
-    pub bleed_per_extra_zone: f32,
 }
 
 fn default_chase_block_secs() -> f32 {
@@ -178,12 +166,12 @@ fn default_enemy_count() -> u8 {
     1
 }
 
-fn default_garrison_cap() -> u8 {
-    4
+fn default_train_interval() -> f32 {
+    8.0
 }
 
-fn default_garrison_spawn_interval() -> f32 {
-    6.0
+fn default_train_speed_mult() -> f32 {
+    1.0
 }
 
 fn default_recruit_interval() -> f32 {
@@ -200,18 +188,6 @@ fn default_recruit_lost_contact_secs() -> f32 {
 
 fn default_re_recruit_cooldown_secs() -> f32 {
     12.0
-}
-
-fn default_manpower_start() -> f32 {
-    300.0
-}
-
-fn default_bleed_zone_threshold() -> usize {
-    0 // automatic: settlement majority
-}
-
-fn default_bleed_per_extra_zone() -> f32 {
-    0.25
 }
 
 impl Default for GameConfig {
@@ -304,19 +280,17 @@ impl Default for GameConfig {
             arrow_arc_base: 30.0,
             tower_damage: 2,
             tower_range_tiles: 7.0,
-            spawn_interval: 1.5,
 
             // Zone & Game Rules
             base_capture_time: 16.0,
             max_capture_multiplier: 3.0,
             max_units_per_faction: 35,
             zone_radius: 6,
-            victory_hold_time: 60.0,
             playable_size: default_playable_size(),
             village_stock_cap: default_village_stock_cap(),
             enemy_count: default_enemy_count(),
-            garrison_cap: default_garrison_cap(),
-            garrison_spawn_interval: default_garrison_spawn_interval(),
+            train_interval: default_train_interval(),
+            train_speed_mult: default_train_speed_mult(),
 
             // Retinue / Recruitment
             recruit_interval: default_recruit_interval(),
@@ -325,9 +299,6 @@ impl Default for GameConfig {
             re_recruit_cooldown_secs: default_re_recruit_cooldown_secs(),
 
             // Manpower / Conquest
-            manpower_start: default_manpower_start(),
-            bleed_zone_threshold: default_bleed_zone_threshold(),
-            bleed_per_extra_zone: default_bleed_per_extra_zone(),
         }
     }
 }

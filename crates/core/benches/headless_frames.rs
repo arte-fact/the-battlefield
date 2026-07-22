@@ -23,17 +23,11 @@ fn main() {
             game.config.enemy_count = n.clamp(1, 3);
         }
     }
-    if let Some(mp) = std::env::var("BENCH_MANPOWER")
+    if let Some(mult) = std::env::var("BENCH_PROD_MULT")
         .ok()
         .and_then(|s| s.parse().ok())
     {
-        game.config.manpower_start = mp;
-    }
-    if let Some(bleed) = std::env::var("BENCH_BLEED")
-        .ok()
-        .and_then(|s| s.parse().ok())
-    {
-        game.config.bleed_per_extra_zone = bleed;
+        game.config.train_speed_mult = mult;
     }
     if let Some(size) = std::env::var("BENCH_SIZE")
         .ok()
@@ -137,16 +131,16 @@ fn main() {
     };
     println!();
     let active = game.active_factions();
-    let mp: Vec<String> = active
+    let ws: Vec<String> = active
         .iter()
-        .map(|f| format!("{:.1}", game.manpower[f.idx()]))
+        .map(|&f| game.zone_manager.war_score(f).to_string())
         .collect();
     let al: Vec<String> = active.iter().map(|&f| alive(f).to_string()).collect();
     println!(
-        "Battle state after {:.0}s simulated: winner={:?}, manpower=[{}], alive=[{}]",
+        "Battle state after {:.0}s simulated: winner={:?}, war_score=[{}], alive=[{}]",
         frames as f32 * dt,
         game.winner,
-        mp.join(", "),
+        ws.join(", "),
         al.join(", "),
     );
     let comps: Vec<String> = active

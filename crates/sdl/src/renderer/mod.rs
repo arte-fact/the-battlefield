@@ -173,7 +173,6 @@ pub fn render_frame<'a>(
     hud::draw_hud(canvas, tc, game, assets, dpi_scale);
 
     // 14. Victory progress bar
-    foreground::draw_victory_progress(canvas, tc, assets, game, dpi_scale);
 
     // 15. Minimap
     hud::draw_minimap(canvas, tc, game, assets);

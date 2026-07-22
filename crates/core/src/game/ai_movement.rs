@@ -342,7 +342,7 @@ impl Game {
             self.planner_targets[fi] = (defend_zone, attack_zone);
 
             // Collect available AI units for this faction, sorted by index.
-            // Skip rally_hold units (still assembling) and zone-locked units (mid-travel).
+            // Skip zone-locked units (mid-travel).
             let mut available: Vec<usize> = self
                 .units
                 .iter()
@@ -351,7 +351,6 @@ impl Game {
                     u.alive
                         && !u.is_player
                         && u.faction == faction
-                        && !u.rally_hold
                         && u.zone_lock_timer <= 0.0
                 })
                 .map(|(i, _)| i)

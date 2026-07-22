@@ -23,6 +23,16 @@ impl SettlementTier {
         }
     }
 
+    /// War-score weight: what holding a settlement of this tier is worth.
+    pub fn war_weight(self) -> u32 {
+        match self {
+            SettlementTier::Hamlet => 1,
+            SettlementTier::Village => 2,
+            SettlementTier::Town => 3,
+            SettlementTier::City => 4,
+        }
+    }
+
     pub fn garrison_cap(self) -> u8 {
         match self {
             SettlementTier::Hamlet => 2,
@@ -154,9 +164,6 @@ pub struct ZoneManager {
     pub zones: Vec<CaptureZone>,
     pub reinforcement_timer: f32,
     /// Tracks how long a faction has held all zones. Resets when control is lost.
-    pub victory_timer: f32,
-    /// The faction currently holding all zones (if any).
-    pub victory_candidate: Option<Faction>,
     /// Blue base grid position (from layout).
     pub blue_base: (u32, u32),
     /// Red base grid position (from layout).
@@ -178,8 +185,6 @@ impl ZoneManager {
         Self {
             zones: Vec::new(),
             reinforcement_timer: 0.0,
-            victory_timer: 0.0,
-            victory_candidate: None,
             blue_base: (BORDER_SIZE + 5, BORDER_SIZE + 5),
             red_base: (
                 BORDER_SIZE + PLAYABLE_SIZE - 6,
@@ -222,8 +227,6 @@ impl ZoneManager {
         Self {
             zones,
             reinforcement_timer: 0.0,
-            victory_timer: 0.0,
-            victory_candidate: None,
             blue_base: layout.blue_base,
             red_base: layout.red_base,
             blue_home_zones: layout.blue_home_zones.clone(),
@@ -539,43 +542,6 @@ impl ZoneManager {
         scored
     }
 
-    /// Update victory timer. Returns Some(faction) if a faction has won.
-    pub fn tick_victory(&mut self, dt: f32, victory_hold_time: f32) -> Option<Faction> {
-        // Domination: hold MORE THAN HALF of all settlements for the hold
-        // time. Losing the majority resets the timer.
-        let need = self.zones.len() / 2 + 1;
-        let leader = crate::unit::ARMY_FACTIONS
-            .iter()
-            .copied()
-            .find(|&f| self.controlled_count(f) >= need);
-        self.advance_victory(leader, dt, victory_hold_time, true)
-    }
-
-    /// Sudden-death victory (both manpower pools exhausted): a strict zone
-    /// majority held for the hold time wins. Frontline flicker (ties,
-    /// zones dipping to contested) pauses the timer instead of resetting
-    /// it — only an actual leadership flip resets.
-    pub fn tick_victory_majority(&mut self, dt: f32, victory_hold_time: f32) -> Option<Faction> {
-        // Strict plurality across all army factions; a tie for the lead
-        // pauses the timer.
-        let counts: Vec<(Faction, usize)> = crate::unit::ARMY_FACTIONS
-            .iter()
-            .map(|&f| (f, self.controlled_count(f)))
-            .collect();
-        let best = counts.iter().map(|&(_, c)| c).max().unwrap_or(0);
-        let leaders: Vec<Faction> = counts
-            .iter()
-            .filter(|&&(_, c)| c == best && c > 0)
-            .map(|&(f, _)| f)
-            .collect();
-        let leader = if leaders.len() == 1 {
-            Some(leaders[0])
-        } else {
-            None
-        };
-        self.advance_victory(leader, dt, victory_hold_time, false)
-    }
-
     pub fn controlled_count(&self, faction: Faction) -> usize {
         self.zones
             .iter()
@@ -583,45 +549,16 @@ impl ZoneManager {
             .count()
     }
 
-    fn advance_victory(
-        &mut self,
-        leader: Option<Faction>,
-        dt: f32,
-        victory_hold_time: f32,
-        reset_on_none: bool,
-    ) -> Option<Faction> {
-        match leader {
-            Some(faction) => {
-                if self.victory_candidate == Some(faction) {
-                    self.victory_timer += dt;
-                } else {
-                    self.victory_candidate = Some(faction);
-                    self.victory_timer = dt;
-                }
-                if self.victory_timer >= victory_hold_time {
-                    Some(faction)
-                } else {
-                    None
-                }
-            }
-            None => {
-                if reset_on_none {
-                    self.victory_timer = 0.0;
-                    self.victory_candidate = None;
-                }
-                None
-            }
-        }
+    /// Tier-weighted settlements held — the war score shown on the HUD
+    /// and read by the planner's leader weighting.
+    pub fn war_score(&self, faction: Faction) -> u32 {
+        self.zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(faction))
+            .map(|z| z.tier.war_weight())
+            .sum()
     }
 
-    /// Progress toward victory (0.0 to 1.0) for the faction currently holding all zones.
-    pub fn victory_progress(&self, victory_hold_time: f32) -> f32 {
-        if self.victory_candidate.is_some() {
-            (self.victory_timer / victory_hold_time).min(1.0)
-        } else {
-            0.0
-        }
-    }
 }
 
 #[cfg(test)]
@@ -927,63 +864,30 @@ mod tests {
     }
 
     #[test]
-    fn victory_timer_accumulates() {
-        let mut mgr = test_zones();
-        for zone in &mut mgr.zones {
-            zone.state = ZoneState::Controlled(Faction::Blue);
-        }
-        assert!(mgr.tick_victory(60.0, 120.0).is_none());
-        assert!((mgr.victory_timer - 60.0).abs() < f32::EPSILON);
-        assert_eq!(mgr.victory_candidate, Some(Faction::Blue));
-    }
-
-    #[test]
-    fn victory_triggers_after_hold_time() {
-        let mut mgr = test_zones();
-        for zone in &mut mgr.zones {
-            zone.state = ZoneState::Controlled(Faction::Blue);
-        }
-        assert!(mgr.tick_victory(121.0, 120.0).is_some());
-    }
-
-    #[test]
-    fn victory_timer_resets_on_loss() {
-        let mut mgr = test_zones();
-        for zone in &mut mgr.zones {
-            zone.state = ZoneState::Controlled(Faction::Blue);
-        }
-        mgr.tick_victory(60.0, 120.0);
-        assert!(mgr.victory_timer > 0.0);
-
-        // Dropping to half or less of the settlements loses the majority
-        // and resets the domination timer.
-        let keep = mgr.zones.len() / 2;
-        for zone in mgr.zones.iter_mut().skip(keep) {
-            zone.state = ZoneState::Neutral;
-        }
-        mgr.tick_victory(1.0, 120.0);
-        assert!((mgr.victory_timer).abs() < f32::EPSILON);
-        assert_eq!(mgr.victory_candidate, None);
-    }
-
-    #[test]
-    fn victory_progress_fraction() {
-        let mut mgr = test_zones();
-        for zone in &mut mgr.zones {
-            zone.state = ZoneState::Controlled(Faction::Red);
-        }
-        mgr.tick_victory(60.0, 120.0);
-        let progress = mgr.victory_progress(120.0);
-        assert!(
-            (progress - 0.5).abs() < 0.01,
-            "Expected ~0.5, got {progress}"
-        );
-    }
-
-    #[test]
     fn create_from_layout_creates_correct_count() {
         let layout = test_layout();
         let mgr = ZoneManager::create_from_layout(&layout, 4);
         assert_eq!(mgr.zones.len(), layout.zone_centers.len());
+    }
+
+    #[test]
+    fn war_score_weights_tiers() {
+        let mut mgr = ZoneManager::empty();
+        for (i, tier) in [
+            SettlementTier::City,
+            SettlementTier::Town,
+            SettlementTier::Village,
+            SettlementTier::Hamlet,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut z = CaptureZone::new(i as u8, "Z", 10 + i as u32 * 20, 10, 6);
+            z.tier = *tier;
+            z.set_controlled(Faction::Blue);
+            mgr.zones.push(z);
+        }
+        assert_eq!(mgr.war_score(Faction::Blue), 4 + 3 + 2 + 1);
+        assert_eq!(mgr.war_score(Faction::Red), 0);
     }
 }

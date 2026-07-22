@@ -165,31 +165,6 @@ impl Game {
             return;
         }
 
-        // Rally hold: walk to rally point (base center), then idle. Fight in self-defense.
-        if self.units[ai_idx].rally_hold && self.units[ai_idx].order.is_none() {
-            // Self-defense
-            if let Some((ex, ey, enemy_id, dist)) = self.find_nearest_enemy(ai_idx) {
-                if self.units[ai_idx].can_act() && dist <= self.attack_reach(ai_idx) {
-                    self.attack_target(ai_idx, ex, ey, enemy_id);
-                    return;
-                }
-            }
-            // Walk toward rally point (base center)
-            let faction = self.units[ai_idx].faction;
-            let (rx, ry) = self
-                .rally_zone(faction)
-                .map(|z| (z.center_gx, z.center_gy))
-                .unwrap_or(self.gathers[faction.idx()]);
-            let (rwx, rwy) = grid::grid_to_world(rx, ry);
-            let dist = self.units[ai_idx].distance_to_pos(rwx, rwy);
-            if dist > TILE_SIZE * 2.0 {
-                self.ai_move_toward_continuous(ai_idx, rwx, rwy, dt);
-            } else {
-                self.units[ai_idx].set_anim(UnitAnim::Idle);
-            }
-            return;
-        }
-
         // Player orders take priority
         if let Some(order) = self.units[ai_idx].order {
             match order {
@@ -468,7 +443,7 @@ impl Game {
             return;
         }
 
-        // Follow nearest ADVANCING combatant (not rally_hold, not player, not monk).
+        // Follow nearest ADVANCING combatant (not player, not monk).
         // This prevents monks from orbiting the base when the player stays home.
         let max_follow = self.config.monk_max_follow_tiles * TILE_SIZE;
         let monk_follow_dist = self.config.monk_follow_dist_tiles * TILE_SIZE;
@@ -481,7 +456,6 @@ impl Game {
                     && u.id != ai_id
                     && u.kind != UnitKind::Monk
                     && !u.is_player
-                    && !u.rally_hold
             })
             .filter(|u| u.distance_to_pos(ax, ay) <= max_follow)
             .min_by(|a, b| {

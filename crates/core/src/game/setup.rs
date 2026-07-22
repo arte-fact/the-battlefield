@@ -135,126 +135,47 @@ impl Game {
             }
         }
 
-        if self.winner.is_none() && !self.untimed {
-            let hold = self.config.victory_hold_time;
-            // Stagnation: pools that no longer move (e.g. a leftover pool
-            // pinned behind the army cap) must not stall the endgame.
-            let moved = self
-                .active_factions()
-                .iter()
-                .any(|&f| (self.manpower[f.idx()] - self.last_manpower[f.idx()]).abs() > 0.01);
-            if moved {
-                self.manpower_stagnant = 0.0;
-                self.last_manpower = self.manpower;
-            } else {
-                self.manpower_stagnant += dt;
-            }
-            // A pool below 1.0 cannot field a unit — effectively exhausted;
-            // a long-frozen endgame counts as exhausted too.
-            let exhausted = self
-                .active_factions()
-                .iter()
-                .all(|&f| self.manpower[f.idx()] < 1.0)
-                || self.manpower_stagnant >= hold * 3.0;
-            let won = if exhausted {
-                self.sudden_death_elapsed += dt;
-                self.zone_manager
-                    .tick_victory_majority(dt, hold)
-                    .or_else(|| {
-                        // FFA can deadlock with exhausted armies garrisoning a
-                        // tied map forever: after five hold-times of sudden
-                        // death, resolve by zones, then living units.
-                        if self.sudden_death_elapsed >= hold * 5.0 {
-                            self.active_factions().iter().copied().max_by_key(|&f| {
-                                (
-                                    self.zone_manager.controlled_count(f),
-                                    self.units
-                                        .iter()
-                                        .filter(|u| u.alive && u.faction == f)
-                                        .count(),
-                                )
-                            })
-                        } else {
-                            None
-                        }
-                    })
-            } else {
-                self.zone_manager.tick_victory(dt, hold)
-            };
-            if let Some(faction) = won {
-                self.winner = Some(faction);
-            }
-        }
-
-        if !self.untimed {
-            self.tick_manpower_bleed(dt);
-        }
+        self.tick_starvation(dt);
         self.check_annihilation();
+    }
+
+    /// A landless army has no supply line: after a short grace its units
+    /// wither, so remnants can't stall a decided war forever. Retaking
+    /// any settlement resets the clock.
+    fn tick_starvation(&mut self, dt: f32) {
+        const STARVATION_GRACE: f32 = 20.0;
+        const STARVATION_TICK: f32 = 3.0;
+        for &f in self.active_factions() {
+            let fi = f.idx();
+            if self.zone_manager.controlled_count(f) > 0 {
+                self.starvation[fi] = 0.0;
+                continue;
+            }
+            let before = self.starvation[fi];
+            self.starvation[fi] += dt;
+            let after = self.starvation[fi];
+            if after < STARVATION_GRACE {
+                continue;
+            }
+            let ticks_before = ((before - STARVATION_GRACE).max(0.0) / STARVATION_TICK) as i32;
+            let ticks_after = ((after - STARVATION_GRACE) / STARVATION_TICK) as i32;
+            let hits = ticks_after - ticks_before;
+            if hits <= 0 {
+                continue;
+            }
+            for u in &mut self.units {
+                if u.alive && u.faction == f {
+                    u.take_damage(hits);
+                }
+            }
+        }
     }
 
     /// Conquest bleed: controlling a majority of zones drains the enemy pool,
     /// scaling with each zone at or above the threshold.
-    fn tick_manpower_bleed(&mut self, dt: f32) {
-        if self.zone_manager.zones.is_empty() {
-            return;
-        }
-        let active = self.active_factions();
-        let counts: Vec<(Faction, usize)> = active
-            .iter()
-            .map(|&f| (f, self.zone_manager.controlled_count(f)))
-            .collect();
-        let best = counts.iter().map(|&(_, c)| c).max().unwrap_or(0);
-        let leaders: Vec<Faction> = counts
-            .iter()
-            .filter(|&&(_, c)| c == best)
-            .map(|&(f, _)| f)
-            .collect();
-        // Attrition favors a clear front-runner: once the unique leader
-        // holds a real share of the map (config override, else a third of
-        // all settlements), every rival bleeds proportional to its
-        // settlement deficit. FFA battles end without needing an outright
-        // majority; 1v1 pressure is comparable to the old majority rule.
-        let gate = if self.config.bleed_zone_threshold == 0 {
-            (self.zone_manager.zones.len() / 3).max(2)
-        } else {
-            self.config.bleed_zone_threshold
-        };
-        if leaders.len() != 1 || best < gate {
-            return;
-        }
-        let leader = leaders[0];
-        for &(rival, c) in &counts {
-            if rival == leader {
-                continue;
-            }
-            let deficit = (best - c) as f32;
-            let drain = deficit * self.config.bleed_per_extra_zone * dt;
-            let ri = rival.idx();
-            self.manpower[ri] = (self.manpower[ri] - drain).max(0.0);
-        }
-    }
-
-    /// True while `faction`'s pool is actively draining from enemy zone
-    /// majority (for HUD warning tint).
-    pub fn manpower_bleeding(&self, faction: Faction) -> bool {
-        let threshold = self.config.bleed_zone_threshold;
-        if threshold == 0 {
-            return false;
-        }
-        let fi = faction.army_idx().unwrap_or(0);
-        if self.manpower[fi] <= 0.0 {
-            return false;
-        }
-        self.zone_manager
-            .zones
-            .iter()
-            .filter(|z| z.state == ZoneState::Controlled(faction.enemy()))
-            .count()
-            >= threshold
-    }
-
-    /// Annihilation defeat: a faction with no manpower left and no living
-    /// units loses the battle.
+    /// Conquest defeat: a faction is eliminated when it owns no
+    /// settlements and has no living units — nothing left to fight or
+    /// train with. Last banner standing wins.
     fn check_annihilation(&mut self) {
         if self.winner.is_some() {
             return;
@@ -264,7 +185,7 @@ impl Game {
             .iter()
             .copied()
             .filter(|&f| {
-                self.manpower[f.idx()] >= 1.0
+                self.zone_manager.controlled_count(f) > 0
                     || self.units.iter().any(|u| u.alive && u.faction == f)
             })
             .collect();
@@ -285,145 +206,6 @@ impl Game {
         }
     }
 
-    /// Target composition shares (from WAVE: 7 Warriors, 4 Lancers, 8 Archers, 2 Monks).
-    const WAVE_SHARES: [(UnitKind, f32); 4] = [
-        (UnitKind::Warrior, 7.0),
-        (UnitKind::Lancer, 4.0),
-        (UnitKind::Archer, 8.0),
-        (UnitKind::Monk, 2.0),
-    ];
-
-    /// Build a reinforcement wave that restores the target composition:
-    /// each slot goes to the kind furthest below its share of the army.
-    /// Prevents survivor drift (e.g. fleeing monks accumulating while
-    /// fighters die and get replaced).
-    fn build_wave(&self, faction: Faction, wave_size: usize) -> Vec<UnitKind> {
-        let share_total: f32 = Self::WAVE_SHARES.iter().map(|&(_, s)| s).sum();
-        let mut counts = [0.0f32; 4];
-        let mut total = 0.0f32;
-        for u in &self.units {
-            if u.alive && u.faction == faction {
-                let i = Self::WAVE_SHARES
-                    .iter()
-                    .position(|&(k, _)| k == u.kind)
-                    .unwrap();
-                counts[i] += 1.0;
-                total += 1.0;
-            }
-        }
-
-        let mut queue = Vec::with_capacity(wave_size);
-        for _ in 0..wave_size {
-            let mut best = 0;
-            let mut best_deficit = f32::MIN;
-            for (i, &(_, share)) in Self::WAVE_SHARES.iter().enumerate() {
-                let deficit = share / share_total * (total + 1.0) - counts[i];
-                if deficit > best_deficit {
-                    best_deficit = deficit;
-                    best = i;
-                }
-            }
-            queue.push(Self::WAVE_SHARES[best].0);
-            counts[best] += 1.0;
-            total += 1.0;
-        }
-        queue
-    }
-
-    /// Spawn units one-by-one from the queue at the rally point (base center).
-    /// When a wave is complete, release all rallying units to march.
-    pub fn tick_production(&mut self, dt: f32) {
-        for &faction in self.active_factions() {
-            let fi = faction.idx();
-            // Refill queue if empty and under unit cap.
-            // Larger wave when holding 0 zones (desperate comeback).
-            if self.spawn_queue[fi].is_empty() {
-                let alive_count = self
-                    .units
-                    .iter()
-                    .filter(|u| {
-                        u.alive
-                            && u.faction == faction
-                            && !matches!(u.order, Some(crate::unit::OrderKind::DefendZone { .. }))
-                    })
-                    .count();
-                if alive_count < self.config.max_units_per_faction {
-                    let controlled: usize = self
-                        .zone_manager
-                        .zones
-                        .iter()
-                        .filter(|z| z.state == crate::zone::ZoneState::Controlled(faction))
-                        .count();
-                    let zone_count = self.zone_manager.zones.len();
-                    let slots = self
-                        .config
-                        .max_units_per_faction
-                        .saturating_sub(alive_count);
-                    // Double wave size when holding no zones (fill army faster)
-                    let max_wave = if controlled > 0 {
-                        Self::WAVE.len()
-                    } else {
-                        Self::WAVE.len() * 2
-                    };
-                    let wave_size = slots.min(max_wave).min(self.manpower[fi] as usize);
-                    self.spawn_queue[fi] = self
-                        .build_wave(faction, wave_size)
-                        .into_iter()
-                        .map(|k| (k, None))
-                        .collect();
-                    self.spawn_timer[fi] = 0.0;
-                    // Skip rally when dominating — reinforcements march out immediately
-                    self.skip_rally[fi] = zone_count > 0 && controlled == zone_count;
-                }
-            }
-
-            if self.spawn_queue[fi].is_empty() {
-                continue;
-            }
-
-            self.spawn_timer[fi] += dt;
-            let interval = self.config.spawn_interval;
-            if self.spawn_timer[fi] >= interval {
-                self.spawn_timer[fi] -= interval;
-
-                // Bleed can drain the pool mid-wave — cut the wave short and
-                // release any rallying units so a partial wave still marches.
-                if self.manpower[fi] < 1.0 {
-                    self.spawn_queue[fi].clear();
-                    for u in &mut self.units {
-                        if u.alive && u.faction == faction && u.rally_hold {
-                            u.rally_hold = false;
-                        }
-                    }
-                    continue;
-                }
-
-                let (kind, _) = self.spawn_queue[fi].remove(0);
-                self.manpower[fi] -= 1.0;
-                // Reinforcements enter at the largest controlled settlement
-                // that trains this kind.
-                let (sx, sy) = self.production_site(faction, kind);
-                let id = self.spawn_unit(kind, faction, sx, sy, false);
-                // Rally hold — unit waits at base until wave is complete.
-                // Skip when dominating (all zones held) — just reinforce.
-                if !self.skip_rally[fi] {
-                    if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
-                        u.rally_hold = true;
-                    }
-                }
-
-                // Wave complete — release all rallying units
-                if self.spawn_queue[fi].is_empty() {
-                    for u in &mut self.units {
-                        if u.alive && u.faction == faction && u.rally_hold {
-                            u.rally_hold = false;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     /// The zone a faction rallies and reinforces at: its largest
     /// controlled settlement (tier, then lowest id). None when landless.
     pub fn rally_zone(&self, faction: Faction) -> Option<&crate::zone::CaptureZone> {
@@ -434,91 +216,79 @@ impl Game {
             .max_by_key(|z| (z.tier, std::cmp::Reverse(z.id)))
     }
 
-    /// Where a reinforcement of `kind` enters the field: the production
-    /// building at the faction's best settlement that trains it, walking
-    /// down the tier list; falls back to the capital gather point.
-    fn production_site(&self, faction: Faction, kind: UnitKind) -> (u32, u32) {
-        let mut owned: Vec<&crate::zone::CaptureZone> = self
-            .zone_manager
-            .zones
-            .iter()
-            .filter(|z| z.state == ZoneState::Controlled(faction))
-            .collect();
-        owned.sort_by_key(|z| (std::cmp::Reverse(z.tier), z.id));
-        for z in owned {
-            if let Some(b) = self
-                .buildings
-                .iter()
-                .find(|b| b.zone_id == Some(z.id) && b.produces == Some(kind))
-            {
-                return (b.grid_x, b.grid_y);
+    /// Settlement-fed production: every production building in an owned
+    /// or neutral settlement spends 1 banked stock to train 1 soldier of
+    /// its kind on a fixed interval. Faction output scales with held
+    /// territory; neutral villages raise home-bound Black militia by the
+    /// same rule. Contested settlements don't train.
+    pub fn tick_training(&mut self, dt: f32) {
+        let interval = (self.config.train_interval * self.config.train_speed_mult).max(0.5);
+
+        // Alive counts per army, once (militia is capped per settlement).
+        let mut alive = [0usize; 4];
+        for u in &self.units {
+            if u.alive && !u.is_player {
+                if let Some(i) = u.faction.army_idx() {
+                    alive[i] += 1;
+                }
             }
         }
-        self.gathers[faction.idx()]
-    }
 
-    /// Village garrisons: each village converts banked peon stock into a
-    /// small standing defense — Villager-colored while neutral, the
-    /// owner's color once captured. Garrison units carry the DefendZone
-    /// stance and never join the field army.
-    pub fn tick_village_garrisons(&mut self, dt: f32) {
-        for zi in 0..self.zone_manager.zones.len() {
-            let timer = &mut self.garrison_timer[zi];
-            *timer += dt;
-            if *timer < self.config.garrison_spawn_interval {
+        for bi in 0..self.buildings.len() {
+            if self.buildings[bi].train_cooldown > 0.0 {
+                self.buildings[bi].train_cooldown -= dt;
                 continue;
             }
-            *timer = 0.0;
-
-            let zone = &self.zone_manager.zones[zi];
-            let owner = match zone.state {
-                crate::zone::ZoneState::Controlled(f) => Some(f),
-                crate::zone::ZoneState::Neutral => None,
-                // Mid-fight zones don't produce.
-                _ => continue,
+            let b = &self.buildings[bi];
+            let (Some(kind), Some(zid)) = (b.produces, b.zone_id) else {
+                continue;
             };
-            let faction = owner.unwrap_or(Faction::Villager);
-
-            let alive = self
-                .units
-                .iter()
-                .filter(|u| {
-                    u.alive
-                        && u.faction == faction
-                        && u.order == Some(crate::unit::OrderKind::DefendZone { zone: zi as u8 })
-                })
-                .count();
-            let cap = self.zone_manager.zones[zi].tier.garrison_cap();
-            if alive >= cap as usize {
+            let (bx, by) = (b.grid_x, b.grid_y);
+            let zi = zid as usize;
+            let Some(zone) = self.zone_manager.zones.get(zi) else {
+                continue;
+            };
+            let faction = match zone.state {
+                ZoneState::Controlled(f) => f,
+                ZoneState::Neutral => Faction::Villager,
+                _ => continue, // mid-fight settlements don't train
+            };
+            if self.village_stock.get(zi).copied().unwrap_or(0) == 0 {
                 continue;
             }
-            let stock = self.village_stock.get(zi).copied().unwrap_or(0);
-            if stock == 0 {
-                continue;
-            }
-
-            let Some((bx, by, kind)) = self
-                .buildings
-                .iter()
-                .filter(|b| b.zone_id == Some(zi as u8))
-                .filter_map(|b| b.produces.map(|k| (b.grid_x, b.grid_y, k)))
-                .nth(alive % 2)
-                .or_else(|| {
-                    self.buildings
+            match faction.army_idx() {
+                Some(fi) => {
+                    if alive[fi] >= self.config.max_units_per_faction {
+                        continue;
+                    }
+                    self.village_stock[zi] -= 1;
+                    self.spawn_unit(kind, faction, bx, by, false);
+                    alive[fi] += 1;
+                }
+                None => {
+                    // Militia stays home: capped by tier, holds its zone.
+                    let local = self
+                        .units
                         .iter()
-                        .filter(|b| b.zone_id == Some(zi as u8))
-                        .find_map(|b| b.produces.map(|k| (b.grid_x, b.grid_y, k)))
-                })
-            else {
-                continue;
-            };
-
-            self.village_stock[zi] -= 1;
-            let id = self.spawn_unit(kind, faction, bx, by, false);
-            if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
-                u.order = Some(crate::unit::OrderKind::DefendZone { zone: zi as u8 });
-                u.order_timer = 0.0;
+                        .filter(|u| {
+                            u.alive
+                                && u.faction == Faction::Villager
+                                && u.order
+                                    == Some(crate::unit::OrderKind::DefendZone { zone: zid })
+                        })
+                        .count();
+                    if local >= zone.tier.garrison_cap() as usize {
+                        continue;
+                    }
+                    self.village_stock[zi] -= 1;
+                    let id = self.spawn_unit(kind, Faction::Villager, bx, by, false);
+                    if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
+                        u.order = Some(crate::unit::OrderKind::DefendZone { zone: zid });
+                        u.order_timer = 0.0;
+                    }
+                }
             }
+            self.buildings[bi].train_cooldown = interval;
         }
     }
 
@@ -590,9 +360,6 @@ impl Game {
         self.visible = vec![false; tiles];
         self.revealed = vec![true; tiles];
 
-        // Fresh manpower pools (config may have been live-tuned since Game::new)
-        self.manpower = [self.config.manpower_start; 4];
-
         let (blue_cx, blue_cy) = layout.blue_base;
         let (red_cx, red_cy) = layout.red_base;
 
@@ -612,7 +379,6 @@ impl Game {
         self.zone_manager = ZoneManager::create_from_layout(&layout, self.config.zone_radius);
         // Villages start with a small banked stock so early captures pay off.
         self.village_stock = vec![2; self.zone_manager.zones.len()];
-        self.garrison_timer = vec![0.0; self.zone_manager.zones.len()];
 
         // Capitals are the first zones (ids 0..n_capitals) in
         // [Blue, Red, extras...] order; each active faction starts in
@@ -675,6 +441,7 @@ impl Game {
                 zone_id: Some(zone.id),
                 produces: None,
                 house_variant: 0,
+                train_cooldown: 0.0,
             });
         }
         // Village buildings from the map plan; ownership follows the zone.
@@ -689,6 +456,7 @@ impl Game {
                     zone_id: Some(v.zone_idx),
                     produces: None,
                     house_variant: (i % 3) as u8,
+                    train_cooldown: 0.0,
                 });
             }
             for &((bx, by), kind) in &v.production {
@@ -707,6 +475,7 @@ impl Game {
                     zone_id: Some(v.zone_idx),
                     produces: Some(unit),
                     house_variant: 0,
+                    train_cooldown: 0.0,
                 });
             }
         }
@@ -727,6 +496,13 @@ impl Game {
             .flat_map(|v| v.resources.iter().copied())
             .collect();
         Self::paint_road_around_buildings(&mut self.grid, &buildings, &protected);
+        // Stagger training so an empire doesn't burst-spawn on one frame.
+        let interval = (self.config.train_interval * self.config.train_speed_mult).max(0.5);
+        for (i, b) in buildings.iter_mut().enumerate() {
+            if b.produces.is_some() {
+                b.train_cooldown = interval * ((i % 8) as f32 / 8.0);
+            }
+        }
         self.buildings = buildings;
 
         // Spawn ambient sheep in rear pasture of each base
@@ -983,7 +759,7 @@ mod tests {
         game.units.retain(|u| u.is_player);
         game.village_stock = vec![5; game.zone_manager.zones.len()];
         for _ in 0..(30 * 10) {
-            game.tick_village_garrisons(0.1);
+            game.tick_training(0.1);
         }
         let militia: Vec<_> = game
             .units
@@ -1010,19 +786,17 @@ mod tests {
                         && u.order == Some(crate::unit::OrderKind::DefendZone { zone: zi as u8 })
                 })
                 .count();
-            assert!(
-                count <= game.config.garrison_cap as usize,
-                "zone {zi} garrison over cap: {count}"
-            );
+            let cap = game.zone_manager.zones[zi].tier.garrison_cap() as usize;
+            assert!(count <= cap, "zone {zi} militia over tier cap: {count}");
         }
         assert!(
             game.village_stock.iter().any(|&s| s < 5),
-            "garrison production must consume stock"
+            "training must consume stock"
         );
     }
 
     #[test]
-    fn captured_village_garrisons_for_owner() {
+    fn captured_village_trains_owner_soldiers() {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
@@ -1030,22 +804,23 @@ mod tests {
         game.village_stock = vec![0; game.zone_manager.zones.len()];
         game.village_stock[3] = 5;
         for _ in 0..(30 * 10) {
-            game.tick_village_garrisons(0.1);
+            game.tick_training(0.1);
         }
-        let blue_garrison = game
+        let soldiers: Vec<_> = game
             .units
             .iter()
-            .filter(|u| {
-                u.alive
-                    && u.faction == Faction::Blue
-                    && !u.is_player
-                    && u.order == Some(crate::unit::OrderKind::DefendZone { zone: 3 })
-            })
-            .count();
+            .filter(|u| u.alive && u.faction == Faction::Blue && !u.is_player)
+            .collect();
         assert!(
-            blue_garrison > 0,
-            "captured village must garrison in the owner's color"
+            !soldiers.is_empty(),
+            "captured village must train soldiers in the owner's color"
         );
+        for u in &soldiers {
+            assert!(
+                u.order.is_none(),
+                "trained soldiers are normal field units, not stuck garrisons"
+            );
+        }
     }
 
     #[test]
@@ -1076,7 +851,6 @@ mod tests {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
-        game.manpower = [0.0, 0.0, 0.0, 0.0];
         let z = &game.zone_manager.zones[3];
         let (zx, zy) = (z.center_gx, z.center_gy);
         let mid = game.spawn_unit(UnitKind::Warrior, Faction::Villager, zx + 2, zy, false);
@@ -1137,7 +911,6 @@ mod tests {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
-        game.manpower = [0.0, 0.0, 0.0, 0.0];
         let z = &game.zone_manager.zones[3];
         let (zx, zy) = (z.center_gx, z.center_gy);
         let (zwx, zwy) = (z.center_wx, z.center_wy);
@@ -1184,28 +957,6 @@ mod tests {
             }
         }
         assert!(reacted, "militia must wake when a hostile enters the zone");
-    }
-
-    #[test]
-    fn stagnant_endgame_still_resolves() {
-        // A leftover pool pinned behind the army cap must not stall the
-        // battle forever: stagnation arms sudden death.
-        let mut game = Game::new(960.0, 640.0);
-        game.setup_demo_battle_with_seed(42);
-        game.config.victory_hold_time = 5.0;
-        game.manpower = [18.0, 0.0, 0.0, 0.0];
-        game.config.max_units_per_faction = 1; // nobody can spend
-        let input = crate::player_input::PlayerInput::default();
-        for _ in 0..(60 * 60) {
-            game.tick(&input, 1.0 / 60.0);
-            if game.winner.is_some() {
-                break;
-            }
-        }
-        assert!(
-            game.winner.is_some(),
-            "stagnant endgame must resolve via sudden death"
-        );
     }
 
     #[test]
@@ -1319,50 +1070,6 @@ mod tests {
     }
 
     #[test]
-    fn untimed_battle_ignores_domination_and_bleed() {
-        let mut game = Game::new(960.0, 640.0);
-        game.untimed = true;
-        game.setup_demo_battle_with_seed(42);
-        for z in game.zone_manager.zones.iter_mut() {
-            z.set_controlled(Faction::Red);
-        }
-        game.config.bleed_per_extra_zone = 0.5;
-        let input = crate::player_input::PlayerInput::default();
-        for _ in 0..(60 * 70) {
-            game.tick(&input, 1.0 / 60.0);
-            if game.winner.is_some() {
-                break;
-            }
-        }
-        assert!(
-            game.winner.is_none(),
-            "untimed battles have no domination victory (got {:?})",
-            game.winner
-        );
-
-        // Same map with the clock on: the settlement leader's bleed must
-        // drain far more than untimed production spend alone.
-        let drained = |untimed: bool| -> f32 {
-            let mut g = Game::new(960.0, 640.0);
-            g.untimed = untimed;
-            g.setup_demo_battle_with_seed(42);
-            for z in g.zone_manager.zones.iter_mut() {
-                z.set_controlled(Faction::Red);
-            }
-            g.config.bleed_per_extra_zone = 0.5;
-            let input = crate::player_input::PlayerInput::default();
-            for _ in 0..(60 * 20) {
-                g.tick(&input, 1.0 / 60.0);
-            }
-            300.0 - g.manpower[0]
-        };
-        assert!(
-            drained(false) > drained(true) + 10.0,
-            "untimed battles must not bleed pools"
-        );
-    }
-
-    #[test]
     fn garrison_joins_retinue_and_village_refills() {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
@@ -1402,22 +1109,25 @@ mod tests {
             matches!(m.order, Some(crate::unit::OrderKind::DefendZone { .. })),
             "neutral militia must never join the retinue"
         );
-        // The village spends stock to replace the recruited defender.
-        let mut refilled = false;
+        // The owned village keeps spending stock to train fresh soldiers.
+        let before: Vec<u32> = game
+            .units
+            .iter()
+            .filter(|u| u.alive && u.faction == Faction::Blue)
+            .map(|u| u.id)
+            .collect();
+        let mut trained = false;
         for _ in 0..(60 * 30) {
             game.tick(&input, 1.0 / 60.0);
-            let replacement = game.units.iter().any(|u| {
-                u.alive
-                    && u.id != gid
-                    && u.faction == Faction::Blue
-                    && u.order == Some(crate::unit::OrderKind::DefendZone { zone: zi as u8 })
+            let fresh = game.units.iter().any(|u| {
+                u.alive && u.faction == Faction::Blue && !u.is_player && !before.contains(&u.id)
             });
-            if replacement {
-                refilled = true;
+            if fresh {
+                trained = true;
                 break;
             }
         }
-        assert!(refilled, "village must refill the garrison from stock");
+        assert!(trained, "the village must train replacements from stock");
     }
 
     #[test]
@@ -1425,7 +1135,6 @@ mod tests {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
-        game.manpower = [0.0, 0.0, 0.0, 0.0];
         let zi = 3usize;
         let (zx, zy, zwx, zwy) = {
             let z = &game.zone_manager.zones[zi];
@@ -1491,13 +1200,13 @@ mod tests {
     }
 
     #[test]
-    fn garrison_stalls_without_stock() {
+    fn training_stalls_without_stock() {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
         game.village_stock = vec![0; game.zone_manager.zones.len()];
         for _ in 0..(30 * 10) {
-            game.tick_village_garrisons(0.1);
+            game.tick_training(0.1);
         }
         assert!(
             !game
@@ -1508,100 +1217,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn production_spawns_units_when_under_cap() {
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-
-        // Tick production for ~25s to trigger a reinforcement wave (interval=20s)
-        for _ in 0..250 {
-            game.tick_production(0.1);
-        }
-
-        let blue_units = game
-            .units
-            .iter()
-            .filter(|u| u.alive && u.faction == Faction::Blue)
-            .count();
-        assert!(
-            blue_units > 1,
-            "Should have spawned reinforcement wave, got {blue_units}"
-        );
-    }
-
-    fn count_alive(game: &Game, faction: Faction) -> usize {
-        game.units
-            .iter()
-            .filter(|u| u.alive && u.faction == faction)
-            .count()
-    }
-
-    #[test]
-    fn reinforcement_spawns_cost_manpower() {
-        let mut game = Game::new(960.0, 640.0);
-        let start = game.manpower[0];
-        for _ in 0..250 {
-            game.tick_production(0.1);
-        }
-        let spawned = count_alive(&game, Faction::Blue);
-        assert!(spawned > 0, "Expected reinforcements to spawn");
-        assert_eq!(
-            game.manpower[0],
-            start - spawned as f32,
-            "Each reinforcement should cost 1 manpower"
-        );
-    }
-
-    #[test]
-    fn production_stops_when_manpower_exhausted() {
-        let mut game = Game::new(960.0, 640.0);
-        game.manpower[0] = 0.0;
-        for _ in 0..250 {
-            game.tick_production(0.1);
-        }
-        assert_eq!(
-            count_alive(&game, Faction::Blue),
-            0,
-            "No reinforcements should spawn with an empty pool"
-        );
-    }
-
-    #[test]
-    fn wave_capped_by_remaining_manpower() {
-        let mut game = Game::new(960.0, 640.0);
-        game.manpower[0] = 3.0;
-        for _ in 0..1000 {
-            game.tick_production(0.1);
-        }
-        assert_eq!(
-            count_alive(&game, Faction::Blue),
-            3,
-            "Only 3 reinforcements should spawn with 3 manpower"
-        );
-        assert_eq!(game.manpower[0], 0.0);
-    }
-
-    #[test]
-    fn partial_wave_releases_rally_hold() {
-        let mut game = Game::new(960.0, 640.0);
-        game.manpower[0] = 3.0;
-        for _ in 0..1000 {
-            game.tick_production(0.1);
-        }
-        assert!(
-            game.units
-                .iter()
-                .filter(|u| u.alive && u.faction == Faction::Blue)
-                .all(|u| !u.rally_hold),
-            "A wave cut short by manpower must still release its rally hold"
-        );
-    }
 
     /// Game with a 3-zone layout and a bleed threshold of 2 (majority of 3).
     fn game_with_three_zones() -> Game {
         let mut game = Game::new(960.0, 640.0);
-        game.config.bleed_zone_threshold = 2;
-        game.config.bleed_per_extra_zone = 1.0;
         let layout = crate::mapgen::MapLayout {
             blue_base: (20, 20),
             red_base: (139, 139),
@@ -1619,174 +1238,59 @@ mod tests {
     }
 
     #[test]
-    fn zone_majority_bleeds_enemy_manpower() {
+    fn landless_army_starves_and_loses() {
         let mut game = game_with_three_zones();
-        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
-        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
-        game.manpower = [50.0, 50.0, 0.0, 0.0];
-        game.tick_zones(2.0);
-        // Leader Blue holds 2, Red 0 → deficit 2 → 2.0/s drain on Red for 2s
-        assert_eq!(game.manpower[1], 46.0, "Red pool should bleed");
-        assert_eq!(game.manpower[0], 50.0, "Blue pool should be untouched");
-    }
-
-    #[test]
-    fn bleed_scales_with_zones_above_threshold() {
-        let mut game = game_with_three_zones();
-        for z in &mut game.zone_manager.zones {
-            z.state = ZoneState::Controlled(Faction::Red);
-        }
-        game.manpower = [50.0, 50.0, 0.0, 0.0];
-        game.tick_zones(1.0);
-        // Leader Red holds 3, Blue 0 → deficit 3 → 3.0/s drain on Blue
-        assert_eq!(game.manpower[0], 47.0);
-    }
-
-    #[test]
-    fn no_bleed_below_majority() {
-        let mut game = game_with_three_zones();
-        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
-        game.manpower = [50.0, 50.0, 0.0, 0.0];
-        game.tick_zones(2.0);
-        assert_eq!(game.manpower[..2], [50.0, 50.0]);
-    }
-
-    #[test]
-    fn bleed_clamps_at_zero() {
-        let mut game = game_with_three_zones();
-        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
-        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
-        game.manpower = [50.0, 0.5, 0.0, 0.0];
-        game.tick_zones(2.0);
-        assert_eq!(game.manpower[1], 0.0);
-    }
-
-    #[test]
-    fn annihilation_defeats_faction_with_no_pool_and_no_army() {
-        let mut game = game_with_three_zones();
-        game.manpower = [50.0, 0.0, 0.0, 0.0];
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        // No Red units at all
+        for z in &mut game.zone_manager.zones {
+            z.set_controlled(Faction::Blue);
+        }
+        // A landless Red remnant with no home left.
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, 100, 100, false);
+        for _ in 0..120 {
+            game.tick_zones(1.0);
+            if game.winner.is_some() {
+                break;
+            }
+        }
+        assert_eq!(
+            game.winner,
+            Some(Faction::Blue),
+            "starvation must finish a decided war"
+        );
+    }
+
+    #[test]
+    fn conquest_eliminates_landless_armyless_faction() {
+        let mut game = game_with_three_zones();
+        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        // Red owns nothing and fields nobody → eliminated, Blue wins.
         game.tick_zones(0.1);
         assert_eq!(game.winner, Some(Faction::Blue));
     }
 
     #[test]
-    fn no_annihilation_while_army_lives_or_pool_remains() {
+    fn faction_stands_with_units_or_settlements() {
         let mut game = game_with_three_zones();
         game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-
-        // Pool empty but army alive → no winner
-        game.manpower = [50.0, 0.0, 0.0, 0.0];
         game.spawn_unit(UnitKind::Warrior, Faction::Red, 100, 100, false);
         game.tick_zones(0.1);
-        assert_eq!(game.winner, None);
+        assert_eq!(game.winner, None, "both armies alive");
 
-        // Army dead but pool remains → no winner
-        game.manpower = [50.0, 10.0, 0.0, 0.0];
+        // Red army destroyed but it still owns a settlement: it can
+        // retrain, so the war is not over.
+        game.zone_manager.zones[2].set_controlled(Faction::Red);
         for u in &mut game.units {
             if u.faction == Faction::Red {
                 u.alive = false;
             }
         }
         game.tick_zones(0.1);
-        assert_eq!(game.winner, None);
-    }
+        assert_eq!(game.winner, None, "a landed faction can rebuild");
 
-    #[test]
-    fn production_restores_composition_instead_of_cycling() {
-        let mut game = Game::new(960.0, 640.0);
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        for i in 0..12 {
-            game.spawn_unit(UnitKind::Monk, Faction::Blue, 6 + i % 3, 5 + i / 3, false);
-        }
-        let monks_before = game
-            .units
-            .iter()
-            .filter(|u| u.alive && u.kind == UnitKind::Monk && u.faction == Faction::Blue)
-            .count();
-
-        for _ in 0..600 {
-            game.tick_production(0.1);
-        }
-
-        let monks_after = game
-            .units
-            .iter()
-            .filter(|u| u.alive && u.kind == UnitKind::Monk && u.faction == Faction::Blue)
-            .count();
-        assert_eq!(
-            monks_after, monks_before,
-            "monk-saturated army must not produce more monks"
-        );
-        let warriors = game
-            .units
-            .iter()
-            .filter(|u| u.alive && u.kind == UnitKind::Warrior && u.faction == Faction::Blue)
-            .count();
-        assert!(warriors > 1, "deficit kinds should be produced");
-    }
-
-    #[test]
-    fn sudden_death_majority_wins_when_both_pools_empty() {
-        let mut game = game_with_three_zones();
-        game.manpower = [0.0, 0.0, 0.0, 0.0];
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
+        // A landless remnant army also keeps a faction standing.
+        game.zone_manager.zones[2].set_controlled(Faction::Blue);
         game.spawn_unit(UnitKind::Warrior, Faction::Red, 100, 100, false);
-        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
-        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
-        game.zone_manager.zones[2].state = ZoneState::Controlled(Faction::Red);
-
-        game.tick_zones(game.config.victory_hold_time * 0.5);
-        assert_eq!(game.winner, None);
-        game.tick_zones(game.config.victory_hold_time * 0.6);
-        assert_eq!(game.winner, Some(Faction::Blue));
-    }
-
-    #[test]
-    fn sudden_death_timer_pauses_on_flicker_not_resets() {
-        let mut game = game_with_three_zones();
-        game.manpower = [0.0, 0.0, 0.0, 0.0];
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 100, 100, false);
-        game.zone_manager.zones[0].state = ZoneState::Controlled(Faction::Blue);
-        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
-        game.zone_manager.zones[2].state = ZoneState::Controlled(Faction::Red);
-
-        game.tick_zones(game.config.victory_hold_time * 0.9);
-        // Frontline flicker: one Blue zone dips to Capturing — tie
-        game.zone_manager.zones[1].state = ZoneState::Capturing(Faction::Red);
-        game.tick_zones(1.0);
-        assert_eq!(game.winner, None);
-        // Majority restored — accumulated time must survive the flicker
-        game.zone_manager.zones[1].state = ZoneState::Controlled(Faction::Blue);
-        game.tick_zones(game.config.victory_hold_time * 0.2);
-        assert_eq!(game.winner, Some(Faction::Blue));
-    }
-
-    #[test]
-    fn no_sudden_death_while_a_pool_remains() {
-        let mut game = game_with_three_zones();
-        game.manpower = [10.0, 0.0, 0.0, 0.0];
-        game.spawn_unit(UnitKind::Warrior, Faction::Blue, 5, 5, true);
-        game.spawn_unit(UnitKind::Warrior, Faction::Red, 100, 100, false);
-        // A plurality below the majority threshold (1 of 3) wins in
-        // sudden death but not while a pool remains.
-        game.zone_manager.zones[0].set_controlled(Faction::Blue);
-
-        game.tick_zones(game.config.victory_hold_time * 2.0);
-        assert_eq!(
-            game.winner, None,
-            "plurality is not enough outside sudden death"
-        );
-    }
-
-    #[test]
-    fn battle_setup_resets_manpower_from_config() {
-        let mut game = Game::new(960.0, 640.0);
-        game.manpower = [1.0, 2.0, 0.0, 0.0];
-        game.config.manpower_start = 77.0;
-        game.setup_demo_battle_with_seed(42);
-        assert_eq!(game.manpower[..2], [77.0, 77.0]);
+        game.tick_zones(0.1);
+        assert_eq!(game.winner, None, "a landless army fights on");
     }
 }

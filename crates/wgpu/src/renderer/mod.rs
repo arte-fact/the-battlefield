@@ -277,7 +277,6 @@ pub fn render_frame(
         vh,
     );
     draw_minimap(&mut hud_bg, &mut hud_prim, game, assets, vw, vh);
-    draw_victory_progress(&mut hud_sprites, &mut hud_prim, game, assets, vw);
     if screen == GameScreen::Playing {
         draw_touch_controls(
             &mut hud_prim,
@@ -1391,62 +1390,11 @@ fn draw_hud(
         let spacing = 76.0;
         for (k, &faction) in game.active_factions().iter().enumerate() {
             let x = vw * 0.5 - (n_active - 1.0) * spacing * 0.5 + k as f32 * spacing;
-            let (r, g, b) = if game.manpower_bleeding(faction) {
-                (255u8, 170u8, 50u8)
-            } else {
-                faction.rgb()
-            };
-            let label = format!("{}", game.manpower[faction.army_idx().unwrap_or(0)] as u32);
+            let (r, g, b) = faction.rgb();
+            let label = format!("{}", game.zone_manager.war_score(faction));
             assets
                 .text
                 .draw_text_centered(sprites, gpu, &label, x, counter_y, 20.0, r, g, b, 255);
-        }
-    }
-}
-
-fn draw_victory_progress(
-    sprites: &mut SpriteBatch,
-    prim: &mut PrimitiveBatch,
-    game: &Game,
-    assets: &mut Assets,
-    vw: f32,
-) {
-    let progress = game
-        .zone_manager
-        .victory_progress(game.config.victory_hold_time);
-    if progress < f32::EPSILON || game.winner.is_some() {
-        return;
-    }
-    let Some(faction) = game.zone_manager.victory_candidate else {
-        return;
-    };
-
-    let bar_w = 300.0;
-    let bar_h = 46.0;
-    let bar_x = vw * 0.5 - bar_w * 0.5;
-    let bar_y = 46.0;
-
-    if let Some((tex_id, bw, bh)) = assets.ui_bar_base {
-        draw_helpers::draw_bar_3slice(sprites, tex_id, bw, bh, bar_x, bar_y, bar_w, bar_h, 24.0);
-    } else {
-        prim.fill_rect(bar_x, bar_y, bar_w, bar_h, [0.0, 0.0, 0.0, 0.5]);
-    }
-
-    let (fr, fg, fb) = faction.rgb();
-    let tint = [fr as f32 / 255.0, fg as f32 / 255.0, fb as f32 / 255.0, 1.0];
-    if let Some(q) = render_util::bar_fill_quad(
-        bar_x as f64,
-        bar_y as f64,
-        bar_w as f64,
-        bar_h as f64,
-        progress as f64,
-        1.0,
-    ) {
-        if let Some(fill_id) = assets.ui_bar_fill {
-            let tex = &assets.textures[fill_id];
-            draw_helpers::blit_tinted(sprites, fill_id, (tex.width, tex.height), &q, tint);
-        } else {
-            prim.fill_rect(q.dx as f32, q.dy as f32, q.dw as f32, q.dh as f32, tint);
         }
     }
 }

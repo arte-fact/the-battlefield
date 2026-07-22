@@ -462,16 +462,14 @@ pub struct SkirmishConfig {
     pub map_size_idx: usize,
     /// 0 = NEUTRAL (villager origin), 1..=4 = Blue/Red/Yellow/Purple.
     pub start_as: usize,
-    pub manpower_you: f32,
-    pub manpower_enemy: f32,
+    pub production_idx: usize,
     pub army_cap: usize,
-    pub victory_hold: f32,
-    pub bleed_idx: usize,
     pub start_authority: f32,
 }
 
-pub const BLEED_LEVELS: [(&str, f32); 4] =
-    [("OFF", 0.0), ("LOW", 0.1), ("NORMAL", 0.25), ("HIGH", 0.5)];
+/// PRODUCTION row: training pace multiplier applied to train_interval.
+pub const PRODUCTION_LEVELS: [(&str, f32); 3] =
+    [("SLOW", 1.5), ("NORMAL", 1.0), ("FAST", 0.6)];
 
 /// MAP SIZE row values; 0 scales with the enemy count.
 pub const MAP_SIZES: [(&str, u32); 4] = [
@@ -493,18 +491,15 @@ impl Default for SkirmishConfig {
             enemies: 1,
             map_size_idx: 0,
             start_as: 1,
-            manpower_you: 300.0,
-            manpower_enemy: 300.0,
+            production_idx: 1,
             army_cap: 35,
-            victory_hold: 60.0,
-            bleed_idx: 2,
             start_authority: 0.0,
         }
     }
 }
 
 impl SkirmishConfig {
-    pub const ROWS: usize = 10;
+    pub const ROWS: usize = 7;
 
     pub const START_AS: [(&'static str, Option<Faction>); 5] = [
         ("NEUTRAL", None),
@@ -528,18 +523,11 @@ impl SkirmishConfig {
             fixed => fixed,
         };
         cfg.max_units_per_faction = self.army_cap;
-        cfg.victory_hold_time = self.victory_hold;
-        cfg.bleed_per_extra_zone = BLEED_LEVELS[self.bleed_idx].1;
+        cfg.train_speed_mult = PRODUCTION_LEVELS[self.production_idx].1;
     }
 
     /// Post-setup per-side values that GameConfig cannot express.
     pub fn apply_to_game(&self, game: &mut Game) {
-        game.manpower = [
-            self.manpower_you,
-            self.manpower_enemy,
-            self.manpower_enemy,
-            self.manpower_enemy,
-        ];
         game.authority = self.start_authority;
     }
 
@@ -549,11 +537,8 @@ impl SkirmishConfig {
             "ENEMIES",
             "MAP SIZE",
             "START AS",
-            "MANPOWER (YOU)",
-            "MANPOWER (ENEMY)",
+            "PRODUCTION",
             "ARMY SIZE CAP",
-            "VICTORY HOLD",
-            "ZONE BLEED",
             "STARTING AUTHORITY",
         ][row]
     }
@@ -568,12 +553,9 @@ impl SkirmishConfig {
                 let idx = if self.start_as > max { 1 } else { self.start_as };
                 Self::START_AS[idx].0.to_string()
             }
-            4 => format!("{}", self.manpower_you as u32),
-            5 => format!("{}", self.manpower_enemy as u32),
-            6 => format!("{}", self.army_cap),
-            7 => format!("{}s", self.victory_hold as u32),
-            8 => BLEED_LEVELS[self.bleed_idx].0.to_string(),
-            9 => format!("{}", self.start_authority as u32),
+            4 => PRODUCTION_LEVELS[self.production_idx].0.to_string(),
+            5 => format!("{}", self.army_cap),
+            6 => format!("{}", self.start_authority as u32),
             _ => String::new(),
         }
     }
@@ -594,26 +576,17 @@ impl SkirmishConfig {
                 let n = 2 + self.enemies as i32;
                 self.start_as = ((self.start_as as i32 + dir).rem_euclid(n)) as usize;
             }
-            4 => self.manpower_you = step(self.manpower_you, dir, 50.0, 100.0, 900.0),
-            5 => self.manpower_enemy = step(self.manpower_enemy, dir, 50.0, 100.0, 900.0),
-            6 => {
+            4 => {
+                self.production_idx = (self.production_idx as i32 + dir)
+                    .rem_euclid(PRODUCTION_LEVELS.len() as i32)
+                    as usize;
+            }
+            5 => {
                 let caps = [20usize, 35, 50];
                 let i = caps.iter().position(|&c| c == self.army_cap).unwrap_or(1);
                 self.army_cap = caps[(i as i32 + dir).rem_euclid(3) as usize];
             }
-            7 => {
-                let holds = [30.0f32, 60.0, 90.0];
-                let i = holds
-                    .iter()
-                    .position(|&h| h == self.victory_hold)
-                    .unwrap_or(1);
-                self.victory_hold = holds[(i as i32 + dir).rem_euclid(3) as usize];
-            }
-            8 => {
-                self.bleed_idx =
-                    (self.bleed_idx as i32 + dir).rem_euclid(BLEED_LEVELS.len() as i32) as usize;
-            }
-            9 => self.start_authority = step(self.start_authority, dir, 25.0, 0.0, 50.0),
+            6 => self.start_authority = step(self.start_authority, dir, 25.0, 0.0, 50.0),
             _ => {}
         }
     }
@@ -801,7 +774,7 @@ const ROW_H: f64 = 34.0;
 
 pub fn skirmish_layout(ui: &UiState) -> ScreenLayout {
     let mut buttons = Vec::new();
-    let top = -157.0;
+    let top = -120.0;
     for row in 0..SkirmishConfig::ROWS {
         let focused = row == ui.focused_row;
         buttons.push(ButtonDesc {
@@ -826,7 +799,7 @@ pub fn skirmish_layout(ui: &UiState) -> ScreenLayout {
     buttons.push(ButtonDesc {
         label: "START".into(),
         offset_x: -85.0,
-        offset_y: 202.0,
+        offset_y: 155.0,
         w: 150.0,
         h: 50.0,
         style: ButtonStyle::Blue,
@@ -835,7 +808,7 @@ pub fn skirmish_layout(ui: &UiState) -> ScreenLayout {
     buttons.push(ButtonDesc {
         label: "BACK".into(),
         offset_x: 85.0,
-        offset_y: 202.0,
+        offset_y: 155.0,
         w: 150.0,
         h: 50.0,
         style: ButtonStyle::Red,
@@ -843,12 +816,12 @@ pub fn skirmish_layout(ui: &UiState) -> ScreenLayout {
     });
     ScreenLayout {
         overlay: (0, 0, 0, 190),
-        panel_size: Some((560.0, 524.0)),
+        panel_size: Some((560.0, 430.0)),
         title_ribbon: Some((0, 22.0, 380.0, 60.0)),
         title: Some(TextElement {
             text: "SKIRMISH".into(),
             offset_x: 0.0,
-            offset_y: -210.0,
+            offset_y: -163.0,
             size: 34.0,
             r: 255,
             g: 215,
@@ -1011,21 +984,17 @@ mod mode_tests {
     #[test]
     fn skirmish_adjust_clamps_and_cycles() {
         let mut c = SkirmishConfig::default();
-        for _ in 0..30 {
-            c.adjust(4, 1, 0);
-        }
-        assert_eq!(c.manpower_you, 900.0);
-        c.adjust(8, 1, 0);
-        assert_eq!(c.bleed_idx, 3);
-        c.adjust(8, 1, 0);
-        assert_eq!(c.bleed_idx, 0);
+        c.adjust(4, 1, 0); // NORMAL -> FAST
+        assert_eq!(c.production_idx, 2);
+        c.adjust(4, 1, 0); // wraps to SLOW
+        assert_eq!(c.production_idx, 0);
         c.adjust(0, 1, 777);
         assert_eq!(c.seed, 777);
+        c.adjust(5, 1, 0); // army cap 35 -> 50
         let mut cfg = GameConfig::default();
-        c.adjust(7, -1, 0);
         c.apply(&mut cfg);
-        assert_eq!(cfg.victory_hold_time, 30.0);
-        assert_eq!(cfg.bleed_per_extra_zone, 0.0);
+        assert_eq!(cfg.train_speed_mult, 1.5);
+        assert_eq!(cfg.max_units_per_faction, 50);
     }
 
     #[test]

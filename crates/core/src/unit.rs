@@ -349,8 +349,6 @@ pub struct Unit {
     pub order_timer: f32,
     /// Seconds remaining for order flash indicator ("!").
     pub order_flash: f32,
-    /// When true, unit idles at rally point instead of marching via flowfield.
-    pub rally_hold: bool,
     /// Toggle for alternating between Attack and Attack2 animations (warrior only).
     pub attack_variant: bool,
     /// Zone this unit is assigned to navigate toward (per-unit objective scoring).
@@ -422,7 +420,6 @@ impl Unit {
             order: None,
             order_timer: 0.0,
             order_flash: 0.0,
-            rally_hold: false,
             attack_variant: false,
             assigned_zone: None,
             zone_lock_timer: 0.0,
@@ -451,7 +448,6 @@ impl Unit {
             self.alive = false;
             self.death_fade = DEATH_FADE_DURATION;
             self.order = None;
-            self.rally_hold = false;
             self.set_anim(UnitAnim::Idle);
         }
     }

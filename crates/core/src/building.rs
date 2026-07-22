@@ -107,6 +107,8 @@ pub struct BaseBuilding {
     pub produces: Option<UnitKind>,
     /// House sprite variant: 0=House1, 1=House2, 2=House3 (ignored for non-House kinds).
     pub house_variant: u8,
+    /// Seconds until this production building may train again.
+    pub train_cooldown: f32,
 }
 
 /// Which building produces a given unit type.
@@ -228,6 +230,7 @@ impl BasePlacer {
             zone_id: None,
             produces: None,
             house_variant: 0,
+            train_cooldown: 0.0,
         });
         true
     }

@@ -124,18 +124,8 @@ pub struct Game {
     pub zone_manager: ZoneManager,
     /// Banked peon deliveries per zone (fuels village production).
     pub village_stock: Vec<u8>,
-    /// Per-zone garrison production timers.
-    pub garrison_timer: Vec<f32>,
-    /// Set when a faction wins (holds all zones for VICTORY_HOLD_TIME).
+    /// Set when a faction wins the war (conquest: last banner standing).
     pub winner: Option<Faction>,
-    /// Remaining reinforcement manpower per army faction (ARMY_FACTIONS order).
-    pub manpower: [f32; 4],
-    /// Spawn queue per faction [Blue, Red] — units to spawn one-by-one.
-    spawn_queue: [Vec<(UnitKind, Option<u8>)>; 4],
-    /// Timer between individual unit spawns per army faction.
-    spawn_timer: [f32; 4],
-    /// Per-faction flag: skip rally_hold when dominating (all zones held).
-    skip_rally: [bool; 4],
     /// Shared per-zone flow fields (terrain-only, faction-agnostic),
     /// bounded to each settlement's influence window.
     zone_flow: FactionFlowState,
@@ -148,13 +138,8 @@ pub struct Game {
     objective_timer: f32,
     /// Timer for periodic auto-recruitment passes.
     recruit_timer: f32,
-    /// Time spent in sudden death (all pools empty) without a winner;
-    /// forces a resolution when FFA stalemates.
-    sudden_death_elapsed: f32,
-    /// Seconds since any manpower pool last moved; a long-stagnant
-    /// endgame arms sudden death even with unspendable pool left over.
-    pub(crate) manpower_stagnant: f32,
-    pub(crate) last_manpower: [f32; 4],
+    /// Per-army starvation clocks: landless factions' units wither.
+    starvation: [f32; 4],
     /// In-flight budgeted map generation (loading screen).
     pending_setup: Option<mapgen::MapGen>,
     /// The army the player fights for. None while unaligned (free-mode
@@ -236,20 +221,14 @@ impl Game {
             pawns: Vec::new(),
             zone_manager: ZoneManager::empty(),
             village_stock: Vec::new(),
-            garrison_timer: Vec::new(),
+
             winner: None,
-            manpower: [config.manpower_start; 4],
-            spawn_queue: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
-            spawn_timer: [0.0; 4],
-            skip_rally: [false; 4],
             zone_flow: FactionFlowState::new(),
             macro_objectives: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             planner_targets: [(None, None); 4],
             objective_timer: 0.0,
             recruit_timer: 0.0,
-            sudden_death_elapsed: 0.0,
-            manpower_stagnant: 0.0,
-            last_manpower: [f32::MIN; 4],
+            starvation: [0.0; 4],
             pending_setup: None,
             player_faction: Some(Faction::Blue),
             untimed: false,
@@ -423,10 +402,9 @@ impl Game {
         self.tick_conversion();
 
         self.tick_cooldowns(dt);
-        self.tick_village_garrisons(dt);
+        self.tick_training(dt);
         self.tick_ai(dt);
         self.tick_zones(dt);
-        self.tick_production(dt);
         self.tick_building_combat(dt);
 
         // Player movement
