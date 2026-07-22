@@ -440,9 +440,9 @@ impl<'a> Assets<'a> {
             }
         }
 
-        // Tower textures (neutral, blue, red)
+        // Tower textures (neutral, blue, red, yellow, purple)
         let mut tower_textures = Vec::new();
-        for color_folder in &["Black Buildings", "Blue Buildings", "Red Buildings"] {
+        for color_folder in asset_manifest::TOWER_COLOR_FOLDERS {
             let path = format!("{ASSET_BASE}/Buildings/{color_folder}/Tower.png");
             if let Some(tex) = load_png_texture(tc, &path) {
                 tower_textures.push(tex);

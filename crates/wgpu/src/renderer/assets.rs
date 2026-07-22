@@ -42,7 +42,7 @@ pub struct Assets {
     /// Arrow projectile.
     arrow_texture: Option<TextureId>,
 
-    /// Tower color variants: neutral, blue, red.
+    /// Tower color variants: neutral, blue, red, yellow, purple.
     tower_textures: Vec<TextureId>,
     neutral_building_textures: Vec<Option<(TextureId, u32, u32)>>,
     gold_stone_textures: Vec<TextureId>,
@@ -470,7 +470,7 @@ impl Assets {
             }
         }
 
-        // Tower textures (neutral/black, blue, red)
+        // Tower textures (neutral/black, blue, red, yellow, purple)
         for color_folder in asset_manifest::TOWER_COLOR_FOLDERS {
             let path = format!("{ASSET_BASE}/Buildings/{color_folder}/Tower.png");
             if let Some(id) = self.load_png(gpu, &path) {

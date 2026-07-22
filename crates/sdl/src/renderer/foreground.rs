@@ -517,7 +517,9 @@ fn draw_base_building(
         if building.kind == BuildingKind::DefenseTower {
             let color_idx = match owner {
                 Some(Faction::Blue) => 1,
-                Some(Faction::Red) | Some(Faction::Yellow) | Some(Faction::Purple) => 2,
+                Some(Faction::Red) => 2,
+                Some(Faction::Yellow) => 3,
+                Some(Faction::Purple) => 4,
                 Some(Faction::Villager) | None => 0,
             };
             if color_idx >= assets.tower_textures.len() {

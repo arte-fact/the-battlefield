@@ -284,9 +284,8 @@ fn draw_building(
             let color_idx = match owner {
                 Some(Faction::Blue) => 1,
                 Some(Faction::Red) => 2,
-                // Yellow/Purple towers reuse the Red sheet until the
-                // tower atlas grows all four colors.
-                Some(Faction::Yellow) | Some(Faction::Purple) => 2,
+                Some(Faction::Yellow) => 3,
+                Some(Faction::Purple) => 4,
                 Some(Faction::Villager) | None => 0,
             };
             SpriteKey::Tower(color_idx)

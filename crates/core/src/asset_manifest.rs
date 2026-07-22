@@ -114,7 +114,13 @@ pub fn neutral_building_tex_index(kind: BuildingKind, house_variant: u8) -> usiz
 }
 
 /// Tower color folders: 0=neutral, 1=Blue, 2=Red.
-pub const TOWER_COLOR_FOLDERS: &[&str] = &["Black Buildings", "Blue Buildings", "Red Buildings"];
+pub const TOWER_COLOR_FOLDERS: &[&str] = &[
+    "Black Buildings",
+    "Blue Buildings",
+    "Red Buildings",
+    "Yellow Buildings",
+    "Purple Buildings",
+];
 
 // ---------------------------------------------------------------------------
 // Trees
