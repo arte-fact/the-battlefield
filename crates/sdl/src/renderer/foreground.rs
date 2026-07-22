@@ -326,6 +326,12 @@ fn draw_unit(
     elapsed: f64,
 ) {
     let unit = &game.units[idx];
+    // Free-mode pawn phase: the unaligned player is a villager, not a
+    // soldier — wear the neutral pawn skin until enlistment.
+    if unit.is_player && game.player_faction.is_none() {
+        draw_player_pawn(canvas, game, assets, cam, ts, idx, elapsed);
+        return;
+    }
     let key = UnitTexKey {
         faction: unit.faction,
         kind: unit.kind,
@@ -635,6 +641,50 @@ fn draw_sheep(
     );
     let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
     let flip = sheep.facing == Facing::Left;
+    let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
+}
+
+/// The unaligned player, drawn from the neutral pawn sheets: idle when
+/// standing, the empty-handed run while moving.
+fn draw_player_pawn(
+    canvas: &mut Canvas<Window>,
+    game: &Game,
+    assets: &mut Assets,
+    cam: &Camera,
+    ts: f32,
+    idx: usize,
+    elapsed: f64,
+) {
+    let unit = &game.units[idx];
+    const VILLAGER_FOLDER: usize = 2; // PAWN_COLOR_FOLDERS: neutral (Black)
+    let sheet_idx = if unit.current_anim == battlefield_core::unit::UnitAnim::Run {
+        1 // Pawn_Run
+    } else {
+        0 // Pawn_Idle
+    };
+    let tex_idx = VILLAGER_FOLDER * asset_manifest::PAWN_SPECS.len() + sheet_idx;
+    if tex_idx >= assets.pawn_textures.len() {
+        return;
+    }
+    let (ref tex, fw, _fh, fc) = assets.pawn_textures[tex_idx];
+    let sheet = SpriteSheet {
+        frame_width: fw,
+        frame_height: fw,
+        frame_count: fc,
+    };
+    let frame = ((elapsed * 10.0) as u32) % fc.max(1);
+    let (sx, sy, sw, sh) = sheet.frame_src_rect(frame);
+    let draw_size = ts * (fw as f32 / TILE_SIZE);
+    let (screen_x, screen_y) = world_to_screen(unit.x, unit.y, cam);
+    let half = (draw_size / 2.0) as i32;
+    let dst = Rect::new(
+        screen_x - half,
+        screen_y - half,
+        draw_size as u32,
+        draw_size as u32,
+    );
+    let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
+    let flip = unit.facing == Facing::Left;
     let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
 }
 
