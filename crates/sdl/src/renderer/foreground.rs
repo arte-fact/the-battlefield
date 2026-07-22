@@ -57,8 +57,13 @@ pub(super) fn draw_zones(
         let bar_y = top_y + ribbon_h + 2.0 * zoom;
 
         let ribbon_row = match zone.state {
-            ZoneState::Controlled(Faction::Blue) | ZoneState::Capturing(Faction::Blue) => 1,
-            ZoneState::Controlled(Faction::Red) | ZoneState::Capturing(Faction::Red) => 3,
+            ZoneState::Controlled(f) | ZoneState::Capturing(f) => match f {
+                Faction::Blue => 1,
+                Faction::Red => 3,
+                Faction::Yellow => 5,
+                Faction::Purple => 7,
+                Faction::Villager => 9,
+            },
             _ => 9,
         };
 
