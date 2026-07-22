@@ -122,6 +122,13 @@ after a 20 s grace, 1 damage per 3 s) closes the remnant-stall hole the
 probes found; the full 1v1/1v3 matrix ends in 139-351 s with mixed
 winners.
 
+512² verify note: an AI-only 1v3 at HUGE reached the probe's 111-min
+cap as a four-way dynamic equilibrium (war scores 24/8/7/17, all
+armies at cap, villages churning) — the accepted-risk case. All AUTO
+sizes (arcade's whole ladder) end decisively; on big maps the player
+is the tiebreaker. If AI-only closure is ever wanted there, the mercy
+rule slot behind the mode flag is the place — no clock was added.
+
 1. **Economy core**: stock-fed training at all owned buildings
    (capitals included), waves/manpower removed, militia via the same
    rule; probes must still end on the default matrix.
