@@ -1,5 +1,6 @@
 use battlefield_core::asset_manifest;
 use battlefield_core::particle::ParticleKind;
+use battlefield_core::rendering::SpriteKey;
 use battlefield_core::render_util;
 use battlefield_core::unit::{Faction, UnitAnim, UnitKind};
 use sdl2::pixels::PixelFormatEnum;
@@ -74,8 +75,173 @@ pub struct Assets<'a> {
     pub(super) avatar_textures: Vec<Texture<'a>>,
     // Text rendering
     pub text: TextRenderer,
-    // Reusable buffer for Y-sorted drawable collection (avoids per-frame allocation)
-    pub(super) drawable_buf: Vec<(f64, super::Drawable)>,
+}
+
+fn particle_kind_for(sprite_idx: usize) -> Option<ParticleKind> {
+    match sprite_idx {
+        0 => Some(ParticleKind::Dust),
+        2 => Some(ParticleKind::ExplosionLarge),
+        3 => Some(ParticleKind::HealEffect),
+        _ => None,
+    }
+}
+
+impl<'a> Assets<'a> {
+    /// (frame_w, frame_h, frame_count) for a shared-renderer sprite key.
+    pub(super) fn sprite_dims(&self, key: SpriteKey) -> Option<(u32, u32, u32)> {
+        match key {
+            SpriteKey::Unit {
+                faction,
+                kind,
+                anim,
+            } => self
+                .unit_textures
+                .get(&UnitTexKey {
+                    faction,
+                    kind,
+                    anim,
+                })
+                .map(|&(_, fw, fh, fc)| (fw, fh, fc)),
+            SpriteKey::Building(idx) => self
+                .building_textures
+                .get(idx)
+                .and_then(|o| o.as_ref())
+                .map(|&(_, w, h)| (w, h, 1)),
+            SpriteKey::NeutralBuilding(idx) => self
+                .neutral_building_textures
+                .get(idx)
+                .and_then(|o| o.as_ref())
+                .map(|&(_, w, h)| (w, h, 1)),
+            SpriteKey::Tower(idx) => self.tower_textures.get(idx).map(|t| {
+                let q = t.query();
+                (q.width, q.height, 1)
+            }),
+            SpriteKey::Tree(idx) => self.tree_textures.get(idx).map(|&(_, w, h, c)| (w, h, c)),
+            SpriteKey::Rock(idx) => self.rock_textures.get(idx).map(|t| {
+                let q = t.query();
+                (q.width, q.height, 1)
+            }),
+            SpriteKey::Bush(idx) => self.bush_textures.get(idx).map(|&(_, w, h, c)| (w, h, c)),
+            SpriteKey::WaterRock(idx) => self
+                .water_rock_textures
+                .get(idx)
+                .map(|&(_, w, h, c)| (w, h, c)),
+            SpriteKey::GoldStone(idx) => self.gold_stone_textures.get(idx).map(|_| (128, 128, 1)),
+            SpriteKey::Particle(idx) => {
+                let kind = particle_kind_for(idx)?;
+                self.particle_textures.get(&kind).map(|t| {
+                    let q = t.query();
+                    let fw = q.height;
+                    (fw, fw, q.width / fw.max(1))
+                })
+            }
+            SpriteKey::Arrow => self.arrow_texture.as_ref().map(|t| {
+                let q = t.query();
+                (q.width, q.height, 1)
+            }),
+            SpriteKey::Sheep(idx) => self.sheep_textures.get(idx).map(|&(ref t, fc)| {
+                let q = t.query();
+                (q.width / fc.max(1), q.height, fc)
+            }),
+            SpriteKey::Pawn(idx) => self.pawn_textures.get(idx).map(|&(_, w, h, c)| (w, h, c)),
+            SpriteKey::Avatar(idx) => self.avatar_textures.get(idx).map(|t| {
+                let q = t.query();
+                (q.width, q.height, 1)
+            }),
+        }
+    }
+
+    /// Mutable texture handle + dims (SDL alpha modulation needs &mut).
+    pub(super) fn sprite_mut(
+        &mut self,
+        key: SpriteKey,
+    ) -> Option<(&mut Texture<'a>, u32, u32, u32)> {
+        match key {
+            SpriteKey::Unit {
+                faction,
+                kind,
+                anim,
+            } => self
+                .unit_textures
+                .get_mut(&UnitTexKey {
+                    faction,
+                    kind,
+                    anim,
+                })
+                .map(|(t, fw, fh, fc)| {
+                    let (fw, fh, fc) = (*fw, *fh, *fc);
+                    (t, fw, fh, fc)
+                }),
+            SpriteKey::Building(idx) => self
+                .building_textures
+                .get_mut(idx)
+                .and_then(|o| o.as_mut())
+                .map(|(t, w, h)| {
+                    let (w, h) = (*w, *h);
+                    (t, w, h, 1)
+                }),
+            SpriteKey::NeutralBuilding(idx) => self
+                .neutral_building_textures
+                .get_mut(idx)
+                .and_then(|o| o.as_mut())
+                .map(|(t, w, h)| {
+                    let (w, h) = (*w, *h);
+                    (t, w, h, 1)
+                }),
+            SpriteKey::Tower(idx) => self.tower_textures.get_mut(idx).map(|t| {
+                let q = t.query();
+                (t, q.width, q.height, 1)
+            }),
+            SpriteKey::Tree(idx) => self.tree_textures.get_mut(idx).map(|(t, w, h, c)| {
+                let (w, h, c) = (*w, *h, *c);
+                (t, w, h, c)
+            }),
+            SpriteKey::Rock(idx) => self.rock_textures.get_mut(idx).map(|t| {
+                let q = t.query();
+                (t, q.width, q.height, 1)
+            }),
+            SpriteKey::Bush(idx) => self.bush_textures.get_mut(idx).map(|(t, w, h, c)| {
+                let (w, h, c) = (*w, *h, *c);
+                (t, w, h, c)
+            }),
+            SpriteKey::WaterRock(idx) => {
+                self.water_rock_textures.get_mut(idx).map(|(t, w, h, c)| {
+                    let (w, h, c) = (*w, *h, *c);
+                    (t, w, h, c)
+                })
+            }
+            SpriteKey::GoldStone(idx) => self
+                .gold_stone_textures
+                .get_mut(idx)
+                .map(|t| (t, 128, 128, 1)),
+            SpriteKey::Particle(idx) => {
+                let kind = particle_kind_for(idx)?;
+                self.particle_textures.get_mut(&kind).map(|t| {
+                    let q = t.query();
+                    let fw = q.height;
+                    let fc = q.width / fw.max(1);
+                    (t, fw, fw, fc)
+                })
+            }
+            SpriteKey::Arrow => self.arrow_texture.as_mut().map(|t| {
+                let q = t.query();
+                (t, q.width, q.height, 1)
+            }),
+            SpriteKey::Sheep(idx) => self.sheep_textures.get_mut(idx).map(|(t, fc)| {
+                let fc = *fc;
+                let q = t.query();
+                (t, q.width / fc.max(1), q.height, fc)
+            }),
+            SpriteKey::Pawn(idx) => self.pawn_textures.get_mut(idx).map(|(t, w, h, c)| {
+                let (w, h, c) = (*w, *h, *c);
+                (t, w, h, c)
+            }),
+            SpriteKey::Avatar(idx) => self.avatar_textures.get_mut(idx).map(|t| {
+                let q = t.query();
+                (t, q.width, q.height, 1)
+            }),
+        }
+    }
 }
 
 /// Decode a PNG from a byte slice into an SDL2 texture.
@@ -651,7 +817,6 @@ impl<'a> Assets<'a> {
             minimap_key: (0, 0, 0),
             fog_tex_size: (0, 0),
             text: TextRenderer::new(),
-            drawable_buf: Vec::with_capacity(512),
         }
     }
 }

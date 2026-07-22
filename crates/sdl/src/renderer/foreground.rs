@@ -1,14 +1,10 @@
 #![allow(clippy::too_many_arguments)]
 
-use battlefield_core::asset_manifest;
-use battlefield_core::building::BuildingKind;
 use battlefield_core::camera::Camera;
 use battlefield_core::game::Game;
-use battlefield_core::grid::{Decoration, TileKind, TILE_SIZE};
+use battlefield_core::grid::TILE_SIZE;
 use battlefield_core::render_util;
-use battlefield_core::sheep::SHEEP_FRAME_SIZE;
-use battlefield_core::sprite::SpriteSheet;
-use battlefield_core::unit::{Facing, Faction, OrderKind, UnitAnim, UnitKind};
+use battlefield_core::unit::{Faction, OrderKind};
 use battlefield_core::zone::ZoneState;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
@@ -17,7 +13,9 @@ use sdl2::video::{Window, WindowContext};
 
 use super::assets::Assets;
 use super::draw_helpers::{draw_bar_3slice, draw_small_ribbon, fill_circle, stroke_circle};
-use super::{world_to_screen, Drawable, UnitTexKey};
+use battlefield_core::rendering::{DrawBackend, SpriteInfo, SpriteKey};
+
+use super::world_to_screen;
 
 pub(super) fn draw_zones(
     canvas: &mut Canvas<Window>,
@@ -182,6 +180,89 @@ fn draw_filled_circle(canvas: &mut Canvas<Window>, cx: i32, cy: i32, radius: i32
     }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// SdlBackend — implements core's DrawBackend; the Y-sorted foreground
+// scene (units, buildings, pawns, particles, projectiles) is drawn by
+// the shared renderer in core/rendering/foreground.rs.
+// ───────────────────────────────────────────────────────────────────────────
+
+pub(super) struct SdlBackend<'r, 'a> {
+    pub canvas: &'r mut Canvas<Window>,
+    pub assets: &'r mut Assets<'a>,
+    pub cam: &'r Camera,
+    pub ts: f32,
+}
+
+impl DrawBackend for SdlBackend<'_, '_> {
+    fn draw_sprite(
+        &mut self,
+        key: SpriteKey,
+        frame: u32,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        flip: bool,
+        alpha: f64,
+    ) {
+        let zoom = self.cam.zoom;
+        let (sx, sy) = world_to_screen(x as f32, y as f32, self.cam);
+        let dw = (w as f32 * zoom) as u32;
+        let dh = (h as f32 * zoom) as u32;
+        if dw == 0 || dh == 0 {
+            return;
+        }
+        let Some((tex, fw, fh, _fc)) = self.assets.sprite_mut(key) else {
+            return;
+        };
+        let src = Rect::new((frame * fw) as i32, 0, fw, fh);
+        let dst = Rect::new(sx, sy, dw, dh);
+        let a = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        super::safe_set_alpha(tex, a);
+        let _ = self.canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
+        super::safe_set_alpha(tex, 255);
+    }
+
+    fn draw_rotated(
+        &mut self,
+        key: SpriteKey,
+        center_x: f64,
+        center_y: f64,
+        size: f64,
+        angle: f64,
+    ) {
+        let zoom = self.cam.zoom;
+        let s = (size as f32 * zoom) as u32;
+        if s == 0 {
+            return;
+        }
+        let (sx, sy) = world_to_screen(
+            (center_x - size * 0.5) as f32,
+            (center_y - size * 0.5) as f32,
+            self.cam,
+        );
+        let Some((tex, _fw, _fh, _fc)) = self.assets.sprite_mut(key) else {
+            return;
+        };
+        let dst = Rect::new(sx, sy, s, s);
+        let _ = self
+            .canvas
+            .copy_ex(tex, None, dst, angle.to_degrees(), None, false, false);
+    }
+
+    fn sprite_info(&self, key: SpriteKey) -> Option<SpriteInfo> {
+        self.assets.sprite_dims(key).map(|(w, h, c)| SpriteInfo {
+            frame_w: w,
+            frame_h: h,
+            frame_count: c,
+        })
+    }
+
+    fn draw_elevated_tile(&mut self, game: &Game, gx: u32, gy: u32) {
+        super::terrain::draw_elevated_tile(self.canvas, game, self.assets, self.cam, self.ts, gx, gy);
+    }
+}
+
 pub(super) fn draw_foreground(
     canvas: &mut Canvas<Window>,
     game: &Game,
@@ -194,570 +275,21 @@ pub(super) fn draw_foreground(
     max_gy: u32,
     elapsed: f64,
 ) {
-    let ts_f64 = TILE_SIZE as f64;
-    let player_pos = game.player_unit().map(|u| (u.x as f64, u.y as f64));
-
-    // Reuse persistent buffer to avoid per-frame allocation
-    assets.drawable_buf.clear();
-
-    // Units
-    for (i, u) in game.units.iter().enumerate() {
-        if !u.alive && u.death_fade <= 0.0 {
-            continue;
-        }
-        let (gx, gy) = u.grid_cell();
-        if !render_util::is_visible_to_player(u.faction, gx, gy, &game.visible, game.grid.width) {
-            continue;
-        }
-        assets
-            .drawable_buf
-            .push((u.y as f64 + ts_f64 * 0.5, Drawable::Unit(i)));
-    }
-
-    // Trees, water rocks, and elevated tiles
-    let tree_max_gy = (max_gy + 4).min(game.grid.height);
-    for gy in min_gy..tree_max_gy {
-        for gx in min_gx..max_gx {
-            let tile = game.grid.get(gx, gy);
-            let foot_y = ((gy + 1) as f64) * ts_f64;
-            if tile == TileKind::Forest && !assets.tree_textures.is_empty() {
-                assets.drawable_buf.push((foot_y, Drawable::Tree(gx, gy)));
-            }
-            if game.grid.decoration(gx, gy) == Some(Decoration::WaterRock)
-                && !assets.water_rock_textures.is_empty()
-            {
-                assets
-                    .drawable_buf
-                    .push((foot_y, Drawable::WaterRock(gx, gy)));
-            }
-            if matches!(game.grid.decoration(gx, gy), Some(Decoration::GoldStone(_)))
-                && !assets.gold_stone_textures.is_empty()
-            {
-                assets
-                    .drawable_buf
-                    .push((foot_y, Drawable::GoldStone(gx, gy)));
-            }
-            if game.grid.elevation(gx, gy) >= 2 {
-                // Sort slightly before trees/units at the same row so the
-                // elevated surface draws behind entities standing on top of it.
-                assets
-                    .drawable_buf
-                    .push((foot_y - 0.5, Drawable::ElevatedTile(gx, gy)));
-            }
-        }
-    }
-
-    // Production buildings
-    for (i, b) in game.buildings.iter().enumerate() {
-        let foot_y = b.grid_y as f64 * ts_f64;
-        assets
-            .drawable_buf
-            .push((foot_y, Drawable::BaseBuilding(i)));
-    }
-
-    // Sheep
-    for (i, s) in game.sheep.iter().enumerate() {
-        assets
-            .drawable_buf
-            .push((s.y as f64 + ts_f64 * 0.5, Drawable::Sheep(i)));
-    }
-
-    // Pawns
-    for (i, p) in game.pawns.iter().enumerate() {
-        assets
-            .drawable_buf
-            .push((p.y as f64 + ts_f64 * 0.5, Drawable::Pawn(i)));
-    }
-
-    // Particles
-    for (i, p) in game.particles.iter().enumerate() {
-        if !p.finished {
-            assets
-                .drawable_buf
-                .push((p.world_y as f64 + ts_f64 * 0.5, Drawable::Particle(i)));
-        }
-    }
-
-    assets
-        .drawable_buf
-        .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Take the buffer out to avoid borrow conflict (draw functions need &mut assets)
-    let drawables = std::mem::take(&mut assets.drawable_buf);
-
-    for (_, drawable) in &drawables {
-        match drawable {
-            Drawable::Unit(idx) => {
-                draw_unit(canvas, game, assets, cam, ts, *idx, elapsed);
-            }
-            Drawable::Tree(gx, gy) => {
-                draw_tree(canvas, assets, cam, ts, *gx, *gy, elapsed, player_pos);
-            }
-            Drawable::WaterRock(gx, gy) => {
-                draw_water_rock(canvas, assets, cam, ts, *gx, *gy, elapsed);
-            }
-            Drawable::GoldStone(gx, gy) => {
-                draw_gold_stone(canvas, game, assets, cam, *gx, *gy);
-            }
-            Drawable::BaseBuilding(idx) => {
-                draw_base_building(canvas, game, assets, cam, ts, *idx, player_pos);
-            }
-            Drawable::Particle(idx) => {
-                draw_particle(canvas, game, assets, cam, ts, *idx);
-            }
-            Drawable::Sheep(idx) => {
-                draw_sheep(canvas, game, assets, cam, ts, *idx);
-            }
-            Drawable::Pawn(idx) => {
-                draw_pawn(canvas, game, assets, cam, ts, *idx);
-            }
-            Drawable::ElevatedTile(gx, gy) => {
-                super::terrain::draw_elevated_tile(canvas, game, assets, cam, ts, *gx, *gy);
-            }
-        }
-    }
-
-    // Return the buffer for reuse next frame
-    assets.drawable_buf = drawables;
-}
-
-fn draw_unit(
-    canvas: &mut Canvas<Window>,
-    game: &Game,
-    assets: &mut Assets,
-    cam: &Camera,
-    ts: f32,
-    idx: usize,
-    elapsed: f64,
-) {
-    let unit = &game.units[idx];
-    // Free-mode pawn phase: the unaligned player is a villager, not a
-    // soldier — wear the neutral pawn skin until enlistment.
-    if unit.is_player && game.player_faction.is_none() {
-        draw_player_pawn(canvas, game, assets, cam, ts, idx, elapsed);
-        return;
-    }
-    let key = UnitTexKey {
-        faction: unit.faction,
-        kind: unit.kind,
-        anim: unit.current_anim,
+    let mut backend = SdlBackend {
+        canvas,
+        assets,
+        cam,
+        ts,
     };
-
-    if let Some((tex, fw, _fh, _frames)) = assets.unit_textures.get_mut(&key) {
-        let fw_val = *fw;
-        let frame_count = unit.animation.frame_count;
-        let sheet = SpriteSheet {
-            frame_width: fw_val,
-            frame_height: fw_val,
-            frame_count,
-        };
-
-        let anim_frame = if unit.kind == UnitKind::Archer && unit.current_anim == UnitAnim::Idle {
-            let (gx, gy) = unit.grid_cell();
-            render_util::compute_wave_frame(elapsed, gx, gy, frame_count, 0.15)
-        } else {
-            unit.animation.current_frame
-        };
-
-        let (sx, sy, sw, sh) = sheet.frame_src_rect(anim_frame);
-        let draw_size = ts * (fw_val as f32 / TILE_SIZE);
-        let (screen_x, screen_y) = world_to_screen(unit.x, unit.y, cam);
-        let half = (draw_size / 2.0) as i32;
-
-        let dst = Rect::new(
-            screen_x - half,
-            screen_y - half,
-            draw_size as u32,
-            draw_size as u32,
-        );
-        let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
-
-        let opacity = render_util::unit_opacity(unit.alive, unit.death_fade, unit.hit_flash);
-        let alpha = (opacity * 255.0) as u8;
-        super::safe_set_alpha(tex, alpha);
-
-        let flip = unit.facing == Facing::Left;
-        let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
-
-        super::safe_set_alpha(tex, 255);
-    } else {
-        let (screen_x, screen_y) = world_to_screen(unit.x, unit.y, cam);
-        let (fr, fg, fb) = unit.faction.rgb();
-        let color = Color::RGB(fr, fg, fb);
-        canvas.set_draw_color(color);
-        let size = (ts * 0.6) as u32;
-        let half = size as i32 / 2;
-        let _ = canvas.fill_rect(Rect::new(screen_x - half, screen_y - half, size, size));
-    }
-}
-
-fn draw_tree(
-    canvas: &mut Canvas<Window>,
-    assets: &mut Assets,
-    cam: &Camera,
-    _ts: f32,
-    gx: u32,
-    gy: u32,
-    elapsed: f64,
-    player_pos: Option<(f64, f64)>,
-) {
-    let variant_idx = render_util::variant_index(gx, gy, assets.tree_textures.len(), 31, 17);
-    let (ref mut tex, fw, fh, frame_count) = assets.tree_textures[variant_idx];
-    let ts_f64 = TILE_SIZE as f64;
-
-    let frame = render_util::compute_wave_frame(elapsed, gx, gy, frame_count, 0.15);
-    let sx = frame * fw;
-
-    let draw_w = cam.zoom * TILE_SIZE * 3.0;
-    let draw_h = draw_w * (fh as f32 / fw as f32);
-    let wx = gx as f32 * TILE_SIZE + TILE_SIZE * 0.5;
-    let wy = gy as f32 * TILE_SIZE + TILE_SIZE;
-    let (screen_cx, screen_by) = world_to_screen(wx, wy, cam);
-    let dst_x = screen_cx - (draw_w * 0.5) as i32;
-    let dst_y = screen_by - draw_h as i32;
-    let dst = Rect::new(dst_x, dst_y, draw_w as u32, draw_h as u32);
-    let src = Rect::new(sx as i32, 0, fw, fh);
-
-    let tree_cx = gx as f64 * ts_f64 + ts_f64 * 0.5;
-    let tree_cy = gy as f64 * ts_f64 - ts_f64 * 1.0;
-    let alpha_f = render_util::tree_alpha(tree_cx, tree_cy, player_pos, ts_f64);
-    let alpha = (alpha_f * 255.0) as u8;
-    super::safe_set_alpha(tex, alpha);
-
-    let flip_h = render_util::tile_flip(gx, gy);
-    let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip_h, false);
-
-    super::safe_set_alpha(tex, 255);
-}
-
-fn draw_water_rock(
-    canvas: &mut Canvas<Window>,
-    assets: &mut Assets,
-    cam: &Camera,
-    ts: f32,
-    gx: u32,
-    gy: u32,
-    elapsed: f64,
-) {
-    let variant_idx = render_util::variant_index(gx, gy, assets.water_rock_textures.len(), 37, 19);
-    let (ref tex, fw, fh, frame_count) = assets.water_rock_textures[variant_idx];
-
-    let frame = render_util::compute_wave_frame(elapsed, gx, gy, frame_count, 0.2);
-    let sx = frame * fw;
-
-    let tsi = ts.ceil() as u32;
-    let wx = gx as f32 * TILE_SIZE;
-    let wy = gy as f32 * TILE_SIZE;
-    let (screen_x, screen_y) = world_to_screen(wx, wy, cam);
-
-    let src = Rect::new(sx as i32, 0, fw, fh);
-    let dst = Rect::new(screen_x, screen_y, tsi, tsi);
-    let flip_h = render_util::tile_flip(gx, gy);
-    let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip_h, false);
-}
-
-fn draw_gold_stone(
-    canvas: &mut Canvas<Window>,
-    game: &Game,
-    assets: &mut Assets,
-    cam: &Camera,
-    gx: u32,
-    gy: u32,
-) {
-    let Some(Decoration::GoldStone(variant)) = game.grid.decoration(gx, gy) else {
-        return;
-    };
-    let Some(tex) = assets.gold_stone_textures.get(variant as usize) else {
-        return;
-    };
-    let ts = TILE_SIZE * cam.zoom;
-    let size = 128.0 * cam.zoom;
-    let wx = gx as f32 * TILE_SIZE + TILE_SIZE / 2.0;
-    let wy = (gy + 1) as f32 * TILE_SIZE;
-    let (sx, sy) = world_to_screen(wx, wy, cam);
-    let dst = Rect::new(
-        (sx as f32 - size / 2.0) as i32,
-        (sy as f32 - size + ts * 0.0) as i32,
-        size as u32,
-        size as u32,
+    battlefield_core::rendering::foreground::draw_foreground(
+        &mut backend,
+        game,
+        (min_gx, min_gy, max_gx, max_gy),
+        elapsed,
+        |u| u.alive || u.death_fade > 0.0,
     );
-    let _ = canvas.copy(tex, None, dst);
 }
 
-fn draw_base_building(
-    canvas: &mut Canvas<Window>,
-    game: &Game,
-    assets: &mut Assets,
-    cam: &Camera,
-    _ts: f32,
-    idx: usize,
-    player_pos: Option<(f64, f64)>,
-) {
-    let building = &game.buildings[idx];
-    let (sw, sh) = building.kind.sprite_size();
-    let wx = building.grid_x as f32 * TILE_SIZE + TILE_SIZE * 0.5;
-    let wy = building.grid_y as f32 * TILE_SIZE + TILE_SIZE;
-    let (scx, sby) = world_to_screen(wx, wy, cam);
-    let draw_w = sw as f32 * cam.zoom;
-    let draw_h = sh as f32 * cam.zoom;
-    let dst = Rect::new(
-        scx - (draw_w * 0.5) as i32,
-        sby - draw_h as i32,
-        draw_w as u32,
-        draw_h as u32,
-    );
-
-    // Fade when player is behind the building (sprite covers the player)
-    let ts_f64 = TILE_SIZE as f64;
-    let bldg_cx = wx as f64;
-    let bldg_cy = wy as f64 - sh as f64 * 0.5;
-    let proximity_alpha = render_util::tree_alpha(bldg_cx, bldg_cy, player_pos, ts_f64);
-
-    // Zone-linked buildings recolor with zone ownership.
-    if let Some(zid) = building.zone_id {
-        let zone = &game.zone_manager.zones[zid as usize];
-        let owner = match zone.state {
-            ZoneState::Controlled(f) | ZoneState::Capturing(f) => Some(f),
-            _ => None,
-        };
-        let zone_alpha = match zone.state {
-            ZoneState::Capturing(_) => (zone.progress as f64 * 0.5 + 0.5).clamp(0.5, 1.0),
-            _ => 1.0,
-        };
-        let alpha = (proximity_alpha * zone_alpha * 255.0) as u8;
-        if building.kind == BuildingKind::DefenseTower {
-            let color_idx = match owner {
-                Some(Faction::Blue) => 1,
-                Some(Faction::Red) => 2,
-                Some(Faction::Yellow) => 3,
-                Some(Faction::Purple) => 4,
-                Some(Faction::Villager) | None => 0,
-            };
-            if color_idx >= assets.tower_textures.len() {
-                return;
-            }
-            let tex = &mut assets.tower_textures[color_idx];
-            super::safe_set_alpha(tex, alpha);
-            let _ = canvas.copy(tex, Rect::new(0, 0, sw, sh), dst);
-            super::safe_set_alpha(tex, 255);
-        } else if let Some(f) = owner {
-            let tex_idx =
-                asset_manifest::building_tex_index(building.kind, building.house_variant, f);
-            if let Some(Some((ref mut tex, _, _))) = assets.building_textures.get_mut(tex_idx) {
-                super::safe_set_alpha(tex, alpha);
-                let _ = canvas.copy(tex, None, dst);
-                super::safe_set_alpha(tex, 255);
-            }
-        } else {
-            let tex_idx =
-                asset_manifest::neutral_building_tex_index(building.kind, building.house_variant);
-            if let Some(Some((ref mut tex, _, _))) =
-                assets.neutral_building_textures.get_mut(tex_idx)
-            {
-                super::safe_set_alpha(tex, alpha);
-                let _ = canvas.copy(tex, None, dst);
-                super::safe_set_alpha(tex, 255);
-            }
-        }
-        return;
-    }
-
-    let tex_idx =
-        asset_manifest::building_tex_index(building.kind, building.house_variant, building.faction);
-    if let Some(Some((ref mut tex, _sw, _sh))) = assets.building_textures.get_mut(tex_idx) {
-        let alpha = (proximity_alpha * 255.0) as u8;
-        super::safe_set_alpha(tex, alpha);
-        let _ = canvas.copy(tex, None, dst);
-        super::safe_set_alpha(tex, 255);
-    }
-}
-
-fn draw_particle(
-    canvas: &mut Canvas<Window>,
-    game: &Game,
-    assets: &mut Assets,
-    cam: &Camera,
-    ts: f32,
-    idx: usize,
-) {
-    let p = &game.particles[idx];
-    if p.finished {
-        return;
-    }
-    if let Some(tex) = assets.particle_textures.get_mut(&p.kind) {
-        let is_heal = p.kind == battlefield_core::particle::ParticleKind::HealEffect;
-        if is_heal {
-            super::safe_set_alpha(tex, 153); // ~60% opacity
-        }
-        let fs = p.kind.frame_size();
-        let sheet = SpriteSheet {
-            frame_width: fs,
-            frame_height: fs,
-            frame_count: p.kind.frame_count(),
-        };
-        let (sx, sy, sw, sh) = sheet.frame_src_rect(p.animation.current_frame);
-        let draw_size = ts * (fs as f32 / TILE_SIZE);
-        let (screen_x, screen_y) = world_to_screen(p.world_x, p.world_y, cam);
-        let half = (draw_size / 2.0) as i32;
-
-        let dst = Rect::new(
-            screen_x - half,
-            screen_y - half,
-            draw_size as u32,
-            draw_size as u32,
-        );
-        let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
-        let _ = canvas.copy(tex, src, dst);
-        if is_heal {
-            super::safe_set_alpha(tex, 255);
-        }
-    }
-}
-
-fn draw_sheep(
-    canvas: &mut Canvas<Window>,
-    game: &Game,
-    assets: &mut Assets,
-    cam: &Camera,
-    ts: f32,
-    idx: usize,
-) {
-    let sheep = &game.sheep[idx];
-    let sprite_idx = sheep.sprite_index();
-    if sprite_idx >= assets.sheep_textures.len() {
-        return;
-    }
-    let (ref mut tex, _frame_count) = assets.sheep_textures[sprite_idx];
-    let sheet = SpriteSheet {
-        frame_width: SHEEP_FRAME_SIZE,
-        frame_height: SHEEP_FRAME_SIZE,
-        frame_count: sheep.anim_frame_count(),
-    };
-    let (sx, sy, sw, sh) = sheet.frame_src_rect(sheep.animation.current_frame);
-    let draw_size = ts * (SHEEP_FRAME_SIZE as f32 / TILE_SIZE);
-    let (screen_x, screen_y) = world_to_screen(sheep.x, sheep.y, cam);
-    let half = (draw_size / 2.0) as i32;
-
-    let dst = Rect::new(
-        screen_x - half,
-        screen_y - half,
-        draw_size as u32,
-        draw_size as u32,
-    );
-    let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
-    let flip = sheep.facing == Facing::Left;
-    let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
-}
-
-/// The unaligned player, drawn from the neutral pawn sheets: idle when
-/// standing, the empty-handed run while moving.
-fn draw_player_pawn(
-    canvas: &mut Canvas<Window>,
-    game: &Game,
-    assets: &mut Assets,
-    cam: &Camera,
-    ts: f32,
-    idx: usize,
-    elapsed: f64,
-) {
-    let unit = &game.units[idx];
-    const VILLAGER_FOLDER: usize = 2; // PAWN_COLOR_FOLDERS: neutral (Black)
-    let sheet_idx = if unit.current_anim == battlefield_core::unit::UnitAnim::Run {
-        1 // Pawn_Run
-    } else {
-        0 // Pawn_Idle
-    };
-    let tex_idx = VILLAGER_FOLDER * asset_manifest::PAWN_SPECS.len() + sheet_idx;
-    if tex_idx >= assets.pawn_textures.len() {
-        return;
-    }
-    let (ref tex, fw, _fh, fc) = assets.pawn_textures[tex_idx];
-    let sheet = SpriteSheet {
-        frame_width: fw,
-        frame_height: fw,
-        frame_count: fc,
-    };
-    let frame = ((elapsed * 10.0) as u32) % fc.max(1);
-    let (sx, sy, sw, sh) = sheet.frame_src_rect(frame);
-    let draw_size = ts * (fw as f32 / TILE_SIZE);
-    let (screen_x, screen_y) = world_to_screen(unit.x, unit.y, cam);
-    let half = (draw_size / 2.0) as i32;
-    let dst = Rect::new(
-        screen_x - half,
-        screen_y - half,
-        draw_size as u32,
-        draw_size as u32,
-    );
-    let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
-    let flip = unit.facing == Facing::Left;
-    let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
-}
-
-fn draw_pawn(
-    canvas: &mut Canvas<Window>,
-    game: &Game,
-    assets: &mut Assets,
-    cam: &Camera,
-    ts: f32,
-    idx: usize,
-) {
-    let pawn = &game.pawns[idx];
-    let color = battlefield_core::rendering::pawn_color_index(pawn, &game.zone_manager);
-    let tex_idx = color * asset_manifest::PAWN_SPECS.len() + pawn.sprite_index();
-    if tex_idx >= assets.pawn_textures.len() {
-        return;
-    }
-    let (ref tex, fw, _fh, _fc) = assets.pawn_textures[tex_idx];
-    let sheet = SpriteSheet {
-        frame_width: fw,
-        frame_height: fw,
-        frame_count: pawn.anim_frame_count(),
-    };
-    let (sx, sy, sw, sh) = sheet.frame_src_rect(pawn.animation.current_frame);
-    let draw_size = ts * (fw as f32 / TILE_SIZE);
-    let (screen_x, screen_y) = world_to_screen(pawn.x, pawn.y, cam);
-    let half = (draw_size / 2.0) as i32;
-    let dst = Rect::new(
-        screen_x - half,
-        screen_y - half,
-        draw_size as u32,
-        draw_size as u32,
-    );
-    let src = Rect::new(sx as i32, sy as i32, sw as u32, sh as u32);
-    let flip = pawn.facing == Facing::Left;
-    let _ = canvas.copy_ex(tex, src, dst, 0.0, None, flip, false);
-}
-
-pub(super) fn draw_projectiles(
-    canvas: &mut Canvas<Window>,
-    game: &Game,
-    assets: &mut Assets,
-    cam: &Camera,
-) {
-    let zoom = cam.zoom;
-    for proj in &game.projectiles {
-        if proj.finished {
-            continue;
-        }
-        let (sx, sy) = world_to_screen(proj.current_x, proj.current_y, cam);
-
-        if let Some(ref tex) = assets.arrow_texture {
-            let arrow_size = (64.0 * zoom) as u32;
-            let half = arrow_size as i32 / 2;
-            let dst = Rect::new(sx - half, sy - half, arrow_size, arrow_size);
-            let angle_deg = proj.angle.to_degrees() as f64;
-            let _ = canvas.copy_ex(tex, None, dst, angle_deg, None, false, false);
-        } else {
-            let w = (8.0 * zoom) as u32;
-            let h = (4.0 * zoom) as u32;
-            canvas.set_draw_color(Color::RGB(200, 180, 120));
-            let _ = canvas.fill_rect(Rect::new(sx - w as i32 / 2, sy - h as i32 / 2, w, h));
-        }
-    }
-}
-
-/// Merged pass for HP bars, unit markers, and order labels.
-/// Single iteration over units instead of 3 separate passes.
 pub(super) fn draw_unit_overlays(
     canvas: &mut Canvas<Window>,
     tc: &TextureCreator<WindowContext>,

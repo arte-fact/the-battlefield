@@ -78,18 +78,6 @@ struct UnitTexKey {
     anim: UnitAnim,
 }
 
-enum Drawable {
-    Unit(usize),
-    Tree(u32, u32),
-    WaterRock(u32, u32),
-    GoldStone(u32, u32),
-    BaseBuilding(usize),
-    Particle(usize),
-    Sheep(usize),
-    Pawn(usize),
-    ElevatedTile(u32, u32),
-}
-
 // ───────────────────────────────────────────────────────────────────────────
 // Coordinate helpers
 // ───────────────────────────────────────────────────────────────────────────
@@ -172,7 +160,6 @@ pub fn render_frame<'a>(
     );
 
     // 10. Projectiles (fly above everything)
-    foreground::draw_projectiles(canvas, game, assets, cam);
 
     // 11. HP bars, unit markers, and order labels (merged into single pass)
     foreground::draw_unit_overlays(canvas, tc, assets, game, cam, dpi_scale);
