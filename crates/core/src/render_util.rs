@@ -92,12 +92,15 @@ pub fn unit_opacity(alive: bool, death_fade: f32, hit_flash: f32) -> f64 {
 /// Check whether a non-Blue unit at `(gx, gy)` should be drawn (FOV check).
 pub fn is_visible_to_player(
     faction: Faction,
+    player_faction: Option<Faction>,
     gx: u32,
     gy: u32,
     visible: &[bool],
     grid_w: u32,
 ) -> bool {
-    if faction == Faction::Blue {
+    // Your own army is always visible; everyone else hides in the fog.
+    // An unaligned villager (free-mode pawn) has no army to see through.
+    if Some(faction) == player_faction {
         return true;
     }
     let idx = (gy * grid_w + gx) as usize;
@@ -939,5 +942,35 @@ mod ui_assembly_tests {
         assert_eq!(base.dw, 80.0);
         assert!(icon_dn.dy > icon_up.dy);
         assert_eq!(icon_up.sw, 64.0);
+    }
+
+    #[test]
+    fn fog_visibility_keys_on_player_faction() {
+        let visible = vec![false, true];
+        assert!(is_visible_to_player(
+            Faction::Red,
+            Some(Faction::Red),
+            0,
+            0,
+            &visible,
+            2
+        ));
+        assert!(!is_visible_to_player(
+            Faction::Blue,
+            Some(Faction::Red),
+            0,
+            0,
+            &visible,
+            2
+        ));
+        assert!(is_visible_to_player(
+            Faction::Blue,
+            Some(Faction::Red),
+            1,
+            0,
+            &visible,
+            2
+        ));
+        assert!(!is_visible_to_player(Faction::Blue, None, 0, 0, &visible, 2));
     }
 }

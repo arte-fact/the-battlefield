@@ -39,7 +39,14 @@ pub fn draw_foreground(
             continue;
         }
         let (gx, gy) = u.grid_cell();
-        if !render_util::is_visible_to_player(u.faction, gx, gy, &game.visible, game.grid.width) {
+        if !render_util::is_visible_to_player(
+            u.faction,
+            game.player_faction,
+            gx,
+            gy,
+            &game.visible,
+            game.grid.width,
+        ) {
             continue;
         }
         drawables.push((u.y as f64 + ts * 0.5, Drawable::Unit(i)));

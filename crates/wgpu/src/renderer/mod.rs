@@ -927,7 +927,14 @@ fn draw_unit_overlays(
             continue;
         }
         let (gx, gy) = u.grid_cell();
-        if !render_util::is_visible_to_player(u.faction, gx, gy, &game.visible, game.grid.width) {
+        if !render_util::is_visible_to_player(
+            u.faction,
+            game.player_faction,
+            gx,
+            gy,
+            &game.visible,
+            game.grid.width,
+        ) {
             continue;
         }
 
