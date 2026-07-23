@@ -244,6 +244,13 @@ pub const AVATAR_FILES: &[&str] = &[
 ];
 
 /// Map UnitKind to avatar index.
+/// Resource icon paths, indexed by `ResourceKind::idx()` (meat, gold, wood).
+pub const RESOURCE_ICON_FILES: [&str; 3] = [
+    "Terrain/Resources/Meat/Meat Resource/Meat Resource.png",
+    "Terrain/Resources/Gold/Gold Resource/Gold_Resource.png",
+    "Terrain/Resources/Wood/Wood Resource/Wood Resource.png",
+];
+
 pub fn avatar_index(kind: UnitKind) -> usize {
     match kind {
         UnitKind::Warrior => 0,

@@ -166,6 +166,7 @@ impl Game {
                 y: u.y,
                 value: actual,
                 remaining: super::FLOATING_TEXT_DURATION,
+                kind: super::FloatKind::Authority,
             });
         }
     }
@@ -185,6 +186,7 @@ impl Game {
             y,
             value: actual,
             remaining: super::FLOATING_TEXT_DURATION,
+            kind: super::FloatKind::Authority,
         });
     }
 

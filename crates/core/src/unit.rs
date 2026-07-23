@@ -43,6 +43,12 @@ impl Faction {
         self.army_idx().expect("villagers have no army index")
     }
 
+    /// Index into the typed resource pools: armies 0-3, the shared
+    /// Villager network economy 4.
+    pub fn pool_idx(self) -> usize {
+        self.army_idx().unwrap_or(4)
+    }
+
     pub fn enemy(self) -> Faction {
         match self {
             Faction::Blue => Faction::Red,
@@ -94,6 +100,16 @@ pub enum UnitKind {
 }
 
 impl UnitKind {
+    /// What arming this unit costs at conversion (recruits cost meat
+    /// at the house): steel and scripture take gold, bows and lances
+    /// take wood.
+    pub fn conversion_cost(self) -> crate::pawn::ResourceKind {
+        match self {
+            UnitKind::Warrior | UnitKind::Monk => crate::pawn::ResourceKind::Gold,
+            UnitKind::Archer | UnitKind::Lancer => crate::pawn::ResourceKind::Wood,
+        }
+    }
+
     pub fn base_stats(self) -> UnitStats {
         match self {
             UnitKind::Warrior => UnitStats {

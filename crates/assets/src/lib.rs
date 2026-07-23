@@ -9,6 +9,15 @@ pub fn get(path: &str) -> Option<&'static [u8]> {
         // Font
         "assets/MedievalSharp.ttf" => Some(embed!("assets/MedievalSharp.ttf")),
         "assets/Tilemap_road.png" => Some(embed!("assets/Tilemap_road.png")),
+        "assets/Tiny Swords (Free Pack)/Terrain/Resources/Meat/Meat Resource/Meat Resource.png" => Some(embed!(
+            "assets/Tiny Swords (Free Pack)/Terrain/Resources/Meat/Meat Resource/Meat Resource.png"
+        )),
+        "assets/Tiny Swords (Free Pack)/Terrain/Resources/Gold/Gold Resource/Gold_Resource.png" => Some(embed!(
+            "assets/Tiny Swords (Free Pack)/Terrain/Resources/Gold/Gold Resource/Gold_Resource.png"
+        )),
+        "assets/Tiny Swords (Free Pack)/Terrain/Resources/Wood/Wood Resource/Wood Resource.png" => Some(embed!(
+            "assets/Tiny Swords (Free Pack)/Terrain/Resources/Wood/Wood Resource/Wood Resource.png"
+        )),
 
         // ── Blue Units ──────────────────────────────────────────────
         // Warrior

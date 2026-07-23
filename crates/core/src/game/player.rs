@@ -3,6 +3,22 @@ use super::*;
 /// Half-angle of the player's attack cone (90° = PI/2 radians, 180° total arc).
 pub const ATTACK_CONE_HALF_ANGLE: f32 = std::f32::consts::FRAC_PI_2;
 
+/// Overhead chip on a production building.
+pub struct ProductionPlate {
+    pub x: f32,
+    pub y: f32,
+    pub kind: PlateKind,
+}
+
+pub enum PlateKind {
+    /// Recruits are queued and this resource chest is empty.
+    Stalled(crate::pawn::ResourceKind),
+    /// The unaligned player may enlist here as this unit.
+    Enlist { unit: UnitKind, owner: Faction },
+    /// Neutral building: nothing to join.
+    NoLord,
+}
+
 impl Game {
     pub fn player_unit(&self) -> Option<&Unit> {
         self.units.iter().find(|u| u.is_player && u.alive)
@@ -14,6 +30,62 @@ impl Game {
 
     pub fn is_player_alive(&self) -> bool {
         self.player_unit().is_some()
+    }
+
+    /// What a production building's overhead plate should show, if
+    /// anything: a stalled queue's missing resource, or the enlistment
+    /// offer while the unaligned player stands near.
+    pub fn production_plates(&self) -> Vec<ProductionPlate> {
+        let mut out = Vec::new();
+        let player = self.player_unit().map(|p| (p.x, p.y));
+        let enlist_range = crate::grid::TILE_SIZE * 5.0;
+        for (bi, b) in self.buildings.iter().enumerate() {
+            let Some(kind) = b.produces else { continue };
+            let (wx, wy) = grid::grid_to_world(b.grid_x, b.grid_y);
+
+            // Enlistment offer for the unaligned player.
+            if self.player_faction.is_none() {
+                if let Some((px, py)) = player {
+                    let d2 = (px - wx).powi(2) + (py - wy).powi(2);
+                    if d2 <= enlist_range * enlist_range {
+                        let owner = match b.zone_id {
+                            Some(z) => self
+                                .zone_manager
+                                .zones
+                                .get(z as usize)
+                                .and_then(|zone| zone.effective_faction()),
+                            None => Some(b.faction),
+                        };
+                        out.push(ProductionPlate {
+                            x: wx,
+                            y: wy,
+                            kind: match owner {
+                                Some(f) if f != Faction::Villager => {
+                                    PlateKind::Enlist { unit: kind, owner: f }
+                                }
+                                _ => PlateKind::NoLord,
+                            },
+                        });
+                        continue;
+                    }
+                }
+            }
+
+            // A queue waiting on an empty chest: show what's missing.
+            let stalled = self.pawns.iter().any(|p| {
+                p.recruit
+                    .as_ref()
+                    .is_some_and(|t| t.building == bi && t.arrived && t.wait > 0.5)
+            });
+            if stalled {
+                out.push(ProductionPlate {
+                    x: wx,
+                    y: wy,
+                    kind: PlateKind::Stalled(kind.conversion_cost()),
+                });
+            }
+        }
+        out
     }
 
     /// Free-mode enlistment: an unaligned player standing at an
@@ -38,6 +110,9 @@ impl Game {
             if d_sq <= range * range && best.map(|(_, bd)| d_sq < bd).unwrap_or(true) {
                 best = Some((i, d_sq));
             }
+        }
+        if best.is_some() {
+            self.seen_enlist_plate = true;
         }
         let Some((bi, _)) = best else { return };
         let b = &self.buildings[bi];

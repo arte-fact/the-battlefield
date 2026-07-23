@@ -89,6 +89,37 @@ pub(super) fn draw_zones(
             Color::RGBA(255, 255, 255, 220),
         );
 
+        // Theme icon(s): what taking this settlement buys.
+        {
+            use battlefield_core::mapgen::VillageTheme;
+            let icons: Vec<usize> = match zone.theme {
+                Some(VillageTheme::Meat) => vec![0],
+                Some(VillageTheme::Gold) => vec![1],
+                Some(VillageTheme::Wood) => vec![2],
+                None if zone.tier == battlefield_core::zone::SettlementTier::City => {
+                    vec![0, 1, 2]
+                }
+                None => Vec::new(),
+            };
+            let (tw, _) = assets.text.measure_text(zone.name, zone_font);
+            let size = (if icons.len() > 1 { 16.0 } else { 24.0 } * zoom) as u32;
+            let x0 = sx - (tw as f32 * 0.5) as i32 - 14 - (size * icons.len() as u32) as i32;
+            for (k, &idx) in icons.iter().enumerate() {
+                if let Some(tex) = assets.resource_icon_textures.get(idx) {
+                    let _ = canvas.copy(
+                        tex,
+                        None,
+                        Rect::new(
+                            x0 + k as i32 * (size as i32 + 2),
+                            name_y - size as i32 / 2,
+                            size,
+                            size,
+                        ),
+                    );
+                }
+            }
+        }
+
         if let Some((ref tex, bw, bh)) = assets.ui_bar_base {
             draw_bar_3slice(
                 canvas,
@@ -144,6 +175,58 @@ pub(super) fn draw_zones(
                         fill_h as u32,
                     ));
                 }
+            }
+        }
+    }
+
+    // Production plates: stalled queues and enlistment offers.
+    let zoom = cam.zoom;
+    for plate in game.production_plates() {
+        use battlefield_core::game::PlateKind;
+        let (px, py) = world_to_screen(plate.x, plate.y - 120.0, cam);
+        let (label, icon, avatar): (&str, Option<usize>, Option<usize>) = match &plate.kind {
+            PlateKind::Stalled(res) => ("", Some(res.idx()), None),
+            PlateKind::Enlist { unit, .. } => (
+                "",
+                Some(unit.conversion_cost().idx()),
+                Some(battlefield_core::asset_manifest::avatar_index(*unit)),
+            ),
+            PlateKind::NoLord => ("SERVES NO LORD", None, None),
+        };
+        if let Some(ref tex) = assets.ui_small_ribbons {
+            let w = if label.is_empty() { 40.0 } else { 150.0 } * zoom as f64;
+            draw_small_ribbon(canvas, tex, 9, px as f64, py as f64, w, zoom as f64);
+        }
+        if !label.is_empty() {
+            assets.text.draw_text_centered(
+                canvas,
+                tc,
+                label,
+                px,
+                py,
+                16.0 * zoom,
+                Color::RGBA(255, 230, 200, 235),
+            );
+        }
+        if let Some(av) = avatar {
+            if let Some(tex) = assets.avatar_textures.get(av) {
+                let s = (48.0 * zoom) as u32;
+                let _ = canvas.copy(
+                    tex,
+                    None,
+                    Rect::new(px - (46.0 * zoom) as i32, py - (24.0 * zoom) as i32, s, s),
+                );
+            }
+        }
+        if let Some(res) = icon {
+            if let Some(tex) = assets.resource_icon_textures.get(res) {
+                let s = (28.0 * zoom) as u32;
+                let x = if avatar.is_some() {
+                    px + (6.0 * zoom) as i32
+                } else {
+                    px - (14.0 * zoom) as i32
+                };
+                let _ = canvas.copy(tex, None, Rect::new(x, py - (14.0 * zoom) as i32, s, s));
             }
         }
     }

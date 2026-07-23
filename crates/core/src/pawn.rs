@@ -57,6 +57,15 @@ impl PawnJob {
         }
     }
 
+    /// What a delivery of this job's produce adds to the pools.
+    pub fn resource(self) -> ResourceKind {
+        match self {
+            PawnJob::Chop => ResourceKind::Wood,
+            PawnJob::Mine => ResourceKind::Gold,
+            PawnJob::Herd => ResourceKind::Meat,
+        }
+    }
+
     /// Distance from the work tile center at which working starts.
     /// Gold stones are impassable, so miners must be allowed to work
     /// from the far side of their own collision circle.
@@ -66,6 +75,48 @@ impl PawnJob {
             PawnJob::Mine => TILE_SIZE * 1.1,
         }
     }
+}
+
+/// The three war currencies pawns haul and armies spend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceKind {
+    Meat,
+    Gold,
+    Wood,
+}
+
+impl ResourceKind {
+    pub fn idx(self) -> usize {
+        match self {
+            ResourceKind::Meat => 0,
+            ResourceKind::Gold => 1,
+            ResourceKind::Wood => 2,
+        }
+    }
+
+    /// Floating-text tint for delivery/spend ticks.
+    pub fn rgb(self) -> (u8, u8, u8) {
+        match self {
+            ResourceKind::Meat => (235, 90, 80),
+            ResourceKind::Gold => (255, 205, 60),
+            ResourceKind::Wood => (110, 190, 90),
+        }
+    }
+}
+
+/// A recruit's marching orders: which building to enlist at.
+#[derive(Clone, Debug)]
+pub struct RecruitTask {
+    /// Settlement the recruit belongs to (abort if it flips).
+    pub zone: u8,
+    /// Index into `game.buildings` (stable for a battle).
+    pub building: usize,
+    /// Building door in world coordinates.
+    pub target: (f32, f32),
+    /// Set on arrival; the game converts (or makes the recruit wait).
+    pub arrived: bool,
+    /// Seconds spent waiting at the door for an affordable conversion.
+    pub wait: f32,
 }
 
 pub struct Pawn {
@@ -86,6 +137,8 @@ pub struct Pawn {
     pub zone_id: Option<u8>,
     /// Herd pens have no terrain marker; the work tiles come from the spec.
     work_tiles: Vec<(u32, u32)>,
+    /// Recruits walk to a production building instead of working.
+    pub recruit: Option<RecruitTask>,
     /// Live sheep positions near the pen, refreshed each tick; preferred
     /// over the static pen tiles so herders work beside actual sheep.
     herd_targets: Vec<(u32, u32)>,
@@ -142,6 +195,7 @@ impl Pawn {
             herd_targets: Vec::new(),
             zone_id,
             work_tiles,
+            recruit: None,
             vel_x: 0.0,
             vel_y: 0.0,
             waypoints: Vec::new(),
@@ -173,6 +227,13 @@ impl Pawn {
     }
 
     pub fn sprite_index(&self) -> usize {
+        // Recruits carry nothing: plain idle / plain run.
+        if self.recruit.is_some() {
+            return match self.state {
+                PawnState::Idle => 0,
+                _ => 1,
+            };
+        }
         let (walk_to, working, idle_carry, carry_home) = self.job.sprite_rows();
         match (self.state, self.carrying) {
             (PawnState::Idle, false) => 0,
@@ -185,6 +246,12 @@ impl Pawn {
     }
 
     pub fn anim_frame_count(&self) -> u32 {
+        if self.recruit.is_some() {
+            return match self.state {
+                PawnState::Idle => IDLE_FRAMES,
+                _ => RUN_FRAMES,
+            };
+        }
         match self.state {
             PawnState::Idle => IDLE_FRAMES,
             PawnState::WalkingToWork | PawnState::WalkingHome | PawnState::Fleeing => RUN_FRAMES,
@@ -394,24 +461,22 @@ impl Pawn {
         }
     }
 
-    pub fn update(&mut self, dt: f32, grid: &Grid, claimed: &[(u32, u32)], threats: &[(f32, f32)]) {
-        // Panic takes priority over any work: drop the carry and run.
-        if self.state != PawnState::Fleeing {
-            let r2 = PAWN_FLEE_RADIUS * PAWN_FLEE_RADIUS;
-            if threats
-                .iter()
-                .any(|&(tx, ty)| (tx - self.x).powi(2) + (ty - self.y).powi(2) < r2)
-            {
-                self.carrying = false;
-                self.waypoints.clear();
-                self.waypoint_idx = 0;
-                self.state = PawnState::Fleeing;
-                self.state_timer = 0.0;
-                self.set_anim(RUN_FRAMES, 12.0);
-            }
-        }
+    /// A recruit marching to enlist: walks to the building door, waits
+    /// there if the war chest can't pay yet, flees fighting like any pawn.
+    pub fn new_recruit(
+        home_x: f32,
+        home_y: f32,
+        faction: Faction,
+        task: RecruitTask,
+        seed: u32,
+    ) -> Self {
+        let mut p = Self::with_job(home_x, home_y, faction, PawnJob::Chop, None, Vec::new(), seed);
+        p.recruit = Some(task);
+        p.state_timer = 0.0;
+        p
+    }
 
-        if self.state == PawnState::Fleeing {
+    fn tick_flee(&mut self, dt: f32, grid: &Grid, threats: &[(f32, f32)]) {
             let nearest = threats
                 .iter()
                 .map(|&(tx, ty)| {
@@ -450,10 +515,153 @@ impl Pawn {
                 _ => {
                     self.state_timer += dt;
                     if self.state_timer >= CALM_TIME {
-                        self.reset_to_idle();
+                        if self.recruit.is_some() {
+                            // Calm again: repath to the door.
+                            self.state = PawnState::Idle;
+                            self.state_timer = 0.0;
+                            self.set_anim(IDLE_FRAMES, 8.0);
+                        } else {
+                            self.reset_to_idle();
+                        }
                     }
                 }
             }
+    }
+
+    fn update_recruit(&mut self, dt: f32, grid: &Grid, threats: &[(f32, f32)]) {
+        // Panic first, like any pawn.
+        if self.state != PawnState::Fleeing {
+            let r2 = PAWN_FLEE_RADIUS * PAWN_FLEE_RADIUS;
+            if threats
+                .iter()
+                .any(|&(tx, ty)| (tx - self.x).powi(2) + (ty - self.y).powi(2) < r2)
+            {
+                self.waypoints.clear();
+                self.waypoint_idx = 0;
+                self.state = PawnState::Fleeing;
+                self.state_timer = 0.0;
+                self.set_anim(RUN_FRAMES, 12.0);
+            }
+        }
+        if self.state == PawnState::Fleeing {
+            self.tick_flee(dt, grid, threats);
+            return;
+        }
+
+        let Some(task) = self.recruit.as_ref() else {
+            return;
+        };
+        let (tx, ty) = task.target;
+        if task.arrived {
+            // Waiting at the door; the game decides when we convert.
+            self.vel_x = 0.0;
+            self.vel_y = 0.0;
+            return;
+        }
+
+        match self.state {
+            PawnState::WalkingToWork => {
+                if self.check_stuck(dt) {
+                    self.state = PawnState::Idle;
+                    self.state_timer = 0.5;
+                    self.set_anim(IDLE_FRAMES, 8.0);
+                    return;
+                }
+                let waypoints_done = self.follow_waypoints(dt, grid);
+                let dx = tx - self.x;
+                let dy = ty - self.y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist <= TILE_SIZE * 1.4 {
+                    if let Some(t) = self.recruit.as_mut() {
+                        t.arrived = true;
+                    }
+                    self.vel_x = 0.0;
+                    self.vel_y = 0.0;
+                    self.state = PawnState::Idle;
+                    self.set_anim(IDLE_FRAMES, 8.0);
+                } else if waypoints_done {
+                    let vx = (dx / dist) * PAWN_WALK_SPEED;
+                    let vy = (dy / dist) * PAWN_WALK_SPEED;
+                    let new_x = self.x + vx * dt;
+                    let new_y = self.y + vy * dt;
+                    if grid.is_circle_passable(new_x, new_y, PAWN_RADIUS) {
+                        self.x = new_x;
+                        self.y = new_y;
+                    } else if grid.is_circle_passable(new_x, self.y, PAWN_RADIUS) {
+                        self.x = new_x;
+                    } else if grid.is_circle_passable(self.x, new_y, PAWN_RADIUS) {
+                        self.y = new_y;
+                    }
+                    if vx > 0.5 {
+                        self.facing = Facing::Right;
+                    } else if vx < -0.5 {
+                        self.facing = Facing::Left;
+                    }
+                }
+            }
+            _ => {
+                // (Re)path to the door after spawn, retarget, or a stall.
+                self.state_timer -= dt;
+                if self.state_timer > 0.0 {
+                    return;
+                }
+                let (gx, gy) = grid::world_to_grid(tx, ty);
+                let goal = if gx >= 0 && gy >= 0 && grid.is_passable(gx as u32, gy as u32) {
+                    Some((gx as u32, gy as u32))
+                } else if gx >= 0 && gy >= 0 {
+                    self.passable_near(gx as u32, gy as u32, grid)
+                } else {
+                    None
+                };
+                if let Some((pgx, pgy)) = goal {
+                    if self.compute_path(pgx, pgy, grid) {
+                        self.target_gx = pgx;
+                        self.target_gy = pgy;
+                        self.state = PawnState::WalkingToWork;
+                        self.set_anim(RUN_FRAMES, 10.0);
+                        return;
+                    }
+                }
+                self.state_timer = 1.0; // retry pathing shortly
+            }
+        }
+    }
+
+    /// Reset a recruit toward a new door (game-side retarget).
+    pub fn retarget_recruit(&mut self, task: RecruitTask) {
+        self.recruit = Some(task);
+        self.waypoints.clear();
+        self.waypoint_idx = 0;
+        if self.state != PawnState::Fleeing {
+            self.state = PawnState::Idle;
+            self.state_timer = 0.0;
+            self.set_anim(IDLE_FRAMES, 8.0);
+        }
+    }
+
+    pub fn update(&mut self, dt: f32, grid: &Grid, claimed: &[(u32, u32)], threats: &[(f32, f32)]) {
+        if self.recruit.is_some() {
+            self.update_recruit(dt, grid, threats);
+            return;
+        }
+        // Panic takes priority over any work: drop the carry and run.
+        if self.state != PawnState::Fleeing {
+            let r2 = PAWN_FLEE_RADIUS * PAWN_FLEE_RADIUS;
+            if threats
+                .iter()
+                .any(|&(tx, ty)| (tx - self.x).powi(2) + (ty - self.y).powi(2) < r2)
+            {
+                self.carrying = false;
+                self.waypoints.clear();
+                self.waypoint_idx = 0;
+                self.state = PawnState::Fleeing;
+                self.state_timer = 0.0;
+                self.set_anim(RUN_FRAMES, 12.0);
+            }
+        }
+
+        if self.state == PawnState::Fleeing {
+            self.tick_flee(dt, grid, threats);
             return;
         }
 

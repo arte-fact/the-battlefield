@@ -203,6 +203,14 @@ impl Game {
             return false;
         }
         let faction = self.units[ai_idx].faction;
+        // A starving army's monks have no bread or bandages: healing
+        // must not out-pace the famine, or landless remnants live forever.
+        if faction
+            .army_idx()
+            .is_some_and(|fi| self.starving[fi])
+        {
+            return false;
+        }
         let ax = self.units[ai_idx].x;
         let ay = self.units[ai_idx].y;
         let ai_id = self.units[ai_idx].id;

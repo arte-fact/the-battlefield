@@ -66,6 +66,8 @@ pub struct Assets<'a> {
     pub minimap_key: (u32, u32, u64),
     /// Grid size the fog texture was created for.
     pub fog_tex_size: (u32, u32),
+    // Resource icons (meat, gold, wood)
+    pub(super) resource_icon_textures: Vec<Texture<'a>>,
     // Sheep: (texture, frame_count) for Idle, Move, Grass
     pub(super) sheep_textures: Vec<(Texture<'a>, u32)>,
     // Pawn: (texture, frame_w, frame_h, frame_count) — 5 per faction × 2 factions = 10
@@ -145,6 +147,10 @@ impl<'a> Assets<'a> {
             }),
             SpriteKey::Pawn(idx) => self.pawn_textures.get(idx).map(|&(_, w, h, c)| (w, h, c)),
             SpriteKey::Avatar(idx) => self.avatar_textures.get(idx).map(|t| {
+                let q = t.query();
+                (q.width, q.height, 1)
+            }),
+            SpriteKey::ResourceIcon(idx) => self.resource_icon_textures.get(idx).map(|t| {
                 let q = t.query();
                 (q.width, q.height, 1)
             }),
@@ -237,6 +243,10 @@ impl<'a> Assets<'a> {
                 (t, w, h, c)
             }),
             SpriteKey::Avatar(idx) => self.avatar_textures.get_mut(idx).map(|t| {
+                let q = t.query();
+                (t, q.width, q.height, 1)
+            }),
+            SpriteKey::ResourceIcon(idx) => self.resource_icon_textures.get_mut(idx).map(|t| {
                 let q = t.query();
                 (t, q.width, q.height, 1)
             }),
@@ -606,6 +616,15 @@ impl<'a> Assets<'a> {
             }
         }
 
+        // Resource icons (meat, gold, wood)
+        let mut resource_icon_textures = Vec::new();
+        for file in asset_manifest::RESOURCE_ICON_FILES {
+            let path = format!("{ASSET_BASE}/{file}");
+            if let Some(tex) = load_png_texture(tc, &path) {
+                resource_icon_textures.push(tex);
+            }
+        }
+
         // Tower textures (neutral, blue, red, yellow, purple)
         let mut tower_textures = Vec::new();
         for color_folder in asset_manifest::TOWER_COLOR_FOLDERS {
@@ -783,6 +802,7 @@ impl<'a> Assets<'a> {
             water_rock_textures,
             gold_stone_textures,
             tower_textures,
+            resource_icon_textures,
             neutral_building_textures,
             ui_special_paper,
             ui_blue_btn,

@@ -149,6 +149,7 @@ impl Game {
             let fi = f.idx();
             if self.zone_manager.controlled_count(f) > 0 {
                 self.starvation[fi] = 0.0;
+                self.starving[fi] = false;
                 continue;
             }
             let before = self.starvation[fi];
@@ -157,6 +158,7 @@ impl Game {
             if after < STARVATION_GRACE {
                 continue;
             }
+            self.starving[fi] = true;
             let ticks_before = ((before - STARVATION_GRACE).max(0.0) / STARVATION_TICK) as i32;
             let ticks_after = ((after - STARVATION_GRACE) / STARVATION_TICK) as i32;
             let hits = ticks_after - ticks_before;
@@ -216,34 +218,48 @@ impl Game {
             .max_by_key(|z| (z.tier, std::cmp::Reverse(z.id)))
     }
 
-    /// Settlement-fed production: every production building in an owned
-    /// or neutral settlement spends 1 banked stock to train 1 soldier of
-    /// its kind on a fixed interval. Faction output scales with held
-    /// territory; neutral villages raise home-bound Black militia by the
-    /// same rule. Contested settlements don't train.
-    pub fn tick_training(&mut self, dt: f32) {
-        let interval = (self.config.train_interval * self.config.train_speed_mult).max(0.5);
+    /// The pawn economy: houses raise recruits (1 meat), recruits walk
+    /// to a production building and convert into its soldier — gold for
+    /// warriors and monks, wood for archers and lancers. Owned and
+    /// neutral settlements run the same rule; free villages draw on the
+    /// shared Villager pools and their converts stay home as militia.
+    pub fn tick_recruits(&mut self, dt: f32) {
+        let interval = (self.config.levy_interval * self.config.train_speed_mult).max(1.0);
+        if self.recruit_rr.len() != self.zone_manager.zones.len() {
+            self.recruit_rr = vec![0; self.zone_manager.zones.len()];
+        }
 
-        // Alive counts per army, once (militia is capped per settlement).
-        let mut alive = [0usize; 4];
+        // Live counts once per tick.
+        let mut army_units = [0usize; 4];
         for u in &self.units {
             if u.alive && !u.is_player {
                 if let Some(i) = u.faction.army_idx() {
-                    alive[i] += 1;
+                    army_units[i] += 1;
+                }
+            }
+        }
+        let mut inflight = [0usize; 5];
+        let mut inflight_zone = vec![0usize; self.zone_manager.zones.len()];
+        for p in &self.pawns {
+            if let Some(t) = &p.recruit {
+                inflight[p.faction.pool_idx()] += 1;
+                if let Some(c) = inflight_zone.get_mut(t.zone as usize) {
+                    *c += 1;
                 }
             }
         }
 
+        let mut pawn_seed = 0x5EED_u32;
         for bi in 0..self.buildings.len() {
             if self.buildings[bi].train_cooldown > 0.0 {
                 self.buildings[bi].train_cooldown -= dt;
                 continue;
             }
             let b = &self.buildings[bi];
-            let (Some(kind), Some(zid)) = (b.produces, b.zone_id) else {
+            if b.kind != building::BuildingKind::House {
                 continue;
-            };
-            let (bx, by) = (b.grid_x, b.grid_y);
+            }
+            let Some(zid) = b.zone_id else { continue };
             let zi = zid as usize;
             let Some(zone) = self.zone_manager.zones.get(zi) else {
                 continue;
@@ -251,22 +267,22 @@ impl Game {
             let faction = match zone.state {
                 ZoneState::Controlled(f) => f,
                 ZoneState::Neutral => Faction::Villager,
-                _ => continue, // mid-fight settlements don't train
+                _ => continue, // embattled settlements raise no one
             };
-            if self.village_stock.get(zi).copied().unwrap_or(0) == 0 {
+            let pool = faction.pool_idx();
+            if self.resources[pool][crate::pawn::ResourceKind::Meat.idx()] == 0 {
                 continue;
             }
+
+            // Headroom: armies against the cap (walking recruits count),
+            // militia against its settlement's tier cap.
             match faction.army_idx() {
                 Some(fi) => {
-                    if alive[fi] >= self.config.max_units_per_faction {
+                    if army_units[fi] + inflight[pool] >= self.config.max_units_per_faction {
                         continue;
                     }
-                    self.village_stock[zi] -= 1;
-                    self.spawn_unit(kind, faction, bx, by, false);
-                    alive[fi] += 1;
                 }
                 None => {
-                    // Militia stays home: capped by tier, holds its zone.
                     let local = self
                         .units
                         .iter()
@@ -277,18 +293,170 @@ impl Game {
                                     == Some(crate::unit::OrderKind::DefendZone { zone: zid })
                         })
                         .count();
-                    if local >= zone.tier.garrison_cap() as usize {
+                    if local + inflight_zone[zi] >= zone.tier.garrison_cap() as usize {
                         continue;
                     }
-                    self.village_stock[zi] -= 1;
-                    let id = self.spawn_unit(kind, Faction::Villager, bx, by, false);
+                }
+            }
+
+            // No ghost-town crowds: bound walking recruits per settlement.
+            let prod: Vec<(usize, UnitKind)> = self
+                .buildings
+                .iter()
+                .enumerate()
+                .filter(|(_, pb)| pb.zone_id == Some(zid))
+                .filter_map(|(i, pb)| pb.produces.map(|k| (i, k)))
+                .collect();
+            if prod.is_empty() || inflight_zone[zi] >= prod.len() * 2 {
+                continue;
+            }
+
+            // Round-robin over the buildings whose typed cost is payable.
+            let affordable: Vec<(usize, UnitKind)> = prod
+                .iter()
+                .copied()
+                .filter(|&(_, k)| self.resources[pool][k.conversion_cost().idx()] > 0)
+                .collect();
+            let Some(&(target_bi, _kind)) = (!affordable.is_empty())
+                .then(|| {
+                    let pick = self.recruit_rr[zi] as usize % affordable.len();
+                    &affordable[pick]
+                })
+                .or(None)
+            else {
+                continue;
+            };
+            self.recruit_rr[zi] = self.recruit_rr[zi].wrapping_add(1);
+
+            // Raise the recruit.
+            self.resources[pool][crate::pawn::ResourceKind::Meat.idx()] -= 1;
+            let (hx, hy) = grid::grid_to_world(self.buildings[bi].grid_x, self.buildings[bi].grid_y);
+            let tb = &self.buildings[target_bi];
+            let (tx, ty) = grid::grid_to_world(tb.grid_x, tb.grid_y);
+            pawn_seed = pawn_seed
+                .wrapping_mul(1103515245)
+                .wrapping_add(12345 + bi as u32);
+            self.pawns.push(crate::pawn::Pawn::new_recruit(
+                hx,
+                hy,
+                faction,
+                crate::pawn::RecruitTask {
+                    zone: zid,
+                    building: target_bi,
+                    target: (tx, ty),
+                    arrived: false,
+                    wait: 0.0,
+                },
+                pawn_seed,
+            ));
+            inflight[pool] += 1;
+            inflight_zone[zi] += 1;
+            self.buildings[bi].train_cooldown = interval;
+        }
+    }
+
+    /// Arrived recruits enlist: spend the typed cost and swap the pawn
+    /// for a soldier at the door. Called from the pawn tick.
+    pub(crate) fn process_recruit_arrivals(&mut self, pawns: &mut Vec<crate::pawn::Pawn>, dt: f32) {
+        const RETARGET_AFTER: f32 = 15.0;
+        let mut i = 0;
+        while i < pawns.len() {
+            let Some(task) = pawns[i].recruit.clone() else {
+                i += 1;
+                continue;
+            };
+            let zid = task.zone;
+            let faction = pawns[i].faction;
+            let zone_ok = self
+                .zone_manager
+                .zones
+                .get(zid as usize)
+                .map(|z| match z.state {
+                    ZoneState::Controlled(f) => f == faction,
+                    ZoneState::Neutral => faction == Faction::Villager,
+                    _ => false,
+                })
+                .unwrap_or(false);
+            if !zone_ok {
+                // The settlement fell: the levy melts away.
+                pawns.swap_remove(i);
+                continue;
+            }
+            if !task.arrived {
+                i += 1;
+                continue;
+            }
+
+            let kind = self.buildings[task.building]
+                .produces
+                .expect("recruit targets are production buildings");
+            let pool = faction.pool_idx();
+            let cost = kind.conversion_cost().idx();
+
+            // Militia respects its tier cap even at the door.
+            let militia_blocked = faction == Faction::Villager && {
+                let cap = self.zone_manager.zones[zid as usize].tier.garrison_cap() as usize;
+                let local = self
+                    .units
+                    .iter()
+                    .filter(|u| {
+                        u.alive
+                            && u.faction == Faction::Villager
+                            && u.order == Some(crate::unit::OrderKind::DefendZone { zone: zid })
+                    })
+                    .count();
+                local >= cap
+            };
+
+            if self.resources[pool][cost] > 0 && !militia_blocked {
+                self.resources[pool][cost] -= 1;
+                self.floating_texts.push(super::FloatingText {
+                    x: pawns[i].x,
+                    y: pawns[i].y - 40.0,
+                    value: -1.0,
+                    remaining: 1.0,
+                    kind: super::FloatKind::Resource(kind.conversion_cost()),
+                });
+                let (gx, gy) = grid::world_to_grid(pawns[i].x, pawns[i].y);
+                let id = self.spawn_unit(kind, faction, gx.max(0) as u32, gy.max(0) as u32, false);
+                if faction == Faction::Villager {
                     if let Some(u) = self.units.iter_mut().find(|u| u.id == id) {
                         u.order = Some(crate::unit::OrderKind::DefendZone { zone: zid });
                         u.order_timer = 0.0;
                     }
                 }
+                pawns.swap_remove(i);
+                continue;
             }
-            self.buildings[bi].train_cooldown = interval;
+
+            // Can't pay: wait at the door, then try another line of work.
+            if let Some(t) = pawns[i].recruit.as_mut() {
+                t.wait += dt;
+            }
+            if pawns[i].recruit.as_ref().is_some_and(|t| t.wait >= RETARGET_AFTER) {
+                let affordable: Vec<(usize, UnitKind)> = self
+                    .buildings
+                    .iter()
+                    .enumerate()
+                    .filter(|(i2, pb)| pb.zone_id == Some(zid) && *i2 != task.building)
+                    .filter_map(|(i2, pb)| pb.produces.map(|k| (i2, k)))
+                    .filter(|&(_, k)| self.resources[pool][k.conversion_cost().idx()] > 0)
+                    .collect();
+                if let Some(&(nbi, _)) = affordable.first() {
+                    let tb = &self.buildings[nbi];
+                    let (tx, ty) = grid::grid_to_world(tb.grid_x, tb.grid_y);
+                    pawns[i].retarget_recruit(crate::pawn::RecruitTask {
+                        zone: zid,
+                        building: nbi,
+                        target: (tx, ty),
+                        arrived: false,
+                        wait: 0.0,
+                    });
+                } else if let Some(t) = pawns[i].recruit.as_mut() {
+                    t.wait = 0.0; // nothing affordable anywhere: keep waiting
+                }
+            }
+            i += 1;
         }
     }
 
@@ -377,8 +545,9 @@ impl Game {
 
         // Create capture zones from BSP layout
         self.zone_manager = ZoneManager::create_from_layout(&layout, self.config.zone_radius);
-        // Villages start with a small banked stock so early captures pay off.
-        self.village_stock = vec![2; self.zone_manager.zones.len()];
+        // Fresh war chests (config may have been live-tuned since Game::new).
+        self.resources = [[5, 3, 3]; 5];
+        self.recruit_rr = vec![0; self.zone_manager.zones.len()];
 
         // Capitals are the first zones (ids 0..n_capitals) in
         // [Blue, Red, extras...] order; each active faction starts in
@@ -496,10 +665,11 @@ impl Game {
             .flat_map(|v| v.resources.iter().copied())
             .collect();
         Self::paint_road_around_buildings(&mut self.grid, &buildings, &protected);
-        // Stagger training so an empire doesn't burst-spawn on one frame.
-        let interval = (self.config.train_interval * self.config.train_speed_mult).max(0.5);
+        // Stagger house timers so an empire doesn't raise recruits in
+        // one synchronized burst.
+        let interval = (self.config.levy_interval * self.config.train_speed_mult).max(1.0);
         for (i, b) in buildings.iter_mut().enumerate() {
-            if b.produces.is_some() {
+            if b.kind == building::BuildingKind::House {
                 b.train_cooldown = interval * ((i % 8) as f32 / 8.0);
             }
         }
@@ -777,9 +947,10 @@ mod tests {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
-        game.village_stock = vec![5; game.zone_manager.zones.len()];
-        for _ in 0..(30 * 10) {
-            game.tick_training(0.1);
+        game.resources[4] = [30, 30, 30];
+        for _ in 0..(10 * 120) {
+            game.tick_recruits(0.1);
+            game.tick_pawns(0.1);
         }
         let militia: Vec<_> = game
             .units
@@ -810,8 +981,8 @@ mod tests {
             assert!(count <= cap, "zone {zi} militia over tier cap: {count}");
         }
         assert!(
-            game.village_stock.iter().any(|&s| s < 5),
-            "training must consume stock"
+            game.resources[4][0] < 30,
+            "raising the levy must consume the network's meat"
         );
     }
 
@@ -821,10 +992,11 @@ mod tests {
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
         game.zone_manager.zones[3].set_controlled(Faction::Blue);
-        game.village_stock = vec![0; game.zone_manager.zones.len()];
-        game.village_stock[3] = 5;
-        for _ in 0..(30 * 10) {
-            game.tick_training(0.1);
+        game.resources = [[0; 3]; 5];
+        game.resources[0] = [20, 20, 20];
+        for _ in 0..(10 * 120) {
+            game.tick_recruits(0.1);
+            game.tick_pawns(0.1);
         }
         let soldiers: Vec<_> = game
             .units
@@ -1100,7 +1272,7 @@ mod tests {
             (z.center_gx, z.center_gy)
         };
         game.zone_manager.zones[zi].set_controlled(Faction::Blue);
-        game.village_stock[zi] = 5;
+        game.resources[0] = [30, 30, 30];
         let gid = game.spawn_unit(UnitKind::Warrior, Faction::Blue, zx + 2, zy, false);
         let mid = game.spawn_unit(UnitKind::Warrior, Faction::Villager, zx - 2, zy, false);
         for &(id, zone) in &[(gid, zi as u8), (mid, zi as u8)] {
@@ -1220,20 +1392,22 @@ mod tests {
     }
 
     #[test]
-    fn training_stalls_without_stock() {
+    fn levy_stalls_without_resources() {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);
         game.units.retain(|u| u.is_player);
-        game.village_stock = vec![0; game.zone_manager.zones.len()];
-        for _ in 0..(30 * 10) {
-            game.tick_training(0.1);
+        game.pawns.clear(); // no workers: no income to restock the chests
+        game.resources = [[0; 3]; 5];
+        for _ in 0..(10 * 60) {
+            game.tick_recruits(0.1);
+            game.tick_pawns(0.1);
         }
         assert!(
             !game
                 .units
                 .iter()
                 .any(|u| u.alive && u.faction == Faction::Villager),
-            "no stock, no militia"
+            "no resources, no levy"
         );
     }
 
@@ -1255,6 +1429,47 @@ mod tests {
         };
         game.zone_manager = ZoneManager::create_from_layout(&layout, game.config.zone_radius);
         game
+    }
+
+    #[test]
+    fn typed_costs_shape_the_army() {
+        let run = |pools: [u32; 3]| -> Vec<UnitKind> {
+            let mut game = Game::new(960.0, 640.0);
+            game.setup_demo_battle_with_seed(42);
+            game.units.retain(|u| u.is_player);
+            game.pawns.clear(); // fixed chests: no worker income
+            game.resources = [[0; 3]; 5];
+            game.resources[0] = pools;
+            for _ in 0..(10 * 150) {
+                game.tick_recruits(0.1);
+                game.tick_pawns(0.1);
+            }
+            game.units
+                .iter()
+                .filter(|u| u.alive && u.faction == Faction::Blue && !u.is_player)
+                .map(|u| u.kind)
+                .collect()
+        };
+
+        // Meat + gold only: steel and scripture, no bows or lances.
+        let gold_army = run([30, 30, 0]);
+        assert!(!gold_army.is_empty(), "gold economy must field soldiers");
+        assert!(
+            gold_army
+                .iter()
+                .all(|&k| k == UnitKind::Warrior || k == UnitKind::Monk),
+            "without wood only gold units can be armed: {gold_army:?}"
+        );
+
+        // Meat + wood only: bows and lances.
+        let wood_army = run([30, 0, 30]);
+        assert!(!wood_army.is_empty(), "wood economy must field soldiers");
+        assert!(
+            wood_army
+                .iter()
+                .all(|&k| k == UnitKind::Archer || k == UnitKind::Lancer),
+            "without gold only wood units can be armed: {wood_army:?}"
+        );
     }
 
     #[test]

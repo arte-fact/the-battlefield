@@ -143,6 +143,27 @@ pub(super) fn draw_hud(
             ));
         }
 
+        // Resource tray: the player's war chest, under the authority bar.
+        if let Some(army) = game.player_faction {
+            let pools = game.resources[army.pool_idx()];
+            let tray_y = (auth_y + auth_h + 10.0) as i32;
+            for (i, &amount) in pools.iter().enumerate() {
+                let x = auth_x as i32 + i as i32 * 74;
+                if let Some(tex) = assets.resource_icon_textures.get(i) {
+                    let _ = canvas.copy(tex, None, Rect::new(x, tray_y, 26, 26));
+                }
+                assets.text.draw_text_centered(
+                    canvas,
+                    tc,
+                    &format!("{amount}"),
+                    x + 44,
+                    tray_y + 13,
+                    20.0,
+                    Color::RGBA(255, 255, 255, 235),
+                );
+            }
+        }
+
         // Follower count next to the authority bar (soldiers only)
         if let Some(_army) = game.player_faction {
             let followers = format!(
@@ -236,7 +257,7 @@ pub(super) fn draw_hud(
         }
 
         // Unaligned villager: no pools to read, just the way in.
-        if game.player_faction.is_none() {
+        if game.player_faction.is_none() && !game.seen_enlist_plate {
             assets.text.draw_text_centered(
                 canvas,
                 tc,

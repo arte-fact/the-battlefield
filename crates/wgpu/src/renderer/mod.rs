@@ -220,7 +220,7 @@ pub fn render_frame(
     prim_batch.begin();
 
     // Zone labels and progress bars (no circles — those are in effects now)
-    draw_zones(&mut prim_batch, &mut sprite_batch, gpu, game, assets, cam);
+    draw_zones(&mut prim_batch, &mut sprite_batch, gpu, game, assets, cam, elapsed);
 
     // Y-sorted foreground (units, trees, buildings, particles)
     {
@@ -739,6 +739,7 @@ fn draw_zones(
     game: &Game,
     assets: &mut Assets,
     _cam: &battlefield_core::camera::Camera,
+    elapsed: f64,
 ) {
     use battlefield_core::zone::ZoneState;
     let ts = TILE_SIZE;
@@ -794,6 +795,35 @@ fn draw_zones(
             255,
             220,
         );
+        // Theme icon(s): what taking this settlement buys.
+        {
+            use battlefield_core::mapgen::VillageTheme;
+            let icons: Vec<usize> = match zone.theme {
+                Some(VillageTheme::Meat) => vec![0],
+                Some(VillageTheme::Gold) => vec![1],
+                Some(VillageTheme::Wood) => vec![2],
+                None if zone.tier == battlefield_core::zone::SettlementTier::City => {
+                    vec![0, 1, 2]
+                }
+                None => Vec::new(),
+            };
+            let size = if icons.len() > 1 { 16.0 } else { 24.0 };
+            let x0 = zone.center_wx - tw as f32 * 0.5 - 14.0 - size * icons.len() as f32;
+            for (k, &idx) in icons.iter().enumerate() {
+                let key = battlefield_core::rendering::SpriteKey::ResourceIcon(idx);
+                if let Some((tex_id, tw2, th2, _)) = assets.sprite_lookup(key) {
+                    let tex = &assets.textures[tex_id];
+                    sprites.draw_sprite(
+                        tex_id,
+                        [0.0, 0.0, tw2 as f32 * tex.scale, th2 as f32 * tex.scale],
+                        [x0 + k as f32 * (size + 2.0), name_cy - size * 0.5, size, size],
+                        (tex.width, tex.height),
+                        false,
+                        [1.0, 1.0, 1.0, 0.95],
+                    );
+                }
+            }
+        }
 
         // Capture progress bar (3-slice frame + signed center-split fill)
         let bar_x = zone.center_wx - bar_w * 0.5;
@@ -833,6 +863,71 @@ fn draw_zones(
                 draw_helpers::blit_tinted(sprites, fill_id, (tex.width, tex.height), &q, tint);
             } else {
                 prim.fill_rect(fill_x, bar_y + inset_y, fill_w, fill_h, tint);
+            }
+        }
+    }
+
+    // Production plates: stalled queues and enlistment offers.
+    for plate in game.production_plates() {
+        use battlefield_core::game::PlateKind;
+        let py = plate.y - 120.0;
+        let (label, icon, avatar): (&str, Option<usize>, Option<usize>) = match &plate.kind {
+            PlateKind::Stalled(res) => ("", Some(res.idx()), None),
+            PlateKind::Enlist { unit, .. } => (
+                "",
+                Some(unit.conversion_cost().idx()),
+                Some(battlefield_core::asset_manifest::avatar_index(*unit)),
+            ),
+            PlateKind::NoLord => ("SERVES NO LORD", None, None),
+        };
+        if let Some(tex_id) = assets.ui_small_ribbons {
+            let tex = &assets.textures[tex_id];
+            let tex_size = (tex.width, tex.height);
+            let w = if label.is_empty() { 40.0 } else { 150.0 };
+            let quads =
+                render_util::small_ribbon_quads(9, plate.x as f64, py as f64, w, 1.0);
+            for q in &quads {
+                draw_helpers::blit(sprites, tex_id, tex_size, q);
+            }
+        }
+        if !label.is_empty() {
+            assets
+                .text
+                .draw_text_centered(sprites, gpu, label, plate.x, py, 16.0, 255, 230, 200, 235);
+        }
+        let blink = ((elapsed * 4.0).sin() * 0.25 + 0.75) as f32;
+        let alpha = if matches!(plate.kind, PlateKind::Stalled(_)) {
+            blink
+        } else {
+            1.0
+        };
+        if let Some(av) = avatar {
+            let key = battlefield_core::rendering::SpriteKey::Avatar(av);
+            if let Some((tex_id, tw2, th2, _)) = assets.sprite_lookup(key) {
+                let tex = &assets.textures[tex_id];
+                sprites.draw_sprite(
+                    tex_id,
+                    [0.0, 0.0, tw2 as f32 * tex.scale, th2 as f32 * tex.scale],
+                    [plate.x - 46.0, py - 24.0, 48.0, 48.0],
+                    (tex.width, tex.height),
+                    false,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+            }
+        }
+        if let Some(res) = icon {
+            let key = battlefield_core::rendering::SpriteKey::ResourceIcon(res);
+            if let Some((tex_id, tw2, th2, _)) = assets.sprite_lookup(key) {
+                let tex = &assets.textures[tex_id];
+                let x = if avatar.is_some() { plate.x + 6.0 } else { plate.x - 14.0 };
+                sprites.draw_sprite(
+                    tex_id,
+                    [0.0, 0.0, tw2 as f32 * tex.scale, th2 as f32 * tex.scale],
+                    [x, py - 14.0, 28.0, 28.0],
+                    (tex.width, tex.height),
+                    false,
+                    [1.0, 1.0, 1.0, alpha],
+                );
             }
         }
     }
@@ -1159,7 +1254,10 @@ fn draw_floating_texts(
             format!("{sign}{:.1}", ft.value)
         };
 
-        let (r, g, b) = (255u8, 255, 255);
+        let (r, g, b) = match ft.kind {
+            battlefield_core::game::FloatKind::Authority => (255u8, 255, 255),
+            battlefield_core::game::FloatKind::Resource(res) => res.rgb(),
+        };
 
         let off = 1.5_f32;
         // Shadow
@@ -1285,6 +1383,41 @@ fn draw_hud(
             }
         }
 
+        // Resource tray: the player's war chest, under the authority bar.
+        if let Some(army) = game.player_faction {
+            let pools = game.resources[army.pool_idx()];
+            let tray_y = auth_y + bar_h + 10.0;
+            for (i, &amount) in pools.iter().enumerate() {
+                let x = bar_x + i as f32 * 74.0;
+                let key =
+                    battlefield_core::rendering::SpriteKey::ResourceIcon(i);
+                if let Some((tex_id, tw2, th2, _)) = assets.sprite_lookup(key) {
+                    let tex = &assets.textures[tex_id];
+                    let icon = 26.0;
+                    sprites.draw_sprite(
+                        tex_id,
+                        [0.0, 0.0, tw2 as f32 * tex.scale, th2 as f32 * tex.scale],
+                        [x, tray_y, icon, icon],
+                        (tex.width, tex.height),
+                        false,
+                        [1.0, 1.0, 1.0, 1.0],
+                    );
+                }
+                assets.text.draw_text_centered(
+                    sprites,
+                    gpu,
+                    &format!("{amount}"),
+                    x + 44.0,
+                    tray_y + 13.0,
+                    20.0,
+                    255,
+                    255,
+                    255,
+                    235,
+                );
+            }
+        }
+
         // Follower count next to the authority bar (soldiers only)
         if let Some(_army) = game.player_faction {
             let followers = format!(
@@ -1373,7 +1506,7 @@ fn draw_hud(
         }
 
         // Unaligned villager: no pools to read, just the way in.
-        if game.player_faction.is_none() {
+        if game.player_faction.is_none() && !game.seen_enlist_plate {
             assets.text.draw_text_centered(
                 sprites,
                 gpu,

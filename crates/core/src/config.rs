@@ -115,9 +115,9 @@ pub struct GameConfig {
     /// AI opponents in the battle (1-3): Red, +Yellow, +Purple.
     #[serde(default = "default_enemy_count")]
     pub enemy_count: u8,
-    /// Seconds between training attempts per production building.
-    #[serde(default = "default_train_interval")]
-    pub train_interval: f32,
+    /// Seconds between levy spawns per house (the pawn economy's pace).
+    #[serde(default = "default_levy_interval")]
+    pub levy_interval: f32,
     /// Global training pace multiplier (skirmish PRODUCTION row).
     #[serde(default = "default_train_speed_mult")]
     pub train_speed_mult: f32,
@@ -166,8 +166,8 @@ fn default_enemy_count() -> u8 {
     1
 }
 
-fn default_train_interval() -> f32 {
-    8.0
+fn default_levy_interval() -> f32 {
+    10.0
 }
 
 fn default_train_speed_mult() -> f32 {
@@ -289,7 +289,7 @@ impl Default for GameConfig {
             playable_size: default_playable_size(),
             village_stock_cap: default_village_stock_cap(),
             enemy_count: default_enemy_count(),
-            train_interval: default_train_interval(),
+            levy_interval: default_levy_interval(),
             train_speed_mult: default_train_speed_mult(),
 
             // Retinue / Recruitment

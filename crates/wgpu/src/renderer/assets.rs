@@ -80,6 +80,8 @@ pub struct Assets {
     /// Fog of war (dynamic texture, updated per frame).
     pub fog_texture: Option<TextureId>,
     pub fog_wgpu_texture: Option<wgpu::Texture>,
+    /// Resource icons (meat, gold, wood).
+    resource_icon_textures: Vec<TextureId>,
     /// Cached minimap terrain+fog texture (rebuilt on fog changes).
     pub minimap_texture: Option<TextureId>,
     minimap_wgpu_texture: Option<wgpu::Texture>,
@@ -143,6 +145,7 @@ impl Assets {
             shadow_texture: None,
             fog_texture: None,
             fog_wgpu_texture: None,
+            resource_icon_textures: Vec::new(),
             minimap_texture: None,
             minimap_wgpu_texture: None,
             minimap_tex_size: (0, 0),
@@ -255,6 +258,10 @@ impl Assets {
             }),
             SpriteKey::Pawn(idx) => self.pawn_textures.get(idx).copied(),
             SpriteKey::Avatar(idx) => self.avatar_textures.get(idx).map(|&id| {
+                let t = &self.textures[id];
+                (id, t.width, t.height, 1)
+            }),
+            SpriteKey::ResourceIcon(idx) => self.resource_icon_textures.get(idx).map(|&id| {
                 let t = &self.textures[id];
                 (id, t.width, t.height, 1)
             }),
@@ -475,6 +482,14 @@ impl Assets {
             let path = format!("{ASSET_BASE}/Buildings/{color_folder}/Tower.png");
             if let Some(id) = self.load_png(gpu, &path) {
                 self.tower_textures.push(id);
+            }
+        }
+
+        // Resource icons (meat, gold, wood)
+        for file in asset_manifest::RESOURCE_ICON_FILES {
+            let path = format!("{ASSET_BASE}/{file}");
+            if let Some(id) = self.load_png(gpu, &path) {
+                self.resource_icon_textures.push(id);
             }
         }
 

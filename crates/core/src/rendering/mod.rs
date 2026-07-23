@@ -48,6 +48,8 @@ pub enum SpriteKey {
     Pawn(usize),
     /// Unit avatar portrait (index from `asset_manifest::avatar_index`).
     Avatar(usize),
+    /// Resource icon (index from `ResourceKind::idx()`: meat, gold, wood).
+    ResourceIcon(usize),
 }
 
 /// Metadata returned by `DrawBackend::sprite_info`.

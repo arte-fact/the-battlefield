@@ -84,6 +84,8 @@ pub struct CaptureZone {
     pub state: ZoneState,
     /// Settlement size of this zone.
     pub tier: SettlementTier,
+    /// Single-theme settlements advertise their resource on the banner.
+    pub theme: Option<crate::mapgen::VillageTheme>,
     /// Who holds the zone (Controlled).
     pub owner: Option<Faction>,
     /// Who is currently converting it (draining the owner or building
@@ -111,6 +113,7 @@ impl CaptureZone {
             radius_world: radius as f32 * TILE_SIZE,
             state: ZoneState::Neutral,
             tier: SettlementTier::Village,
+            theme: None,
             owner: None,
             capturing: None,
             progress: 0.0,
@@ -221,6 +224,11 @@ impl ZoneManager {
                 };
                 let mut z = CaptureZone::new(i as u8, name, gx, gy, tier.capture_radius());
                 z.tier = tier;
+                // Villages carry their theme for HUD banners; capitals are
+                // mixed economies (None → show the trio).
+                z.theme = layout.settlements.get(i).and_then(|sp| {
+                    (sp.tier != SettlementTier::City).then_some(sp.theme)
+                });
                 z
             })
             .collect();

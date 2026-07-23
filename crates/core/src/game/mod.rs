@@ -26,7 +26,7 @@ use crate::unit::{
 };
 use crate::zone::{ZoneManager, ZoneState};
 
-pub use player::ATTACK_CONE_HALF_ANGLE;
+pub use player::{PlateKind, ProductionPlate, ATTACK_CONE_HALF_ANGLE};
 
 /// Duration for floating authority text.
 pub const FLOATING_TEXT_DURATION: f32 = 1.2;
@@ -78,12 +78,20 @@ impl UnitSpatialGrid {
     }
 }
 
-/// A floating "+X" / "-X" authority indicator at a world position.
+/// What a floating world-text tick is about (drives its tint).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FloatKind {
+    Authority,
+    Resource(crate::pawn::ResourceKind),
+}
+
+/// A floating "+X" / "-X" indicator at a world position.
 pub struct FloatingText {
     pub x: f32,
     pub y: f32,
     pub value: f32,
     pub remaining: f32,
+    pub kind: FloatKind,
 }
 
 pub struct Game {
@@ -122,8 +130,11 @@ pub struct Game {
     pub pawns: Vec<Pawn>,
     /// Capture zone manager.
     pub zone_manager: ZoneManager,
-    /// Banked peon deliveries per zone (fuels village production).
-    pub village_stock: Vec<u8>,
+    /// Typed war chests per economy: `[meat, gold, wood]` for the four
+    /// armies (0-3) and the shared Villager network (4).
+    pub resources: [[u32; 3]; 5],
+    /// Round-robin cursor per settlement for recruit target buildings.
+    pub(crate) recruit_rr: Vec<u8>,
     /// Set when a faction wins the war (conquest: last banner standing).
     pub winner: Option<Faction>,
     /// Shared per-zone flow fields (terrain-only, faction-agnostic),
@@ -140,11 +151,17 @@ pub struct Game {
     recruit_timer: f32,
     /// Per-army starvation clocks: landless factions' units wither.
     starvation: [f32; 4],
+    /// True once an army is past its starvation grace: its monks have
+    /// nothing left to heal with.
+    pub(crate) starving: [bool; 4],
     /// In-flight budgeted map generation (loading screen).
     pending_setup: Option<mapgen::MapGen>,
     /// The army the player fights for. None while unaligned (free-mode
     /// pawn phase); every player-side rule reads `player_army()`.
     pub player_faction: Option<Faction>,
+    /// The unaligned player has met a production building: retire the
+    /// static enlist hint, the plates take over.
+    pub seen_enlist_plate: bool,
     /// Free mode: no timed objectives — domination timer, sudden death
     /// and leader bleed are off; wars end by annihilation or death.
     pub untimed: bool,
@@ -220,7 +237,8 @@ impl Game {
             sheep: Vec::new(),
             pawns: Vec::new(),
             zone_manager: ZoneManager::empty(),
-            village_stock: Vec::new(),
+            resources: [[5, 3, 3]; 5],
+            recruit_rr: Vec::new(),
 
             winner: None,
             zone_flow: FactionFlowState::new(),
@@ -229,8 +247,10 @@ impl Game {
             objective_timer: 0.0,
             recruit_timer: 0.0,
             starvation: [0.0; 4],
+            starving: [false; 4],
             pending_setup: None,
             player_faction: Some(Faction::Blue),
+            seen_enlist_plate: false,
             untimed: false,
             astar_budget: 0,
             last_path_result: None,
@@ -402,7 +422,7 @@ impl Game {
         self.tick_conversion();
 
         self.tick_cooldowns(dt);
-        self.tick_training(dt);
+        self.tick_recruits(dt);
         self.tick_ai(dt);
         self.tick_zones(dt);
         self.tick_building_combat(dt);
@@ -496,9 +516,24 @@ impl Game {
             if p.delivered {
                 p.delivered = false;
                 if let Some(zid) = p.zone_id {
-                    if let Some(stock) = self.village_stock.get_mut(zid as usize) {
-                        *stock = (*stock + 1).min(self.config.village_stock_cap);
-                    }
+                    // The haul goes to whoever rules the settlement; free
+                    // villages feed the shared Villager network.
+                    let owner = self
+                        .zone_manager
+                        .zones
+                        .get(zid as usize)
+                        .and_then(|z| z.effective_faction())
+                        .unwrap_or(Faction::Villager);
+                    let res = p.job.resource();
+                    let pool = &mut self.resources[owner.pool_idx()][res.idx()];
+                    *pool = (*pool + 1).min(99);
+                    self.floating_texts.push(FloatingText {
+                        x: p.x,
+                        y: p.y - 40.0,
+                        value: 1.0,
+                        remaining: 1.0,
+                        kind: FloatKind::Resource(res),
+                    });
                 }
             }
         }
@@ -523,6 +558,7 @@ impl Game {
                 }
             }
         }
+        self.process_recruit_arrivals(&mut pawns, dt);
         self.pawns = pawns;
     }
 }
