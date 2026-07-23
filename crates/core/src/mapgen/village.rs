@@ -35,6 +35,9 @@ pub struct SettlementSpec {
     pub production: Vec<((u32, u32), BuildingKind)>,
     /// Resource cluster tiles (gold stones / grove trees / pen ground).
     pub resources: Vec<(u32, u32)>,
+    /// Per-tile resource theme, parallel to `resources`. Villages are
+    /// single-theme; capitals mix all three in arcs.
+    pub resource_themes: Vec<VillageTheme>,
 }
 
 /// Sixteen ring directions, deterministic order before shuffling.
@@ -153,20 +156,37 @@ fn plan_one(
         }
     }
 
-    let resources = if tier == SettlementTier::City {
-        place_resources_ring(
-            grid,
-            icx,
-            icy,
-            theme,
-            road_dir,
-            &mut occupied,
-            rng,
-            crate::building::BASE_BAND_RADIUS + 1,
-            crate::building::BASE_BAND_RADIUS + 3,
-        )
+    let (resources, resource_themes) = if tier == SettlementTier::City {
+        // Capitals are mixed economies: one arc per resource so every
+        // faction has a baseline income of all three currencies.
+        let base = ring_base_angle(road_dir, rng);
+        let mut resources = Vec::new();
+        let mut resource_themes = Vec::new();
+        for (k, arc_theme) in [VillageTheme::Meat, VillageTheme::Gold, VillageTheme::Wood]
+            .into_iter()
+            .enumerate()
+        {
+            let arc = base + k as f32 * (std::f32::consts::TAU / 3.0);
+            let tiles = place_resource_arc(
+                grid,
+                icx,
+                icy,
+                arc_theme,
+                arc,
+                0.9,
+                &mut occupied,
+                rng,
+                crate::building::BASE_BAND_RADIUS + 1,
+                crate::building::BASE_BAND_RADIUS + 3,
+            );
+            resource_themes.extend(std::iter::repeat_n(arc_theme, tiles.len()));
+            resources.extend(tiles);
+        }
+        (resources, resource_themes)
     } else {
-        place_resources(grid, icx, icy, theme, road_dir, &mut occupied, rng)
+        let tiles = place_resources(grid, icx, icy, theme, road_dir, &mut occupied, rng);
+        let themes = vec![theme; tiles.len()];
+        (tiles, themes)
     };
 
     SettlementSpec {
@@ -176,6 +196,15 @@ fn plan_one(
         houses,
         production,
         resources,
+        resource_themes,
+    }
+}
+
+/// Arc center pointing away from the road (or seeded when roadless).
+fn ring_base_angle(road_dir: Option<(f32, f32)>, rng: &mut Rng) -> f32 {
+    match road_dir {
+        Some((x, y)) => (-y).atan2(-x),
+        None => (rng.next() % ANGLES) as f32 * (std::f32::consts::TAU / ANGLES as f32),
     }
 }
 
@@ -312,28 +341,38 @@ fn place_resources_ring(
     r_min: i32,
     r_max: i32,
 ) -> Vec<(u32, u32)> {
+    // Jitter within ±80° of the opposite-arc direction; clusters pack
+    // tightly (only buildings keep an apron), so retries converge.
+    let base_angle = ring_base_angle(road_dir, rng);
+    place_resource_arc(
+        grid, cx, cy, theme, base_angle, 1.4, occupied, rng, r_min, r_max,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_resource_arc(
+    grid: &mut Grid,
+    cx: i32,
+    cy: i32,
+    theme: VillageTheme,
+    base_angle: f32,
+    half_arc: f32,
+    occupied: &mut Vec<(i32, i32)>,
+    rng: &mut Rng,
+    r_min: i32,
+    r_max: i32,
+) -> Vec<(u32, u32)> {
     let count = match theme {
         VillageTheme::Gold => 3 + (rng.next() % 3) as usize,
         VillageTheme::Wood => 4 + (rng.next() % 3) as usize,
         VillageTheme::Meat => 4,
     };
-    // Base direction: away from the road, or seeded if the village is roadless.
-    let (bx, by) = match road_dir {
-        Some((x, y)) => (-x, -y),
-        None => {
-            let a = (rng.next() % ANGLES) as f32 * (std::f32::consts::TAU / ANGLES as f32);
-            (a.cos(), a.sin())
-        }
-    };
-    let base_angle = by.atan2(bx);
 
     let mut out: Vec<(u32, u32)> = Vec::new();
     let mut tries = 0;
     while out.len() < count && tries < 200 {
         tries += 1;
-        // Jitter within ±80° of the opposite-arc direction; clusters pack
-        // tightly (only buildings keep an apron), so retries converge.
-        let jitter = ((rng.next() % 1000) as f32 / 1000.0 - 0.5) * 2.8;
+        let jitter = ((rng.next() % 1000) as f32 / 1000.0 - 0.5) * 2.0 * half_arc;
         let angle = base_angle + jitter;
         let radius =
             r_min as f32 + ((rng.next() % 1000) as f32 / 1000.0) * (r_max - r_min).max(1) as f32;

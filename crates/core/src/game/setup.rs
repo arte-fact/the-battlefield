@@ -509,35 +509,36 @@ impl Game {
         self.spawn_base_sheep(blue_cx, blue_cy, blue_facing, seed);
         self.spawn_base_sheep(red_cx, red_cy, red_facing, seed.wrapping_add(7919));
 
-        // Village resources: gold outcrops as impassable decorations,
-        // pasture sheep grazing the pen tiles (groves are already terrain).
+        // Village resources per tile: gold outcrops as impassable
+        // decorations, pasture sheep grazing pen tiles (groves are
+        // already terrain). Capitals mix all three in arcs.
         for v in &layout.settlements {
-            match v.theme {
-                crate::mapgen::VillageTheme::Gold => {
-                    for &(x, y) in &v.resources {
+            let mut sheep_seed = seed
+                .wrapping_mul(0x0065_B0A5)
+                .wrapping_add(v.zone_idx as u32);
+            for (&(x, y), &theme) in v.resources.iter().zip(v.resource_themes.iter()) {
+                match theme {
+                    crate::mapgen::VillageTheme::Gold => {
                         let variant =
                             ((x.wrapping_mul(31).wrapping_add(y.wrapping_mul(17))) % 6) as u8;
                         self.grid
                             .set_decoration(x, y, Some(grid::Decoration::GoldStone(variant)));
                     }
-                }
-                crate::mapgen::VillageTheme::Meat => {
-                    let mut sheep_seed = seed
-                        .wrapping_mul(0x0065_B0A5)
-                        .wrapping_add(v.zone_idx as u32);
-                    for &(x, y) in &v.resources {
+                    crate::mapgen::VillageTheme::Meat => {
                         sheep_seed = sheep_seed.wrapping_mul(1103515245).wrapping_add(12345);
                         let (wx, wy) = grid::grid_to_world(x, y);
                         self.sheep.push(Sheep::new(wx, wy, sheep_seed));
                     }
+                    crate::mapgen::VillageTheme::Wood => {}
                 }
-                crate::mapgen::VillageTheme::Wood => {}
             }
         }
 
         // Spawn one pawn worker per house; village pawns work their
-        // zone's resource and recolor with its owner.
+        // zone's resource and recolor with its owner. Mixed settlements
+        // (capitals) split their workers across the themes present.
         let mut pawn_seed = seed.wrapping_add(0xCAFE);
+        let mut house_no: std::collections::HashMap<u8, usize> = std::collections::HashMap::new();
         for b in &self.buildings {
             if b.kind != building::BuildingKind::House {
                 continue;
@@ -550,7 +551,19 @@ impl Game {
                     let Some(v) = layout.settlements.iter().find(|v| v.zone_idx == zid) else {
                         continue;
                     };
-                    let (job, work_tiles) = match v.theme {
+                    let mut themes: Vec<crate::mapgen::VillageTheme> = Vec::new();
+                    for &t in &v.resource_themes {
+                        if !themes.contains(&t) {
+                            themes.push(t);
+                        }
+                    }
+                    if themes.is_empty() {
+                        themes.push(v.theme);
+                    }
+                    let idx = house_no.entry(zid).or_insert(0);
+                    let theme = themes[*idx % themes.len()];
+                    *idx += 1;
+                    let (job, work_tiles) = match theme {
                         crate::mapgen::VillageTheme::Gold => {
                             (crate::pawn::PawnJob::Mine, Vec::new())
                         }
@@ -558,7 +571,14 @@ impl Game {
                             (crate::pawn::PawnJob::Chop, Vec::new())
                         }
                         crate::mapgen::VillageTheme::Meat => {
-                            (crate::pawn::PawnJob::Herd, v.resources.clone())
+                            let pen: Vec<(u32, u32)> = v
+                                .resources
+                                .iter()
+                                .zip(v.resource_themes.iter())
+                                .filter(|&(_, &t)| t == crate::mapgen::VillageTheme::Meat)
+                                .map(|(&p, _)| p)
+                                .collect();
+                            (crate::pawn::PawnJob::Herd, pen)
                         }
                     };
                     self.pawns.push(Pawn::with_job(
