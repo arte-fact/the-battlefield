@@ -149,14 +149,81 @@ the map.
   ("everyone was a villager once") becomes literally true of every
   unit on the field.
 
-## 6. HUD
+## 6. UI update
 
-- The war-score row under the settlement strip stays as is (it is
-  faction-comparative info). The player's three resource counters go
-  **top-left under the authority bar** (player-private info, like HP)
-  — MEAT/GOLD/WOOD as tinted numbers v1, pawn-carry icons later.
-- Free-mode pawn phase: resources hidden until enlistment (you own
-  nothing); the enlist hint stays.
+Art comes free with the pack: `Terrain/Resources/*/{Gold_Resource,
+Meat Resource, Wood Resource}.png` are clean drop icons, and the unit
+avatar portraits (Warrior/Lancer/Archer/Monk) are already loaded.
+Everything below is zero-input UI — no new buttons, both renderers,
+touch-safe.
+
+### 6.1 Resource tray (top-left, under the authority bar)
+
+- Three icon+number pairs — MEAT, GOLD, WOOD — for the **player's
+  faction only** (player-private info lives left with HP/authority;
+  faction-comparative info stays center). Icons at ~24 px from the
+  resource drop sprites, numbers in HUD white.
+- The number does a brief **scale pulse when it changes** so income
+  and spending are felt without reading.
+- Hidden during the free-mode pawn phase (you own nothing yet) and
+  replaced by nothing — the hint (6.4) carries that phase.
+
+### 6.2 Delivery & spend ticks (floating world text)
+
+- A peon banking a delivery pops a small floating `+1` **tinted by
+  resource** (meat red, gold yellow, wood green) above the drop-off,
+  reusing the FloatingText machinery (gains a `kind` so authority
+  popups keep their look).
+- Conversions pop `-1` in the same tint above the building. Income
+  and spending are visible **in the world**, at the place they
+  happen — the tray is just the sum.
+
+### 6.3 Production plates (world UI, on production buildings)
+
+- A small paper chip above a production building, in the style of the
+  zone name ribbons, shown when it has something to say:
+  - **Queue stalled**: recruits waiting outside and the typed cost
+    unaffordable → the missing resource icon, blinking gently. A
+    glance at the map explains every stall ("archery is out of wood").
+  - **Player nearby & unaligned** (free mode / skirmish NEUTRAL): the
+    building's unit **avatar portrait** + its cost icon — you see
+    what you would become before stepping in. Neutral buildings show
+    the ribbon with "SERVES NO LORD".
+  - Otherwise: no plate (the world stays clean).
+
+### 6.4 Free-mode hint
+
+- The static "ENTER A PRODUCTION BUILDING TO ENLIST" banner stays
+  until the player first comes within plate range of any production
+  building, then retires for the run — the plates (6.3) take over as
+  the actual affordance.
+
+### 6.5 Settlement name plates
+
+- The zone ribbon gains its settlement's **theme icon** to the left of
+  the name: steak for pastures, nugget for mining camps, log for
+  lumber camps. Capitals (mixed thirds) show the trio at half size.
+  One glance at a banner tells you what taking this place buys.
+
+### 6.6 Unchanged / deferred
+
+- War-score row, settlement pip strip, minimap, menus, score screens:
+  unchanged. PRODUCTION skirmish row already covers pacing.
+- Deferred (noted, not v1): theme rings on minimap settlement dots; a
+  distinguishing mark on recruit pawns vs workers (motion — walking
+  to a door, queueing — reads well enough first); pool-cap warning
+  when a resource sits at 99 with nothing to spend it on.
+
+### 6.7 Plumbing
+
+- Embed the three resource PNGs; `SpriteKey::ResourceIcon(0..3)` in
+  the shared renderer + lookups in both asset loaders (reserve any
+  new wgpu texture slots **before** the text-cache base id — the
+  fog-slot lesson).
+- Plate quad/anchor math shared in `render_util` (like the zone
+  ribbons); drawing per-renderer as today.
+- FloatingText gains a `kind: {Authority, Resource(u8)}` and a tint
+  table.
 
 ## 7. Touch points
 
@@ -185,12 +252,15 @@ the map.
    split by arc — lands first because every faction's baseline income
    depends on it; livability tests updated, map hashes re-baselined.
 2. **Typed pools & delivery routing** (zone theme → owner pool),
-   HUD triplet, bench output; `village_stock` removed with training
-   temporarily reading a shim (meat only) so the game stays green.
+   resource tray + delivery ticks (UI 6.1-6.2), settlement plate
+   theme icons (6.5), bench output; `village_stock` removed with
+   training temporarily reading a shim (meat only) so the game stays
+   green.
 3. **Recruit pawns**: house spawner with cap-headroom counting,
    walk-to-building, conversion with typed costs, the retarget and
-   zone-flip rules; delete `tick_training` + shim; militia via
-   Villager pool; player enlistment through the same conversion fn.
+   zone-flip rules; production plates + hint retirement (UI 6.3-6.4);
+   delete `tick_training` + shim; militia via Villager pool; player
+   enlistment through the same conversion fn.
 4. **Balance & verify**: probe matrix 1v1/1v3 (all end, pacing within
    ~2× of today's), composition-by-territory probe (armies reflect
    owned themes; monk share sane), browser run of all three modes,
