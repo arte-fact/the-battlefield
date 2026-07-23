@@ -248,6 +248,14 @@ touch-safe.
 
 ## 8. Implementation order
 
+All four items landed 2026-07-23. Matrix (1v1 + 1v3 × 4 seeds) ends in
+66-640 s. One extra fix the probes demanded: a starving army's monks
+can't heal, or landless remnants out-heal the famine forever. Watch
+items live: 1v1 AI-only probes lean Red 4/4 under levy pacing
+(idle-player drag — revisit with a playtest); monk share via
+round-robin. SDL still has no floating-text pass (pre-existing gap),
+so delivery ticks are wgpu-only for now.
+
 1. **Mixed capital rings** (mapgen): City ring in thirds, workers
    split by arc — lands first because every faction's baseline income
    depends on it; livability tests updated, map hashes re-baselined.
