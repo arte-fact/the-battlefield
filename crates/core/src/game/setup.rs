@@ -1262,6 +1262,77 @@ mod tests {
     }
 
     #[test]
+    fn bored_followers_return_to_duty() {
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.retain(|u| u.is_player);
+        game.pawns.clear();
+        let (px, py, pgx, pgy) = {
+            let p = game.player_unit().unwrap();
+            (
+                p.x,
+                p.y,
+                (p.x / crate::grid::TILE_SIZE) as u32,
+                (p.y / crate::grid::TILE_SIZE) as u32,
+            )
+        };
+        let fid = game.spawn_unit(UnitKind::Warrior, Faction::Blue, pgx + 1, pgy, false);
+        if let Some(u) = game.units.iter_mut().find(|u| u.id == fid) {
+            u.order = Some(crate::unit::OrderKind::Follow);
+        }
+        // Keep the war alive far away so annihilation doesn't end things.
+        game.spawn_unit(UnitKind::Warrior, Faction::Red, pgx.saturating_sub(60), pgy, false);
+        let input = crate::player_input::PlayerInput::default();
+        for _ in 0..(60 * 70) {
+            game.tick(&input, 1.0 / 60.0);
+        }
+        let f = game.units.iter().find(|u| u.id == fid).unwrap();
+        assert!(
+            f.order.is_none(),
+            "a follower with nothing to do must drift back to the army"
+        );
+
+        // With an enemy in sight the escort stays.
+        let mut game = Game::new(960.0, 640.0);
+        game.setup_demo_battle_with_seed(42);
+        game.units.retain(|u| u.is_player);
+        game.pawns.clear();
+        let _ = (px, py);
+        let fid = game.spawn_unit(UnitKind::Warrior, Faction::Blue, pgx + 1, pgy, false);
+        if let Some(u) = game.units.iter_mut().find(|u| u.id == fid) {
+            u.order = Some(crate::unit::OrderKind::Follow);
+        }
+        // Hostile at the edge of watch range but outside combat vision.
+        let rid = game.spawn_unit(
+            UnitKind::Warrior,
+            Faction::Red,
+            pgx + game.config.ai_vision_radius + 2,
+            pgy,
+            false,
+        );
+        let input = crate::player_input::PlayerInput::default();
+        for _ in 0..(60 * 70) {
+            game.tick(&input, 1.0 / 60.0);
+            // Pin the watcher so AI wandering doesn't move it out of range.
+            let (px2, py2) = {
+                let p = game.player_unit().unwrap();
+                (p.x, p.y)
+            };
+            if let Some(r) = game.units.iter_mut().find(|u| u.id == rid) {
+                r.x = px2 + (game.config.ai_vision_radius as f32 + 2.0) * crate::grid::TILE_SIZE;
+                r.y = py2;
+                r.hp = r.stats.max_hp;
+            }
+        }
+        let f = game.units.iter().find(|u| u.id == fid).unwrap();
+        assert_eq!(
+            f.order,
+            Some(crate::unit::OrderKind::Follow),
+            "an escort with an enemy in sight stays at its post"
+        );
+    }
+
+    #[test]
     fn garrison_joins_retinue_and_village_refills() {
         let mut game = Game::new(960.0, 640.0);
         game.setup_demo_battle_with_seed(42);

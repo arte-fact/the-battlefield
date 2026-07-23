@@ -437,10 +437,26 @@ impl ZoneManager {
     /// Return the most advanced controlled zone (farthest from own base).
     /// Used when all zones are held — army defends the front line instead of rushing the enemy base.
     pub fn most_advanced_zone(&self, faction: Faction) -> Option<&CaptureZone> {
-        let (own_x, own_y) = match faction {
-            Faction::Blue => (self.blue_base.0 as f32, self.blue_base.1 as f32),
-            _ => (self.red_base.0 as f32, self.red_base.1 as f32),
-        };
+        // Home anchor for the distance term: the faction's largest held
+        // settlement — falling back to its capital zone (ids follow the
+        // active-faction order), then the legacy corners. The old match
+        // sent Yellow and Purple planning from RED's base.
+        let (own_x, own_y) = self
+            .zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(faction))
+            .max_by_key(|z| (z.tier, std::cmp::Reverse(z.id)))
+            .map(|z| (z.center_gx as f32, z.center_gy as f32))
+            .or_else(|| {
+                faction
+                    .army_idx()
+                    .and_then(|k| self.zones.get(k))
+                    .map(|z| (z.center_gx as f32, z.center_gy as f32))
+            })
+            .unwrap_or(match faction {
+                Faction::Blue => (self.blue_base.0 as f32, self.blue_base.1 as f32),
+                _ => (self.red_base.0 as f32, self.red_base.1 as f32),
+            });
         self.zones
             .iter()
             .filter(|z| z.state == ZoneState::Controlled(faction))
@@ -468,10 +484,26 @@ impl ZoneManager {
             .max_by_key(|&(_, c)| c)
             .map(|(f, _)| f);
 
-        let (own_x, own_y) = match faction {
-            Faction::Blue => (self.blue_base.0 as f32, self.blue_base.1 as f32),
-            _ => (self.red_base.0 as f32, self.red_base.1 as f32),
-        };
+        // Home anchor for the distance term: the faction's largest held
+        // settlement — falling back to its capital zone (ids follow the
+        // active-faction order), then the legacy corners. The old match
+        // sent Yellow and Purple planning from RED's base.
+        let (own_x, own_y) = self
+            .zones
+            .iter()
+            .filter(|z| z.state == ZoneState::Controlled(faction))
+            .max_by_key(|z| (z.tier, std::cmp::Reverse(z.id)))
+            .map(|z| (z.center_gx as f32, z.center_gy as f32))
+            .or_else(|| {
+                faction
+                    .army_idx()
+                    .and_then(|k| self.zones.get(k))
+                    .map(|z| (z.center_gx as f32, z.center_gy as f32))
+            })
+            .unwrap_or(match faction {
+                Faction::Blue => (self.blue_base.0 as f32, self.blue_base.1 as f32),
+                _ => (self.red_base.0 as f32, self.red_base.1 as f32),
+            });
 
         let max_dist_sq = self
             .zones

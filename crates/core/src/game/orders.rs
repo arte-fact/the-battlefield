@@ -93,6 +93,9 @@ impl Game {
         if self.player_faction.is_none() {
             return; // nobody follows a bystander
         }
+        if self.retinue_calm_secs >= Self::RETINUE_BORE_SECS {
+            return; // nothing is happening here: no one signs up to stand around
+        }
         let (px, py, pf) = match self.player_unit() {
             Some(p) => (p.x, p.y, p.faction),
             None => return,
@@ -181,6 +184,49 @@ impl Game {
             .count()
     }
 
+    /// Followers get bored: when nothing has happened around the player
+    /// for a while — no enemy in sight, no orders, no swings — they
+    /// drift back to the army one by one instead of guarding a statue.
+    /// Keeps an idle player from parking a growing slice of the army.
+    pub(super) const RETINUE_BORE_SECS: f32 = 45.0;
+
+    pub(super) fn tick_retinue_boredom(&mut self, dt: f32) {
+        let Some(p) = self.player_unit() else { return };
+        let (px, py, pf) = (p.x, p.y, p.faction);
+        // Anything hostile in sight keeps the escort attentive.
+        let watch = (self.config.ai_vision_radius as f32 + 3.0) * TILE_SIZE;
+        let enemy_near = self.spatial.query(px, py, watch).any(|ui| {
+            let u = &self.units[ui];
+            u.alive
+                && u.faction != pf
+                && u.faction.hostile_to(pf)
+                && (u.x - px).powi(2) + (u.y - py).powi(2) <= watch * watch
+        });
+        if enemy_near {
+            self.retinue_calm_secs = 0.0;
+            return;
+        }
+        let before = self.retinue_calm_secs;
+        self.retinue_calm_secs += dt;
+        let after = self.retinue_calm_secs;
+        if after < Self::RETINUE_BORE_SECS {
+            return;
+        }
+        // Past the threshold, one follower wanders off every few seconds.
+        const DRIFT_EVERY: f32 = 5.0;
+        let steps = |t: f32| ((t - Self::RETINUE_BORE_SECS).max(0.0) / DRIFT_EVERY) as i32;
+        if steps(after) > steps(before) {
+            if let Some(idx) = self
+                .units
+                .iter()
+                .position(|u| u.alive && !u.is_player && u.faction == pf && u.order == Some(OrderKind::Follow))
+            {
+                self.units[idx].re_recruit_cooldown = self.config.re_recruit_cooldown_secs;
+                self.release_unit(idx);
+            }
+        }
+    }
+
     pub(super) fn release_retinue_if_player_dead(&mut self) {
         if self.is_player_alive() {
             return;
@@ -203,6 +249,7 @@ impl Game {
     /// Command the retinue. Charge/Defend re-task non-committed followers;
     /// Dismiss releases everyone and sets their re-recruit cooldown.
     pub fn issue_order(&mut self, req: OrderRequest) -> OrderOutcome {
+        self.retinue_calm_secs = 0.0;
         if self.player_faction.is_none() {
             return OrderOutcome::NoPlayer; // a bystander commands no one
         }

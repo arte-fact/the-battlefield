@@ -149,6 +149,9 @@ pub struct Game {
     objective_timer: f32,
     /// Timer for periodic auto-recruitment passes.
     recruit_timer: f32,
+    /// Seconds with nothing happening around the player (no enemies
+    /// near, no orders, no swings): bored followers drift back to duty.
+    pub(crate) retinue_calm_secs: f32,
     /// Per-army starvation clocks: landless factions' units wither.
     starvation: [f32; 4],
     /// True once an army is past its starvation grace: its monks have
@@ -246,6 +249,7 @@ impl Game {
             planner_targets: [(None, None); 4],
             objective_timer: 0.0,
             recruit_timer: 0.0,
+            retinue_calm_secs: 0.0,
             starvation: [0.0; 4],
             starving: [false; 4],
             pending_setup: None,

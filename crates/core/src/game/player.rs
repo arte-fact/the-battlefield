@@ -152,6 +152,7 @@ impl Game {
         if self.player_faction.is_none() {
             return false;
         }
+        self.retinue_calm_secs = 0.0;
         let player_idx = match self.units.iter().position(|u| u.is_player && u.alive) {
             Some(i) => i,
             None => return false,

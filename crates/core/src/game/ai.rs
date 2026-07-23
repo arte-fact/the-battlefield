@@ -9,6 +9,7 @@ impl Game {
         self.rebuild_spatial();
 
         self.release_retinue_if_player_dead();
+        self.tick_retinue_boredom(dt);
         self.recruit_timer += dt;
         if self.recruit_timer >= self.config.recruit_interval {
             self.recruit_timer = 0.0;

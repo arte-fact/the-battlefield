@@ -250,9 +250,17 @@ touch-safe.
 
 All four items landed 2026-07-23. Matrix (1v1 + 1v3 × 4 seeds) ends in
 66-640 s. One extra fix the probes demanded: a starving army's monks
-can't heal, or landless remnants out-heal the famine forever. Watch
-items live: 1v1 AI-only probes lean Red 4/4 under levy pacing
-(idle-player drag — revisit with a playtest); monk share via
+can't heal, or landless remnants out-heal the famine forever. Watch item resolved 2026-07-23: instrumented playtest (wander / still /
+no-player probes) showed no systemic bias — pure AI 1v1 is a coin flip
+(Blue 5 / Red 7 over 12 seeds, front bias ≈ 0). The lean was entirely
+the idle player parking followers (a standing player accumulated up to
+27). Fix: retinue boredom — with no enemy in sight, no orders and no
+swings for 45 s, followers drift back to the army one every 5 s and
+recruitment pauses; any action re-engages the escort. Post-fix probes:
+still-player 3/3, wander matches the AI baseline. A second find fixed
+in passing: Yellow/Purple planned from RED's base (score_all_zones home
+anchor) — all factions now anchor at their largest held settlement, and
+Yellow promptly won a 1v3 probe. Remaining watch: monk share via
 round-robin. SDL still has no floating-text pass (pre-existing gap),
 so delivery ticks are wgpu-only for now.
 
